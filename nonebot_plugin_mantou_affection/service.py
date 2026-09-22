@@ -8,8 +8,21 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .config import Config
 from .copywriting import AffectionTextLibrary
-from .logic import adjust_affection, apply_link_reward, perform_interaction, snapshot_for
-from .models import AffectionSnapshot, InteractionResult, LinkRewardResult, Profile, RankingEntry
+from .logic import (
+    adjust_affection,
+    apply_link_reward,
+    perform_interaction,
+    perform_poke,
+    snapshot_for,
+)
+from .models import (
+    AffectionSnapshot,
+    InteractionResult,
+    LinkRewardResult,
+    PokeResult,
+    Profile,
+    RankingEntry,
+)
 from .storage import AffectionStore
 
 AMBIENT_PROBABILITY_SETTING = "ambient_probability"
@@ -70,15 +83,48 @@ class AffectionService:
 
         return await self.store.update_profile(group_id, user_id, nickname, update)
 
-    def _interact_text_picker(self) -> Callable[[int], str | None] | None:
+    def _interact_text_picker(self) -> Callable[[int, int], str | None] | None:
         library = self.text_library
         if library is None:
             return None
 
-        def pick(affection: int) -> str | None:
-            return library.pick("mantou.interact", snapshot_for(affection))
+        def pick(affection: int, reward: int) -> str | None:
+            scene = "mantou.interact.negative" if reward < 0 else "mantou.interact"
+            return library.pick(scene, snapshot_for(affection))
 
         return pick
+
+    def _poke_text_picker(self) -> Callable[[str, int], str | None] | None:
+        library = self.text_library
+        if library is None:
+            return None
+
+        def pick(scene: str, affection: int) -> str | None:
+            return library.pick(scene, snapshot_for(affection))
+
+        return pick
+
+    async def poke(self, group_id: str, user_id: str, nickname: str = "") -> PokeResult:
+        now = self._now()
+        nickname = normalize_nickname(nickname, user_id)
+        text_picker = self._poke_text_picker()
+
+        def update(profile: Profile) -> PokeResult:
+            return perform_poke(
+                profile,
+                today=now.date(),
+                now_timestamp=now.timestamp(),
+                bot_name=self.config.mantou_affection_bot_name,
+                negative_base=self.config.mantou_affection_poke_negative_base,
+                max_penalty=self.config.mantou_affection_poke_max_penalty,
+                ignore_threshold=self.config.mantou_affection_poke_ignore_threshold,
+                daily_gain_limit=self.config.mantou_affection_daily_gain_limit,
+                affection_max=self.config.mantou_affection_max,
+                rng=self.rng,
+                text_picker=text_picker,
+            )
+
+        return await self.store.update_profile(group_id, user_id, nickname, update)
 
     async def ambient_probability(self) -> float:
         stored: Any = await self.store.get_setting(AMBIENT_PROBABILITY_SETTING, None)

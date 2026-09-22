@@ -40,6 +40,20 @@ def test_bundled_ambient_scene_covers_every_band(
     assert library.pick("mantou.ambient", snapshot)
 
 
+@pytest.mark.parametrize("scene", ["mantou.interact.negative", "crystelf.poke.negative"])
+@pytest.mark.parametrize(
+    ("score", "band"),
+    [(0, "neutral"), (30, "warm"), (60, "close"), (100, "flirty"), (160, "intimate")],
+)
+def test_bundled_negative_scenes_cover_every_band(
+    bundled_texts_path: Path, scene: str, score: int, band: str
+) -> None:
+    library = AffectionTextLibrary(bundled_texts_path)
+    snapshot = snapshot_for(score)
+    assert snapshot.band == band
+    assert library.pick(scene, snapshot)
+
+
 def test_seeded_copy_is_stable(tmp_path: Path) -> None:
     bundled = tmp_path / "bundled.json"
     bundled.write_text(

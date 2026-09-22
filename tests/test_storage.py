@@ -87,3 +87,36 @@ async def test_legacy_file_without_settings_is_upgraded(tmp_path: Path) -> None:
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["settings"] == {"ambient_probability": 0.5}
     assert payload["groups"]["1"]["2"]["affection"] == 7
+
+
+async def test_store_keeps_history_peak_affection(tmp_path: Path) -> None:
+    path = tmp_path / "affection.json"
+    store = AffectionStore(path)
+
+    def gain(profile: Profile) -> None:
+        profile.affection = 12
+
+    await store.update_profile("1", "2", "桃友", gain)
+    assert (await store.get_profile("1", "2")).peak_affection == 12
+
+    def lose(profile: Profile) -> None:
+        profile.affection = 0
+
+    await store.update_profile("1", "2", "桃友", lose)
+    profile = await store.get_profile("1", "2")
+    assert profile.affection == 0
+    assert profile.peak_affection == 12
+
+    reloaded = await AffectionStore(path).get_profile("1", "2")
+    assert reloaded.affection == 0
+    assert reloaded.peak_affection == 12
+
+
+async def test_store_reads_legacy_peak_as_current_affection(tmp_path: Path) -> None:
+    path = tmp_path / "affection.json"
+    path.write_text(
+        json.dumps({"version": 1, "groups": {"1": {"2": {"affection": 9}}}}),
+        encoding="utf-8",
+    )
+
+    assert (await AffectionStore(path).get_profile("1", "2")).peak_affection == 9

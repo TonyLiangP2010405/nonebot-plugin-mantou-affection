@@ -20,7 +20,7 @@ def _run_interaction(
     profile: Profile,
     *,
     rng: random.Random,
-    text_picker: Callable[[int], str | None] | None = None,
+    text_picker: Callable[[int, int], str | None] | None = None,
     now_timestamp: float = 100.0,
     daily_limit: int = 5,
     daily_gain_limit: int = 999,
@@ -145,16 +145,17 @@ def test_interaction_reports_cooldown() -> None:
 
 
 def test_interaction_uses_text_picker_with_updated_affection() -> None:
+    assert random.Random(1).choice(INTERACTIONS)[1] == 1
     profile = Profile("1", affection=29)
-    seen: list[int] = []
+    seen: list[tuple[int, int]] = []
 
-    def picker(affection: int) -> str | None:
-        seen.append(affection)
+    def picker(affection: int, reward: int) -> str | None:
+        seen.append((affection, reward))
         return "{bot}记住了这次互动。"
 
     result = _run_interaction(profile, rng=random.Random(1), text_picker=picker)
     assert result.accepted is True
-    assert seen == [result.affection]
+    assert seen == [(30, 1)]
     assert result.affection == 30
     assert result.text == "馒头记住了这次互动。"
     assert "{bot}" not in result.text
@@ -164,18 +165,25 @@ def test_interaction_falls_back_to_builtin_copy() -> None:
     builtin = {text.format(bot="馒头") for text, _ in INTERACTIONS}
     plain = _run_interaction(Profile("1"), rng=random.Random(2))
     missing = _run_interaction(
-        Profile("2"), rng=random.Random(2), text_picker=lambda affection: None
+        Profile("2"), rng=random.Random(2), text_picker=lambda affection, reward: None
     )
-    empty = _run_interaction(Profile("3"), rng=random.Random(2), text_picker=lambda affection: "")
+    empty = _run_interaction(
+        Profile("3"), rng=random.Random(2), text_picker=lambda affection, reward: ""
+    )
     assert plain.text in builtin
     assert missing.text == plain.text
     assert empty.text == plain.text
 
 
+def test_interaction_pool_contains_one_negative_reward() -> None:
+    rewards = [reward for _, reward in INTERACTIONS]
+    assert sorted(rewards) == [-1, 0, 1, 1, 2, 2, 3]
+
+
 def test_interaction_rewards_keep_builtin_distribution() -> None:
     rng = random.Random(7)
     reference = random.Random(7)
-    profile = Profile("1")
+    profile = Profile("1", affection=10)
     rounds = len(INTERACTIONS)
     deltas: list[int] = []
     for step in range(rounds):
@@ -184,11 +192,31 @@ def test_interaction_rewards_keep_builtin_distribution() -> None:
             rng=rng,
             now_timestamp=100.0 + step,
             daily_limit=rounds,
-            text_picker=lambda affection: "馒头记住了这次互动。",
+            text_picker=lambda affection, reward: "馒头记住了这次互动。",
         )
         deltas.append(result.delta)
     assert deltas == [reference.choice(INTERACTIONS)[1] for _ in range(rounds)]
-    assert profile.affection == sum(deltas)
+    assert profile.affection == 10 + sum(deltas)
+
+
+def test_interaction_negative_reward_leaves_gain_points_alone() -> None:
+    seed = 0
+    assert random.Random(seed).choice(INTERACTIONS)[1] == -1
+    profile = Profile("1", affection=5, gain_date="2026-09-21", gain_points=2)
+    result = _run_interaction(profile, rng=random.Random(seed), daily_gain_limit=3)
+    assert result.accepted is True
+    assert result.delta == -1
+    assert result.affection == 4
+    assert profile.gain_date == "2026-09-21"
+    assert profile.gain_points == 2
+
+
+def test_interaction_negative_reward_keeps_affection_at_zero() -> None:
+    profile = Profile("1")
+    result = _run_interaction(profile, rng=random.Random(0), daily_gain_limit=3)
+    assert result.delta == 0
+    assert result.affection == 0
+    assert profile.gain_points == 0
 
 
 def test_interaction_gain_is_capped_by_daily_gain_limit() -> None:

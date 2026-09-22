@@ -26,7 +26,7 @@ def _nickname(event: GroupMessageEvent) -> str:
 
 
 def _gain_text(delta: int) -> str:
-    return f"好感度 +{delta}" if delta else "好感度没有变化"
+    return f"好感度 {delta:+d}" if delta else "好感度没有变化"
 
 
 def _format_wait(seconds: int) -> str:

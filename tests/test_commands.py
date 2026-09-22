@@ -8,6 +8,7 @@ from nonebot.adapters.onebot.v11.event import Sender
 from nonebot_plugin_mantou_affection.commands import (
     _format_probability,
     _format_wait,
+    _gain_text,
     register_commands,
 )
 from nonebot_plugin_mantou_affection.config import Config
@@ -36,6 +37,27 @@ def test_ambient_defaults_are_enabled_at_one_percent() -> None:
 def test_daily_gain_default_is_three_points() -> None:
     assert Config().mantou_affection_daily_gain_limit == 3
     assert Config(mantou_affection_daily_gain_limit=2).mantou_affection_daily_gain_limit == 2
+
+
+def test_random_event_defaults() -> None:
+    config = Config()
+    assert config.mantou_affection_ambient_event_ratio == 0.333
+    assert config.mantou_affection_event_timeout == 10
+    assert config.mantou_affection_event_timeout_penalty == 5
+
+
+def test_poke_defaults() -> None:
+    config = Config()
+    assert config.mantou_affection_poke_negative_base == 0.1
+    assert config.mantou_affection_poke_max_penalty == 5
+    assert config.mantou_affection_poke_ignore_threshold == 10
+
+
+def test_gain_text_shows_sign() -> None:
+    assert _gain_text(3) == "好感度 +3"
+    assert _gain_text(1) == "好感度 +1"
+    assert _gain_text(0) == "好感度没有变化"
+    assert _gain_text(-1) == "好感度 -1"
 
 
 def test_format_wait_seconds() -> None:

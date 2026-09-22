@@ -24,11 +24,12 @@ require("nonebot_plugin_localstore")
 
 from nonebot_plugin_localstore import get_plugin_data_dir
 
-from .ambient import register_ambient
+from .ambient import EventCoordinator, register_ambient
 from .commands import register_commands
 from .copywriting import AffectionTextLibrary
+from .events import EventLibrary
 from .integration import register_plugin_linkage
-from .models import AffectionResponse, AffectionSnapshot
+from .models import AffectionResponse, AffectionSnapshot, PokeResult
 from .service import AffectionService
 from .storage import AffectionStore
 
@@ -39,9 +40,12 @@ text_library = AffectionTextLibrary(
     Path(__file__).parent / "resources" / "affection_texts.json",
     plugin_config.mantou_affection_text_path,
 )
+event_library = EventLibrary(Path(__file__).parent / "resources" / "affection_events.json")
 service = AffectionService(store, plugin_config, text_library=text_library)
 matchers = register_commands(service, plugin_config)
-ambient_matcher = register_ambient(service, plugin_config)
+ambient_matcher, answer_matcher = register_ambient(
+    service, plugin_config, EventCoordinator(service, plugin_config, event_library)
+)
 plugin_linkage = register_plugin_linkage(service, plugin_config)
 
 
@@ -85,6 +89,12 @@ async def get_affection(group_id: str | int, user_id: str | int) -> int:
     """读取指定群友的当前好感度；不存在记录时返回 0。"""
 
     return (await service.profile(str(group_id), str(user_id))).affection
+
+
+async def poke(group_id: str | int, user_id: str | int, *, nickname: str = "") -> PokeResult:
+    """戳一戳馒头：记录当天次数，按累进不耐烦规则返回好感变化与回复文案。"""
+
+    return await service.poke(str(group_id), str(user_id), nickname)
 
 
 async def get_affection_snapshot(

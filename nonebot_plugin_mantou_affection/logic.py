@@ -4,7 +4,14 @@ import random
 from datetime import date
 from typing import Callable
 
-from .models import AffectionSnapshot, InteractionResult, Level, LinkRewardResult, Profile
+from .models import (
+    AffectionSnapshot,
+    InteractionResult,
+    Level,
+    LinkRewardResult,
+    PokeResult,
+    Profile,
+)
 
 LEVELS: tuple[tuple[int, str], ...] = (
     (0, "初次见面"),
@@ -23,7 +30,15 @@ INTERACTIONS: tuple[tuple[str, int], ...] = (
     ("{bot}把今天攒下来的桃气分给了你一点。", 2),
     ("{bot}在你的群昵称旁边画了一颗小桃心。", 3),
     ("{bot}正在发呆，没有听清，但还是礼貌地向你点了点头。", 0),
+    ("{bot}被你闹得躲进蒸笼深处，只留给你一个背影。", -1),
 )
+
+
+POKE_IGNORE_REPLY = "馒头理都不想理你。"
+POKE_POSITIVE_FALLBACK = "馒头朝你笑了笑。"
+POKE_NEGATIVE_FALLBACK = "馒头往旁边挪了挪。"
+POKE_POSITIVE_SCENE = "crystelf.poke"
+POKE_NEGATIVE_SCENE = "crystelf.poke.negative"
 
 
 def level_for(affection: int) -> Level:
@@ -76,7 +91,7 @@ def perform_interaction(
     cooldown_seconds: int,
     affection_max: int,
     rng: random.Random,
-    text_picker: Callable[[int], str | None] | None = None,
+    text_picker: Callable[[int, int], str | None] | None = None,
 ) -> InteractionResult:
     today_text = today.isoformat()
     if profile.interaction_date != today_text:
@@ -117,12 +132,14 @@ def perform_interaction(
     text, reward = rng.choice(INTERACTIONS)
     reward = min(reward, max(0, daily_gain_limit - profile.gain_points))
     before = profile.affection
-    profile.affection = min(affection_max, profile.affection + reward)
+    profile.affection = min(affection_max, max(0, profile.affection + reward))
     profile.interaction_count += 1
     profile.last_interaction_at = now_timestamp
     profile.updated_at = now_timestamp
-    profile.gain_points += profile.affection - before
-    picked = text_picker(profile.affection) if text_picker is not None else None
+    gained = profile.affection - before
+    if gained > 0:
+        profile.gain_points += gained
+    picked = text_picker(profile.affection, reward) if text_picker is not None else None
     reply = picked.replace("{bot}", bot_name) if picked else text.format(bot=bot_name)
     return InteractionResult(
         True,
@@ -189,3 +206,68 @@ def apply_link_reward(
         profile.gain_points += actual_reward
     profile.updated_at = now_timestamp
     return LinkRewardResult(True, "ok", actual_reward, profile.affection, profile.linked_points)
+
+
+def _poked_reply(
+    text_picker: Callable[[str, int], str | None] | None,
+    scene: str,
+    affection: int,
+    fallback: str,
+    bot_name: str,
+) -> str:
+    picked = text_picker(scene, affection) if text_picker is not None else None
+    return (picked or fallback).replace("{bot}", bot_name)
+
+
+def perform_poke(
+    profile: Profile,
+    *,
+    today: date,
+    now_timestamp: float,
+    bot_name: str,
+    negative_base: float,
+    max_penalty: int,
+    ignore_threshold: int,
+    daily_gain_limit: int,
+    affection_max: int,
+    rng: random.Random,
+    text_picker: Callable[[str, int], str | None] | None = None,
+) -> PokeResult:
+    today_text = today.isoformat()
+    if profile.poke_date != today_text:
+        profile.poke_date = today_text
+        profile.poke_count = 0
+    if profile.gain_date != today_text:
+        profile.gain_date = today_text
+        profile.gain_points = 0
+    profile.poke_count += 1
+    count = profile.poke_count
+
+    if count >= ignore_threshold or (profile.affection <= 0 and profile.peak_affection > 0):
+        delta = adjust_affection(profile, -min(count, max_penalty), affection_max, now_timestamp)
+        reply = POKE_IGNORE_REPLY.replace("{bot}", bot_name)
+        return PokeResult(delta=delta, text=reply, count=count, annoyed=True)
+
+    if rng.random() < min(1.0, count * negative_base):
+        delta = adjust_affection(profile, -min(count, max_penalty), affection_max, now_timestamp)
+        reply = _poked_reply(
+            text_picker,
+            POKE_NEGATIVE_SCENE,
+            profile.affection,
+            POKE_NEGATIVE_FALLBACK,
+            bot_name,
+        )
+        return PokeResult(delta=delta, text=reply, count=count, annoyed=True)
+
+    remaining_gain = max(0, daily_gain_limit - profile.gain_points)
+    delta = adjust_affection(profile, min(1, remaining_gain), affection_max, now_timestamp)
+    if delta > 0:
+        profile.gain_points += delta
+    reply = _poked_reply(
+        text_picker,
+        POKE_POSITIVE_SCENE,
+        profile.affection,
+        POKE_POSITIVE_FALLBACK,
+        bot_name,
+    )
+    return PokeResult(delta=delta, text=reply, count=count, annoyed=False)

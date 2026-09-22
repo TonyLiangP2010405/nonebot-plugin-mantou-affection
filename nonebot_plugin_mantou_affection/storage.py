@@ -74,6 +74,7 @@ class AffectionStore:
         if nickname:
             profile.nickname = nickname
         result = updater(profile)
+        profile.peak_affection = max(profile.peak_affection, profile.affection)
         group[str(user_id)] = profile.to_dict()
         self._save_sync()
         return result

@@ -12,11 +12,13 @@ def test_plugin_load() -> None:
 
 def test_public_api_is_exported() -> None:
     from nonebot_plugin_mantou_affection import (
+        PokeResult,
         add_affection,
         change_affection,
         get_affection,
         get_affection_response,
         get_affection_snapshot,
+        poke,
     )
 
     assert callable(add_affection)
@@ -24,6 +26,8 @@ def test_public_api_is_exported() -> None:
     assert callable(get_affection)
     assert callable(get_affection_response)
     assert callable(get_affection_snapshot)
+    assert callable(poke)
+    assert PokeResult.__dataclass_fields__.keys() == {"delta", "text", "count", "annoyed"}
 
 
 async def test_public_read_api_returns_shared_snapshot() -> None:

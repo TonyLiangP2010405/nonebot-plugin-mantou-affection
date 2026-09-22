@@ -5,13 +5,14 @@
 ## 功能
 
 - 好感数据按“群号 + 用户”隔离
-- 主动互动、冷却时间和每日次数限制
+- 主动互动、冷却时间和每日次数限制（约 1/7 概率惹馒头不高兴，好感度 -1）
 - 七级好感称号和群排行榜
 - 自动感知其他插件的命令、正则及完整匹配 Matcher
 - 每插件独立冷却、每日联动奖励上限，避免刷分
 - 互动与联动共享每日好感获取总上限，最快约一年满级
 - SUPERUSER 手动增减群友好感度
-- 群友发言时馒头按概率冒泡的小动作（好感度 >0 才触发，默认 1%）
+- 群友发言时馒头按概率冒泡的小动作（好感度 >0 才触发，默认 1%），其中约 1/3 会升级为限时随机事件
+- 戳一戳当天累进不耐烦，戳太多馒头会不想理你（`poke` API 一行接入）
 - 为其他插件提供好感上报与状态读取 API
 - 使用 `nonebot-plugin-localstore` 和原子写入持久化数据
 
@@ -55,6 +56,12 @@ MANTOU_AFFECTION_LINK_DAILY_LIMIT=10
 MANTOU_AFFECTION_LINK_COOLDOWN=300
 MANTOU_AFFECTION_AMBIENT_ENABLED=true
 MANTOU_AFFECTION_AMBIENT_PROBABILITY=0.01
+MANTOU_AFFECTION_AMBIENT_EVENT_RATIO=0.333
+MANTOU_AFFECTION_EVENT_TIMEOUT=10
+MANTOU_AFFECTION_EVENT_TIMEOUT_PENALTY=5
+MANTOU_AFFECTION_POKE_NEGATIVE_BASE=0.1
+MANTOU_AFFECTION_POKE_MAX_PENALTY=5
+MANTOU_AFFECTION_POKE_IGNORE_THRESHOLD=10
 ```
 
 `MANTOU_AFFECTION_LINK_REWARDS` 是“插件模块名 -> 单次变化值”的 JSON 对象，支持正数和负数。默认值如下：
@@ -82,19 +89,73 @@ SUPERUSER 手动增减不受这个上限限制，`/馒头好感` 会显示当天
 数据文件，重启后依然生效。群友发言时，只要他对馒头的好感度大于 0，馒头就有这个概率 @他冒出一句小动作
 旁白；旁白不引用发言内容，已被命令接管的发言也不会触发，不会影响正常对话。
 
+`MANTOU_AFFECTION_AMBIENT_EVENT_RATIO` 是小动作命中后升级为随机事件的比例（默认 0.333，也就是约 1/3）。
+`MANTOU_AFFECTION_EVENT_TIMEOUT` 是答题时限（秒，默认 10），`MANTOU_AFFECTION_EVENT_TIMEOUT_PENALTY`
+是超时扣除的好感度点数（默认 5）。
+
+`MANTOU_AFFECTION_POKE_NEGATIVE_BASE` 是戳一戳不耐烦概率的累进基数（默认 0.1，即当天第 1 戳 10%、第 2 戳
+20%，第 10 戳起必定不耐烦）。`MANTOU_AFFECTION_POKE_MAX_PENALTY` 是单次不耐烦最多扣多少点（默认 5，扣分
+随当天次数累进，第 5 戳及以后封顶 -5）。`MANTOU_AFFECTION_POKE_IGNORE_THRESHOLD` 是「不想理你」的当天
+次数阈值（默认 10，达到后不再判定概率，直接固定文案）。
+
+### 随机事件
+
+小动作触发时有约 1/3 概率变成一次限时随机事件，馒头会在群里抛出一个三选一的场景（不 @任何人）：
+
+```
+⚡ 触发随机事件！
+馒头的小本子从桌上滑下去，页角折了一道印子，它蹲在地上看了很久。
+1. 把本子捡起来递回去，说下次放稳一点
+2. 先蹲下来把折角一页页抚平，再问它今天记了些什么
+3. 说一本本子而已，回头给你买个更贵的
+请在 10 秒内作答，直接发送 1、2、3 即可（不用@），超时好感度 -5！
+```
+
+三个选项的顺序每次都会重新打乱，看起来都很合理，但只有最懂馒头心思的那个是最好的：最优 +2、普通 +1、
+最差 -2，超时 -5（点数可在配置里调整）。作答只要在该群直接发 `1`、`2` 或 `3`，不用 @机器人；发别的
+内容不算作答，会继续等到超时。同一个群友同时只会有一个事件在进行，上一次还没结束就不会再触发新的。
+
+事件带来的好感变化走管理员调整同一条路径，不受每日获取总上限和联动冷却限制。另外，`/馒头互动` 现在也有
+约 1/7 的概率惹馒头不高兴，好感度 -1（好感度为 0 时不会变成负数），这时回复会换成一套「小情绪」文案。
+
 ### 大型文案库
 
 内置文案位于 `nonebot_plugin_mantou_affection/resources/affection_texts.json`，按“插件场景 + 好感阶段”组织。
 `mantou.interact`、`daily_attendance.fortune`、`crystelf.poke`、`msg_rank_card.rank`、`taozi.fortune` 和
 `taozi.lexicon` 各 5 个阶段 × 1000 条；`mantou.ambient` 是馒头在群友发言时按概率冒泡的
-小动作旁白，每个阶段 2000 条；全库合计 40000 条。
+小动作旁白，每个阶段 2000 条；这些大场景合计 40000 条。
 每个场景分别配置 `neutral`、`warm`、`close`、`flirty`、`intimate` 数组。
 
-`/馒头互动` 的回复取自 `mantou.interact` 场景：好感度奖励仍按原有分布随机（0～3 点），回复文案则随互动后的
+`/馒头互动` 的回复取自 `mantou.interact` 场景：好感度奖励仍按原有分布随机（-1～3 点），回复文案则随互动后的
 好感阶段变化，从初见时的礼貌疏远逐渐变成亲密；文案中的 `{bot}` 会被替换为配置的机器人名字。
 `msg_rank_card.rank` 场景为水群榜卡片上每位群友名字旁的极短好感短评（4～16 字），随好感阶段变化。
 `mantou.ambient` 场景只描写馒头自己的动作神态（4～30 字，不需要 `{bot}` 占位符），不回应群友说了什么，
 语气同样随好感阶段从礼貌走向亲密。
+
+`mantou.interact.negative` 是互动扣好感时专用的「小情绪」场景（10～40 字，可用 `{bot}`）：`neutral` 疏远
+尴尬、`warm` 小委屈、`close` 闹别扭、`flirty` 吃醋失落、`intimate` 受伤但包容。`crystelf.poke.negative`
+是同结构的被戳烦了的短情绪（8～40 字，不含占位符），供 Crystelf 戳一戳插件在戳烦时使用。这两个场景
+目前每个阶段先放 4 条占位文案，之后会继续扩充。
+
+随机事件库位于 `nonebot_plugin_mantou_affection/resources/affection_events.json`，结构为“场景 + 三个选项”：
+
+```json
+{
+  "events": [
+    {
+      "text": "场景描述",
+      "options": [
+        { "text": "最优选项", "delta": 2 },
+        { "text": "普通选项", "delta": 1 },
+        { "text": "最差选项", "delta": -2 }
+      ]
+    }
+  ]
+}
+```
+
+每个事件必须正好 3 个选项，`delta` 必须是 `+2`、`+1`、`-2` 各一个（发送前会打乱顺序再编号）；结构不合规
+的条目会被跳过并记录警告。事件库为空时随机事件自动退回普通小动作旁白。
 
 如果想要覆盖内置文案或继续扩充，可以把同结构 JSON 放在 bot 的数据目录外，并设置：
 
@@ -116,7 +177,7 @@ MANTOU_AFFECTION_LINK_REWARDS={"nonebot_plugin_taozi":2,"nonebot_plugin_daily_at
 
 | 指令 | 权限 | 范围 | 说明 |
 |---|---|---|---|
-| `/馒头互动` | 群员 | 群聊 | 和馒头互动并获得 0～3 点好感（每日 5 次，间隔至少 2 小时，受每日获取总上限约束） |
+| `/馒头互动` | 群员 | 群聊 | 和馒头互动，好感 -1～+3 点（每日 5 次，间隔至少 2 小时，受每日获取总上限约束） |
 | `/馒头好感` | 群员 | 群聊 | 查看好感度、关系称号、今日获取量和联动额度 |
 | `/馒头好感榜` | 群员 | 群聊 | 查看本群好感度排行榜 |
 | `/馒头好感帮助` | 群员 | 群聊 | 查看菜单 |
@@ -150,6 +211,7 @@ from nonebot_plugin_mantou_affection import (
     get_affection,
     get_affection_response,
     get_affection_snapshot,
+    poke,
 )
 
 actual = await add_affection(
@@ -184,6 +246,39 @@ print(response.text)
 ```
 
 `add_affection` 与 `change_affection` 都会遵守每日联动上限、每日获取总上限和同一 `source` 的冷却，并返回实际变化值。`add_affection` 只接受正数，`change_affection` 接受正负数，其中负向变化不受每日获取总上限限制；两个读取 API 不会改变数据。
+
+### 戳一戳 API
+
+戳一戳的整套判定收在本插件里，调用方一行接入即可，不用自己维护概率或计数：
+
+```python
+from nonebot_plugin_mantou_affection import PokeResult, poke
+
+result: PokeResult = await poke(
+    group_id=event.group_id,
+    user_id=event.user_id,
+    nickname=event.sender.card or event.sender.nickname,
+)
+await matcher.finish(result.text)
+```
+
+`PokeResult` 的四个字段：`delta`（本次实际好感变化，正/0/负）、`text`（回复文案，已替换 `{bot}`）、
+`count`（这是今天第几次戳）、`annoyed`（本次是否不耐烦，含「不想理你」阶段）。
+
+机制：
+
+1. 每次戳先按当天日期重置计数再自增，`count` 即当天的第几次。
+2. 当天戳满 `MANTOU_AFFECTION_POKE_IGNORE_THRESHOLD`（默认 10 次），或好感度曾被扣到 0（历史最高好感大于
+   0、当前好感为 0）时进入无语阶段：`annoyed=True`，文案固定为「馒头理都不想理你。」，扣分照常累进但
+   好感度不会低于 0。从未有过好感的新群友不受这条限制，不会一上来就被无视。
+3. 其余情况按 `count × MANTOU_AFFECTION_POKE_NEGATIVE_BASE`（上限 100%）判定不耐烦：命中则
+   `annoyed=True`，扣 `min(count, MANTOU_AFFECTION_POKE_MAX_PENALTY)` 点（第 3 戳 -3、第 5 戳起 -5），
+   文案取 `crystelf.poke.negative` 场景、按扣完后的好感阶段；好感度为 0 的新群友即使命中，`delta` 也只会
+   停在 0。
+4. 未命中则 `annoyed=False`、`delta=+1`，这个 +1 受每日获取总上限约束（额度用完时 `delta=0` 但仍返回
+   文案），入账部分计入当日额度；它不走联动冷却，也不占用 `linked_points`。
+5. 文案统一做 `{bot}` → 配置机器人名替换；文案库缺失或场景为空时回退为「馒头朝你笑了笑。」（正面）或
+   「馒头往旁边挪了挪。」（不耐烦），无语阶段固定文案不变。
 
 当前工作区还完成了四类展示联动：每日运势随关系阶段改写短句；Crystelf 戳一戳会增加好感并改变回复；水群榜展示每位群友的馒头好感；桃纸助手的桃签和词典卡片会出现不同程度的“馒头私语”。所有接入均为软依赖，好感插件未加载时原插件照常运行。
 

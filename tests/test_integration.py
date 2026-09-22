@@ -1,4 +1,5 @@
 import json
+import random
 from pathlib import Path
 from time import time
 from types import SimpleNamespace
@@ -9,7 +10,7 @@ from nonebot.consts import FULLMATCH_KEY, PREFIX_KEY, REGEX_MATCHED
 
 from nonebot_plugin_mantou_affection import plugin_linkage, service
 from nonebot_plugin_mantou_affection.integration import is_meaningful_trigger
-from nonebot_plugin_mantou_affection.logic import snapshot_for
+from nonebot_plugin_mantou_affection.logic import INTERACTIONS, snapshot_for
 
 
 def test_command_and_regex_matchers_are_meaningful() -> None:
@@ -27,12 +28,18 @@ def test_plugin_service_is_wired_to_text_library() -> None:
     assert service.text_library is not None
 
 
-async def test_interact_reply_comes_from_bundled_library(bundled_texts_path: Path) -> None:
+async def test_interact_reply_comes_from_bundled_library(
+    bundled_texts_path: Path, monkeypatch
+) -> None:
     texts = json.loads(bundled_texts_path.read_text(encoding="utf-8"))["mantou.interact"]
+    seed = 16
+    assert random.Random(seed).choice(INTERACTIONS)[1] > 0
+    monkeypatch.setattr(service, "rng", random.Random(seed))
     for index in range(3):
         result = await service.interact("91001", f"9100{index}", "桃友")
         band = snapshot_for(result.affection).band
         assert result.accepted is True
+        assert result.delta > 0
         assert result.text in {text.replace("{bot}", "馒头") for text in texts[band]}
 
 
