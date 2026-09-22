@@ -1,0 +1,50 @@
+[project]
+name = "nonebot-plugin-mantou-affection"
+version = "0.1.0"
+description = "为群聊机器人馒头提供互动、等级称号和跨插件共享状态的好感度系统"
+authors = [{ name = "TonyLiangP2010405" }]
+license = "MIT"
+readme = "README.md"
+requires-python = ">=3.9,<4.0"
+keywords = ["nonebot", "nonebot2", "onebot", "affection", "friendship", "plugin"]
+dependencies = [
+    "nonebot2>=2.2.0,<3.0.0",
+    "nonebot-adapter-onebot>=2.4.0,<3.0.0",
+    "nonebot-plugin-localstore>=0.7.0,<1.0.0",
+    "pydantic>=2.0,<3.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/TonyLiangP2010405/nonebot-plugin-mantou-affection"
+Repository = "https://github.com/TonyLiangP2010405/nonebot-plugin-mantou-affection"
+
+[tool.poetry]
+packages = [{ include = "nonebot_plugin_mantou_affection" }]
+
+[tool.poetry.group.dev.dependencies]
+nonebug = ">=0.3"
+pytest = ">=8.0"
+pytest-asyncio = ">=0.23"
+ruff = ">=0.6"
+
+[build-system]
+requires = ["poetry-core>=1.8.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.nonebot]
+plugins = ["nonebot_plugin_mantou_affection"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+ignore = ["B008", "UP007", "UP045", "RUF001", "RUF002"]
+
+[tool.ruff.lint.per-file-ignores]
+"nonebot_plugin_mantou_affection/__init__.py" = ["E402"]

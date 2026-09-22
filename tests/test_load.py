@@ -1,0 +1,50 @@
+import nonebot
+
+
+def test_plugin_load() -> None:
+    plugin = nonebot.get_plugin_by_module_name("nonebot_plugin_mantou_affection")
+    assert plugin is not None
+    assert plugin.metadata is not None
+    assert plugin.metadata.name == "馒头好感度"
+    assert plugin.metadata.type == "application"
+    assert plugin.metadata.supported_adapters == {"~onebot.v11"}
+
+
+def test_public_api_is_exported() -> None:
+    from nonebot_plugin_mantou_affection import (
+        add_affection,
+        change_affection,
+        get_affection,
+        get_affection_response,
+        get_affection_snapshot,
+    )
+
+    assert callable(add_affection)
+    assert callable(change_affection)
+    assert callable(get_affection)
+    assert callable(get_affection_response)
+    assert callable(get_affection_snapshot)
+
+
+async def test_public_read_api_returns_shared_snapshot() -> None:
+    from nonebot_plugin_mantou_affection import (
+        add_affection,
+        get_affection,
+        get_affection_response,
+        get_affection_snapshot,
+    )
+
+    await add_affection("read-api-group", "read-api-user", 10, source="test:read-api")
+    assert await get_affection("read-api-group", "read-api-user") == 10
+    snapshot = await get_affection_snapshot("read-api-group", "read-api-user")
+    assert snapshot.affection == 10
+    assert snapshot.title == "有点眼熟"
+    assert snapshot.band == "neutral"
+    response = await get_affection_response(
+        "crystelf.poke",
+        "read-api-group",
+        "read-api-user",
+        seed="stable",
+    )
+    assert response.affection == 10
+    assert response.text
