@@ -81,7 +81,9 @@ class AffectionService:
                 text_picker=text_picker,
             )
 
-        return await self.store.update_profile(group_id, user_id, nickname, update)
+        return await self.store.update_profile(
+            group_id, user_id, nickname, update, now.date().isoformat()
+        )
 
     def _interact_text_picker(self) -> Callable[[int, int], str | None] | None:
         library = self.text_library
@@ -124,7 +126,9 @@ class AffectionService:
                 text_picker=text_picker,
             )
 
-        return await self.store.update_profile(group_id, user_id, nickname, update)
+        return await self.store.update_profile(
+            group_id, user_id, nickname, update, now.date().isoformat()
+        )
 
     async def ambient_probability(self) -> float:
         stored: Any = await self.store.get_setting(AMBIENT_PROBABILITY_SETTING, None)
@@ -185,7 +189,9 @@ class AffectionService:
                 affection_max=self.config.mantou_affection_max,
             )
 
-        return await self.store.update_profile(group_id, user_id, nickname, update)
+        return await self.store.update_profile(
+            group_id, user_id, nickname, update, now.date().isoformat()
+        )
 
     async def adjust(
         self,
@@ -194,6 +200,7 @@ class AffectionService:
         nickname: str,
         delta: int,
     ) -> tuple[int, Profile]:
+        today = self._now().date().isoformat()
         nickname = normalize_nickname(nickname, user_id)
 
         def update(profile: Profile) -> tuple[int, Profile]:
@@ -205,4 +212,4 @@ class AffectionService:
             )
             return applied, profile
 
-        return await self.store.update_profile(group_id, user_id, nickname, update)
+        return await self.store.update_profile(group_id, user_id, nickname, update, today)

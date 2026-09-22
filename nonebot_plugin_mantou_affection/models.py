@@ -33,6 +33,7 @@ class Profile:
     poke_date: str = ""
     poke_count: int = 0
     peak_affection: int = 0
+    zeroed_date: str = ""
     plugin_last_awards: dict[str, float] = field(default_factory=dict)
     updated_at: float = 0.0
 
@@ -55,6 +56,7 @@ class Profile:
             poke_date=str(data.get("poke_date", "")),
             poke_count=max(0, _safe_int(data.get("poke_count"))),
             peak_affection=max(affection, _safe_int(data.get("peak_affection"))),
+            zeroed_date=str(data.get("zeroed_date", "")),
             plugin_last_awards={
                 str(key): max(0.0, _safe_float(value))
                 for key, value in (data.get("plugin_last_awards") or {}).items()

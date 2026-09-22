@@ -104,3 +104,31 @@ def test_profile_round_trip_keeps_peak_affection() -> None:
     assert data["peak_affection"] == 8
 
     assert Profile.from_dict("1", data).peak_affection == 8
+
+
+def test_profile_defaults_have_empty_zeroed_date() -> None:
+    assert Profile.from_dict("1", {}).zeroed_date == ""
+    assert Profile.from_dict("1", None).zeroed_date == ""
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ({"zeroed_date": "2026-09-22"}, "2026-09-22"),
+        ({
+            "affection": 0
+        }, ""),
+        ({"zeroed_date": ""}, ""),
+        ({"zeroed_date": "2026-09-22", "affection": 5}, "2026-09-22"),
+    ],
+)
+def test_profile_zeroed_date_tolerates_legacy_data(raw: dict, expected: str) -> None:
+    assert Profile.from_dict("1", raw).zeroed_date == expected
+
+
+def test_profile_round_trip_keeps_zeroed_date() -> None:
+    profile = Profile("1", affection=0, peak_affection=6, zeroed_date="2026-09-22")
+    data = profile.to_dict()
+    assert data["zeroed_date"] == "2026-09-22"
+
+    assert Profile.from_dict("1", data).zeroed_date == "2026-09-22"

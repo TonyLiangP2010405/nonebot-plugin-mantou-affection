@@ -208,7 +208,7 @@ def apply_link_reward(
     return LinkRewardResult(True, "ok", actual_reward, profile.affection, profile.linked_points)
 
 
-def _poked_reply(
+def _pick_poke_reply(
     text_picker: Callable[[str, int], str | None] | None,
     scene: str,
     affection: int,
@@ -217,6 +217,14 @@ def _poked_reply(
 ) -> str:
     picked = text_picker(scene, affection) if text_picker is not None else None
     return (picked or fallback).replace("{bot}", bot_name)
+
+
+def _with_change_line(text: str, delta: int, affection: int) -> str:
+    """好感度有变化时在文案末尾补一行变更提示。"""
+
+    if delta == 0:
+        return text
+    return f"{text}\n好感度 {delta:+d}，当前 {affection}"
 
 
 def perform_poke(
@@ -243,31 +251,45 @@ def perform_poke(
     profile.poke_count += 1
     count = profile.poke_count
 
-    if count >= ignore_threshold or (profile.affection <= 0 and profile.peak_affection > 0):
+    if count >= ignore_threshold or (
+        profile.affection <= 0
+        and profile.peak_affection > 0
+        and profile.zeroed_date == today_text
+    ):
         delta = adjust_affection(profile, -min(count, max_penalty), affection_max, now_timestamp)
-        reply = POKE_IGNORE_REPLY.replace("{bot}", bot_name)
+        reply = _with_change_line(POKE_IGNORE_REPLY, delta, profile.affection)
         return PokeResult(delta=delta, text=reply, count=count, annoyed=True)
 
     if rng.random() < min(1.0, count * negative_base):
         delta = adjust_affection(profile, -min(count, max_penalty), affection_max, now_timestamp)
-        reply = _poked_reply(
+        reply = _pick_poke_reply(
             text_picker,
             POKE_NEGATIVE_SCENE,
             profile.affection,
             POKE_NEGATIVE_FALLBACK,
             bot_name,
         )
-        return PokeResult(delta=delta, text=reply, count=count, annoyed=True)
+        return PokeResult(
+            delta=delta,
+            text=_with_change_line(reply, delta, profile.affection),
+            count=count,
+            annoyed=True,
+        )
 
     remaining_gain = max(0, daily_gain_limit - profile.gain_points)
     delta = adjust_affection(profile, min(1, remaining_gain), affection_max, now_timestamp)
     if delta > 0:
         profile.gain_points += delta
-    reply = _poked_reply(
+    reply = _pick_poke_reply(
         text_picker,
         POKE_POSITIVE_SCENE,
         profile.affection,
         POKE_POSITIVE_FALLBACK,
         bot_name,
     )
-    return PokeResult(delta=delta, text=reply, count=count, annoyed=False)
+    return PokeResult(
+        delta=delta,
+        text=_with_change_line(reply, delta, profile.affection),
+        count=count,
+        annoyed=False,
+    )

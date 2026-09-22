@@ -63,6 +63,7 @@ class AffectionStore:
         user_id: str,
         nickname: str,
         updater: Callable[[Profile], T],
+        today: str = "",
     ) -> T:
         data = self._load_sync()
         groups = data["groups"]
@@ -73,8 +74,11 @@ class AffectionStore:
         profile = Profile.from_dict(str(user_id), group.get(str(user_id)))
         if nickname:
             profile.nickname = nickname
+        before = profile.affection
         result = updater(profile)
         profile.peak_affection = max(profile.peak_affection, profile.affection)
+        if today and before > 0 and profile.affection == 0:
+            profile.zeroed_date = today
         group[str(user_id)] = profile.to_dict()
         self._save_sync()
         return result
@@ -85,6 +89,7 @@ class AffectionStore:
         user_id: str,
         nickname: str,
         updater: Callable[[Profile], T],
+        today: str = "",
     ) -> T:
         async with self._lock:
             return await asyncio.to_thread(
@@ -93,6 +98,7 @@ class AffectionStore:
                 str(user_id),
                 nickname,
                 updater,
+                today,
             )
 
     def _get_profile_sync(self, group_id: str, user_id: str) -> Profile:

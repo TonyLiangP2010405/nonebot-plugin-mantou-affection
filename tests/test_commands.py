@@ -46,6 +46,11 @@ def test_random_event_defaults() -> None:
     assert config.mantou_affection_event_timeout_penalty == 5
 
 
+def test_link_notify_default_is_on() -> None:
+    assert Config().mantou_affection_link_notify is True
+    assert Config(mantou_affection_link_notify=False).mantou_affection_link_notify is False
+
+
 def test_poke_defaults() -> None:
     config = Config()
     assert config.mantou_affection_poke_negative_base == 0.1

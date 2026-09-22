@@ -76,5 +76,13 @@ def register_plugin_linkage(service: AffectionService, config: Config):
                 f"[mantou-affection] {source} 联动奖励: "
                 f"group={event.group_id} user={event.user_id} delta={result.delta}"
             )
+            if config.mantou_affection_link_notify:
+                try:
+                    await matcher.send(
+                        f"{config.mantou_affection_bot_name}好感度 "
+                        f"{result.delta:+d}，当前 {result.affection}"
+                    )
+                except Exception:
+                    logger.exception(f"[mantou-affection] 发送联动好感提示失败: {source}")
 
     return reward_after_plugin

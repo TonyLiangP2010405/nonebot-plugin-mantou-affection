@@ -8,6 +8,7 @@ import pytest
 from nonebot_plugin_mantou_affection.config import Config
 from nonebot_plugin_mantou_affection.copywriting import AffectionTextLibrary
 from nonebot_plugin_mantou_affection.logic import (
+    INTERACTIONS,
     POKE_IGNORE_REPLY,
     POKE_NEGATIVE_FALLBACK,
     POKE_NEGATIVE_SCENE,
@@ -46,6 +47,13 @@ class FixedRng(random.Random):
 
     def random(self) -> float:
         return self.value
+
+
+class LossRng(FixedRng):
+    """让互动必定抽到 -1 那一档。"""
+
+    def choice(self, seq):
+        return next(item for item in seq if item[1] < 0)
 
 
 def _library(tmp_path: Path) -> AffectionTextLibrary:
@@ -107,6 +115,14 @@ def _profile(**kwargs) -> Profile:
     return Profile("1", poke_date=TODAY.isoformat(), **kwargs)
 
 
+def _first_line(result: PokeResult) -> str:
+    return result.text.split("\n")[0]
+
+
+def _change_line(result: PokeResult, affection: int) -> str:
+    return f"好感度 {result.delta:+d}，当前 {affection}"
+
+
 def test_ignore_reply_is_the_fixed_contract_text() -> None:
     assert POKE_IGNORE_REPLY == "馒头理都不想理你。"
 
@@ -156,19 +172,34 @@ def test_poke_ignore_stage_uses_fixed_reply(count_before: int) -> None:
     profile = _profile(affection=100, poke_count=count_before)
     result = _poke(profile, rng=FixedRng(0.0), text_picker=lambda scene, score: "不该用的文案")
     assert result.annoyed is True
-    assert result.text == POKE_IGNORE_REPLY
+    assert _first_line(result) == POKE_IGNORE_REPLY
     assert result.delta == -5
     assert profile.affection == 95
+    assert result.text.split("\n")[1] == _change_line(result, 95)
 
 
 @pytest.mark.parametrize("count_before", [0, 3])
-def test_poke_ignore_stage_after_affection_wiped(count_before: int) -> None:
-    profile = _profile(affection=0, peak_affection=9, poke_count=count_before)
+def test_poke_ignore_stage_same_day_after_affection_wiped(count_before: int) -> None:
+    profile = _profile(
+        affection=0, peak_affection=9, poke_count=count_before, zeroed_date=TODAY.isoformat()
+    )
     result = _poke(profile, rng=FixedRng(0.9))
     assert result.annoyed is True
     assert result.delta == 0
     assert profile.affection == 0
     assert result.text == POKE_IGNORE_REPLY
+
+
+@pytest.mark.parametrize("count_before", [0, 3])
+def test_poke_ignore_stage_expires_next_day(count_before: int) -> None:
+    profile = _profile(
+        affection=0, peak_affection=9, poke_count=count_before, zeroed_date="2026-09-21"
+    )
+    result = _poke(profile, rng=FixedRng(0.9))
+    assert result.annoyed is False
+    assert result.delta == 1
+    assert profile.affection == 1
+    assert POKE_IGNORE_REPLY not in result.text
 
 
 @pytest.mark.parametrize("count_before", [0, 5, 8])
@@ -196,6 +227,7 @@ def test_new_user_annoyed_roll_keeps_zero_affection() -> None:
     assert profile.affection == 0
     assert scenes == [POKE_NEGATIVE_SCENE]
     assert result.text != POKE_IGNORE_REPLY
+    assert "\n" not in result.text
 
 
 def test_poke_positive_gain_counts_towards_daily_limit() -> None:
@@ -226,7 +258,8 @@ def test_poke_positive_copy_follows_affection_band() -> None:
 
     result = _poke(profile, rng=FixedRng(0.9), text_picker=picker)
     assert seen == [(POKE_POSITIVE_SCENE, 100)]
-    assert result.text == BAND_TEXTS["flirty"].replace("{bot}", "馒头")
+    assert _first_line(result) == BAND_TEXTS["flirty"].replace("{bot}", "馒头")
+    assert result.text.split("\n")[1] == _change_line(result, 100)
     assert "{bot}" not in result.text
 
 
@@ -241,7 +274,8 @@ def test_poke_negative_copy_follows_affection_after_penalty() -> None:
     result = _poke(profile, rng=FixedRng(0.0), text_picker=picker)
     assert result.delta == -3
     assert seen == [(POKE_NEGATIVE_SCENE, 98)]
-    assert result.text == NEGATIVE_TEXTS["close"].replace("{bot}", "馒头")
+    assert _first_line(result) == NEGATIVE_TEXTS["close"].replace("{bot}", "馒头")
+    assert result.text.split("\n")[1] == _change_line(result, 98)
 
 
 @pytest.mark.parametrize(
@@ -251,13 +285,13 @@ def test_poke_negative_copy_follows_affection_after_penalty() -> None:
 def test_poke_falls_back_without_library(fixed_value: float, expected: str) -> None:
     profile = _profile(affection=50)
     result = _poke(profile, rng=FixedRng(fixed_value))
-    assert result.text == expected
+    assert _first_line(result) == expected
 
 
 def test_poke_reply_falls_back_when_scene_is_empty() -> None:
     profile = _profile(affection=50)
     result = _poke(profile, rng=FixedRng(0.9), text_picker=lambda scene, score: None)
-    assert result.text == POKE_POSITIVE_FALLBACK
+    assert _first_line(result) == POKE_POSITIVE_FALLBACK
 
 
 def test_poke_resets_counter_next_day() -> None:
@@ -295,7 +329,8 @@ async def test_service_poke_uses_library_and_normalizes_nickname(tmp_path: Path)
     assert result.count == 1
     assert result.delta == 1
     assert result.annoyed is False
-    assert result.text == BAND_TEXTS["warm"].replace("{bot}", "馒头")
+    assert _first_line(result) == BAND_TEXTS["warm"].replace("{bot}", "馒头")
+    assert result.text.split("\n")[1] == _change_line(result, 31)
     profile = await service.profile("100", "200")
     assert profile.nickname == "桃 友"
 
@@ -317,8 +352,9 @@ async def test_service_poke_reaches_ignore_stage(tmp_path: Path) -> None:
     result = await service.poke("100", "200", "桃友")
     assert result.count == 10
     assert result.annoyed is True
-    assert result.text == POKE_IGNORE_REPLY
+    assert _first_line(result) == POKE_IGNORE_REPLY
     assert result.delta == -5
+    assert result.text.split("\n")[1] == _change_line(result, 60 + 9 - 5)
     assert (await service.profile("100", "200")).affection == 60 + 9 - 5
 
 
@@ -383,4 +419,68 @@ async def test_public_poke_api_returns_poke_result(
     assert result.count == 1
     assert result.annoyed is False
     assert result.delta == 1
-    assert result.text in texts["neutral"]
+    assert _first_line(result) in texts["neutral"]
+    assert result.text.split("\n")[1] == "好感度 +1，当前 1"
+
+
+def test_poke_text_appends_change_line_only_when_delta_moves() -> None:
+    gained = _profile(affection=30)
+    result = _poke(gained, rng=FixedRng(0.9))
+    assert result.delta == 1
+    assert result.text.endswith("\n好感度 +1，当前 31")
+
+    lost = _profile(affection=30, poke_count=2)
+    result = _poke(lost, rng=FixedRng(0.0))
+    assert result.delta == -3
+    assert result.text.endswith("\n好感度 -3，当前 27")
+
+    blocked = _profile(affection=30, gain_date=TODAY.isoformat(), gain_points=3)
+    result = _poke(blocked, rng=FixedRng(0.9))
+    assert result.delta == 0
+    assert "\n" not in result.text
+
+
+async def test_zeroed_date_is_marked_by_every_deduction_path(tmp_path: Path) -> None:
+    assert any(reward < 0 for _, reward in INTERACTIONS)
+    service = _service(tmp_path, _library(tmp_path), mantou_affection_daily_gain_limit=999)
+    today = service._now().date().isoformat()
+
+    await service.adjust("100", "200", "桃友", 6)
+    await service.adjust("100", "200", "桃友", -6)
+    assert (await service.profile("100", "200")).zeroed_date == today
+
+    await service.adjust("300", "200", "桃友", 2)
+    await service.reward_external("300", "200", "桃友", "some_plugin:bad_action", -2)
+    assert (await service.profile("300", "200")).zeroed_date == today
+
+    await service.adjust("400", "200", "桃友", 1)
+    service.rng = LossRng(0.9)
+    result = await service.interact("400", "200", "桃友")
+    assert result.delta == -1
+    profile = await service.profile("400", "200")
+    assert profile.affection == 0
+    assert profile.zeroed_date == today
+
+    poke_result = await service.poke("400", "200", "桃友")
+    assert poke_result.annoyed is True
+    assert _first_line(poke_result) == POKE_IGNORE_REPLY
+
+
+async def test_zeroed_date_only_silences_pokes_for_the_rest_of_that_day(tmp_path: Path) -> None:
+    service = _service(tmp_path, _library(tmp_path), mantou_affection_daily_gain_limit=999)
+    await service.adjust("100", "200", "桃友", 3)
+    await service.adjust("100", "200", "桃友", -3)
+    assert (await service.profile("100", "200")).zeroed_date == service._now().date().isoformat()
+    assert (await service.poke("100", "200", "桃友")).annoyed is True
+
+    def rewind_next_day(profile: Profile) -> None:
+        profile.poke_date = "2000-01-01"
+        profile.zeroed_date = "2000-01-01"
+
+    await service.store.update_profile("100", "200", "桃友", rewind_next_day)
+    result = await service.poke("100", "200", "桃友")
+
+    assert result.count == 1
+    assert result.annoyed is False
+    assert result.delta == 1
+    assert POKE_IGNORE_REPLY not in result.text

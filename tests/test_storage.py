@@ -120,3 +120,53 @@ async def test_store_reads_legacy_peak_as_current_affection(tmp_path: Path) -> N
     )
 
     assert (await AffectionStore(path).get_profile("1", "2")).peak_affection == 9
+
+
+async def test_store_marks_zeroed_date_when_affection_drops_to_zero(tmp_path: Path) -> None:
+    path = tmp_path / "affection.json"
+    store = AffectionStore(path)
+
+    def gain(profile: Profile) -> None:
+        profile.affection = 6
+
+    await store.update_profile("1", "2", "桃友", gain, "2026-09-21")
+
+    def lose(profile: Profile) -> None:
+        profile.affection = 0
+
+    await store.update_profile("1", "2", "桃友", lose, "2026-09-22")
+
+    profile = await store.get_profile("1", "2")
+    assert profile.affection == 0
+    assert profile.zeroed_date == "2026-09-22"
+    assert profile.peak_affection == 6
+
+
+async def test_store_keeps_zeroed_date_while_affection_stays_zero(tmp_path: Path) -> None:
+    path = tmp_path / "affection.json"
+    store = AffectionStore(path)
+
+    def zero(profile: Profile) -> None:
+        profile.affection = 0
+
+    await store.update_profile("1", "2", "桃友", zero, "2026-09-21")
+    await store.update_profile("1", "2", "桃友", zero, "2026-09-22")
+
+    assert (await store.get_profile("1", "2")).zeroed_date == ""
+
+
+async def test_store_zeroed_date_requires_previous_affection(tmp_path: Path) -> None:
+    path = tmp_path / "affection.json"
+    store = AffectionStore(path)
+
+    def gain(profile: Profile) -> None:
+        profile.affection = 3
+
+    await store.update_profile("1", "2", "桃友", gain, "2026-09-22")
+    assert (await store.get_profile("1", "2")).zeroed_date == ""
+
+    def lose(profile: Profile) -> None:
+        profile.affection = 0
+
+    await store.update_profile("1", "2", "桃友", lose)
+    assert (await store.get_profile("1", "2")).zeroed_date == ""

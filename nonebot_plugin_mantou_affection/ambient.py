@@ -24,24 +24,43 @@ EVENT_MESSAGE = (
 TIMEOUT_REPLY = "{bot}等不到你的回答，失望地走开了，好感度 -{penalty}"
 
 
-class PendingEvent:
-    """一次已经发出、正在等待作答的随机事件。"""
+class PendingAnswer:
+    """一次作答：某人选了第几个选项。"""
 
-    def __init__(self, event: Event, options: tuple[EventOption, ...]):
+    def __init__(self, user_id: str, nickname: str, index: int):
+        self.user_id = user_id
+        self.nickname = nickname
+        self.index = index
+
+
+class PendingEvent:
+    """一次已经发出、正在等待群里作答的随机事件。"""
+
+    def __init__(
+        self,
+        event: Event,
+        options: tuple[EventOption, ...],
+        trigger_id: str,
+        trigger_name: str,
+    ):
         self.event = event
         self.options = options
-        self.future: asyncio.Future[int] = asyncio.get_running_loop().create_future()
+        self.trigger_id = trigger_id
+        self.trigger_name = trigger_name
+        self.answers: dict[str, PendingAnswer] = {}
         self.task: asyncio.Task | None = None
 
-    def resolve(self, index: int) -> bool:
-        if self.future.done():
+    def record(self, user_id: str, nickname: str, index: int) -> bool:
+        """记录作答，每人只算第一次。"""
+
+        if user_id in self.answers:
             return False
-        self.future.set_result(index)
+        self.answers[user_id] = PendingAnswer(user_id, nickname, index)
         return True
 
 
 class EventCoordinator:
-    """管理随机事件的触发、作答等待与结算。"""
+    """管理随机事件的触发、作答收集与结算，同一个群同时只有一个事件。"""
 
     def __init__(
         self,
@@ -55,39 +74,44 @@ class EventCoordinator:
         self.config = config
         self.library = library
         self.rng = rng or random.Random()
-        self.pending: dict[tuple[str, str], PendingEvent] = {}
+        self.pending: dict[str, PendingEvent] = {}
 
     def triggered(self) -> bool:
         """小动作命中后再掷一次骰子，决定是否升级为随机事件。"""
 
         return self.rng.random() < self.config.mantou_affection_ambient_event_ratio
 
-    def start(self, group_id: str, user_id: str) -> PendingEvent | None:
-        """抽一个事件并登记待作答状态；已有未结束事件或事件库为空时返回 None。"""
+    def start(self, group_id: str, user_id: str, nickname: str) -> PendingEvent | None:
+        """抽一个事件并登记待作答状态；本群已有未结束事件或事件库为空时返回 None。"""
 
-        key = (str(group_id), str(user_id))
+        key = str(group_id)
         if key in self.pending or self.library is None:
             return None
         event = self.library.pick()
         if event is None:
             return None
-        pending = PendingEvent(event, self.library.shuffled_options(event))
+        pending = PendingEvent(
+            event,
+            self.library.shuffled_options(event),
+            trigger_id=str(user_id),
+            trigger_name=nickname,
+        )
         self.pending[key] = pending
         return pending
 
-    def discard(self, group_id: str, user_id: str) -> None:
-        self.pending.pop((str(group_id), str(user_id)), None)
+    def discard(self, group_id: str) -> None:
+        self.pending.pop(str(group_id), None)
 
-    def answer(self, group_id: str, user_id: str, text: str) -> bool:
-        """收到答题消息时调用；只接受 1/2/3，其他内容忽略。"""
+    def answer(self, group_id: str, user_id: str, nickname: str, text: str) -> bool:
+        """收到答题消息时调用；群里任何人只认第一次的 1/2/3，其他内容忽略。"""
 
-        pending = self.pending.get((str(group_id), str(user_id)))
+        pending = self.pending.get(str(group_id))
         if pending is None:
             return False
         index = ANSWERS.get(text.strip())
         if index is None:
             return False
-        return pending.resolve(index)
+        return pending.record(str(user_id), nickname, index)
 
     def event_message(self, pending: PendingEvent) -> str:
         options = pending.options
@@ -105,33 +129,43 @@ class EventCoordinator:
         pending: PendingEvent,
         *,
         group_id: str,
-        user_id: str,
-        nickname: str,
         timeout: float,
-    ) -> str:
-        """等待作答并结算好感度，返回结果文本；结算走不受每日上限约束的调整路径。"""
+    ) -> Message:
+        """等满作答窗口后统一结算，返回合并了好感变化的消息。"""
 
         try:
-            try:
-                choice = await asyncio.wait_for(pending.future, timeout)
-            except asyncio.TimeoutError:
-                choice = None
+            await asyncio.sleep(timeout)
         finally:
-            self.discard(group_id, user_id)
+            self.discard(group_id)
 
-        if choice is None:
+        segments: list[MessageSegment] = []
+
+        def add_line(user_id: str, line: str) -> None:
+            if segments:
+                segments.append(MessageSegment.text("\n"))
+            segments.append(MessageSegment.at(user_id))
+            segments.append(MessageSegment.text(f" {line}"))
+
+        for answer in pending.answers.values():
+            option = pending.options[answer.index]
+            _, profile = await self.service.adjust(
+                str(group_id), answer.user_id, answer.nickname, option.delta
+            )
+            add_line(
+                answer.user_id, f"{self._option_reply(option)}，当前 {profile.affection}"
+            )
+
+        if pending.trigger_id not in pending.answers:
             penalty = self.config.mantou_affection_event_timeout_penalty
-            delta = -penalty
+            _, profile = await self.service.adjust(
+                str(group_id), pending.trigger_id, pending.trigger_name, -penalty
+            )
             reply = TIMEOUT_REPLY.format(
                 bot=self.config.mantou_affection_bot_name, penalty=penalty
             )
-        else:
-            option = pending.options[choice]
-            delta = option.delta
-            reply = self._option_reply(option)
+            add_line(pending.trigger_id, f"{reply}，当前 {profile.affection}")
 
-        await self.service.adjust(str(group_id), str(user_id), nickname, delta)
-        return reply
+        return Message(segments)
 
     def _option_reply(self, option: EventOption) -> str:
         if option.delta >= 2:
@@ -150,31 +184,23 @@ class EventCoordinator:
         pending: PendingEvent,
         *,
         group_id: str,
-        user_id: str,
-        nickname: str,
         send: Callable[[Message | str], Awaitable[object]],
         timeout: float,
     ) -> asyncio.Task:
-        """后台等待作答并回复结果，异常只记日志。"""
+        """后台等满作答窗口并回复结果，异常只记日志。"""
 
-        async def run() -> str | None:
+        async def run() -> Message | None:
             try:
-                reply = await self.settle(
-                    pending,
-                    group_id=group_id,
-                    user_id=user_id,
-                    nickname=nickname,
-                    timeout=timeout,
-                )
+                message = await self.settle(pending, group_id=group_id, timeout=timeout)
             except Exception:
                 logger.exception("[mantou-affection] 随机事件结算失败")
                 return None
             try:
-                await send(reply)
+                await send(message)
             except Exception:
                 logger.exception("[mantou-affection] 发送随机事件结果失败")
                 return None
-            return reply
+            return message
 
         pending.task = asyncio.create_task(run())
         return pending.task
@@ -185,7 +211,7 @@ def register_ambient(
     config: Config,
     events: EventCoordinator | None = None,
 ) -> tuple:
-    """群友发言时按概率让馒头冒个小动作，偶尔升级为限时随机事件。"""
+    """群友发言时按概率让馒头冒个小动作，偶尔升级为群里多人可答的随机事件。"""
 
     coordinator = events or EventCoordinator(service, config)
     ambient = on_message(rule=GROUP_ONLY, priority=90, block=False)
@@ -197,6 +223,7 @@ def register_ambient(
             coordinator.answer(
                 str(event.group_id),
                 str(event.user_id),
+                _sender_name(event),
                 event.message.extract_plain_text(),
             )
         except Exception:
@@ -214,7 +241,11 @@ def register_ambient(
         if not text:
             return
 
-        pending = coordinator.start(group_id, user_id) if coordinator.triggered() else None
+        pending = (
+            coordinator.start(group_id, user_id, _sender_name(event))
+            if coordinator.triggered()
+            else None
+        )
         if pending is not None:
             try:
                 await ambient.send(
@@ -223,13 +254,11 @@ def register_ambient(
                 )
             except Exception:
                 logger.exception("[mantou-affection] 发送随机事件失败")
-                coordinator.discard(group_id, user_id)
+                coordinator.discard(group_id)
             else:
                 coordinator.schedule(
                     pending,
                     group_id=group_id,
-                    user_id=user_id,
-                    nickname=_sender_name(event),
                     send=ambient.send,
                     timeout=config.mantou_affection_event_timeout,
                 )

@@ -1,6 +1,6 @@
 [project]
 name = "nonebot-plugin-mantou-affection"
-version = "0.4.1"
+version = "0.5.0"
 description = "为群聊机器人馒头提供互动、等级称号和跨插件共享状态的好感度系统"
 authors = [{ name = "TonyLiangP2010405" }]
 license = "MIT"
