@@ -10,6 +10,7 @@ class Config(BaseModel):
     mantou_affection_interaction_limit: int = Field(default=5, ge=1, le=50)
     mantou_affection_interaction_cooldown: int = Field(default=7200, ge=0, le=86400)
     mantou_affection_max: int = Field(default=999, ge=1, le=999999)
+    mantou_affection_daily_gain_limit: int = Field(default=3, ge=1, le=999)
     mantou_affection_ranking_size: int = Field(default=10, ge=3, le=50)
     mantou_affection_link_enabled: bool = True
     mantou_affection_link_daily_limit: int = Field(default=10, ge=0, le=1000)

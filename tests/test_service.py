@@ -54,13 +54,14 @@ def _service(
     tmp_path: Path,
     *,
     text_library: AffectionTextLibrary | None = None,
+    rng: random.Random | None = None,
     **config_kwargs,
 ) -> AffectionService:
     return AffectionService(
         AffectionStore(tmp_path / "affection.json"),
         Config(**config_kwargs),
         text_library=text_library,
-        rng=random.Random(0),
+        rng=rng or random.Random(0),
     )
 
 
@@ -174,3 +175,35 @@ async def test_ambient_reaction_propagates_store_errors(tmp_path: Path, monkeypa
     monkeypatch.setattr(service.store, "get_profile", broken)
     with pytest.raises(RuntimeError, match="store is down"):
         await service.ambient_reaction("100", "200")
+
+
+def test_gained_points_today_ignores_stale_date(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    today = service._now().date().isoformat()
+    assert service.gained_points_today(Profile("1", gain_date=today, gain_points=2)) == 2
+    assert service.gained_points_today(Profile("1", gain_date="2000-01-01", gain_points=2)) == 0
+
+
+async def test_daily_gain_budget_is_shared_by_interact_and_link(tmp_path: Path) -> None:
+    service = _service(tmp_path, mantou_affection_daily_gain_limit=3)
+    assert random.Random(0).choice(INTERACTIONS)[1] == 2
+
+    first = await service.interact("100", "200", "桃友")
+    assert first.accepted is True
+    assert first.delta == 2
+
+    second = await service.reward_external(
+        "100", "200", "桃友", "nonebot_plugin_taozi", 2
+    )
+    assert second.delta == 1
+
+    third = await service.reward_external(
+        "100", "200", "桃友", "nonebot_plugin_taozi_music", 2
+    )
+    assert third.accepted is True
+    assert third.delta == 0
+
+    profile = await service.profile("100", "200")
+    assert profile.affection == 3
+    assert profile.gain_points == 3
+    assert service.gained_points_today(profile) == 3

@@ -104,6 +104,8 @@ def register_commands(service: AffectionService, config: Config) -> tuple:
             f"称号：Lv.{level.number}「{level.title}」\n"
             f"今日插件联动：{service.linked_points_today(profile)}/"
             f"{config.mantou_affection_link_daily_limit}\n"
+            f"今日好感获取：{service.gained_points_today(profile)}/"
+            f"{config.mantou_affection_daily_gain_limit}\n"
             f"进度：{progress_text(profile.affection)}"
         )
 

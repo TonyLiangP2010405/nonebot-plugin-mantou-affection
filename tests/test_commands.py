@@ -1,7 +1,19 @@
-import pytest
+from pathlib import Path
+from time import time
 
-from nonebot_plugin_mantou_affection.commands import _format_probability, _format_wait
+import pytest
+from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message
+from nonebot.adapters.onebot.v11.event import Sender
+
+from nonebot_plugin_mantou_affection.commands import (
+    _format_probability,
+    _format_wait,
+    register_commands,
+)
 from nonebot_plugin_mantou_affection.config import Config
+from nonebot_plugin_mantou_affection.models import Profile
+from nonebot_plugin_mantou_affection.service import AffectionService
+from nonebot_plugin_mantou_affection.storage import AffectionStore
 
 
 def test_interaction_defaults_are_five_times_and_two_hours() -> None:
@@ -19,6 +31,11 @@ def test_ambient_defaults_are_enabled_at_one_percent() -> None:
     config = Config()
     assert config.mantou_affection_ambient_enabled is True
     assert config.mantou_affection_ambient_probability == 0.01
+
+
+def test_daily_gain_default_is_three_points() -> None:
+    assert Config().mantou_affection_daily_gain_limit == 3
+    assert Config(mantou_affection_daily_gain_limit=2).mantou_affection_daily_gain_limit == 2
 
 
 def test_format_wait_seconds() -> None:
@@ -68,3 +85,46 @@ def test_registered_matchers_include_probability_command() -> None:
     assert [handler.call.__name__ for handler in probability_cmd.handlers] == [
         "handle_probability"
     ]
+
+
+def _event(group_id: int = 90001, user_id: int = 90002) -> GroupMessageEvent:
+    message = Message("馒头好感")
+    return GroupMessageEvent(
+        time=int(time()),
+        self_id=10000,
+        post_type="message",
+        sub_type="normal",
+        user_id=user_id,
+        message_type="group",
+        message_id=1,
+        message=message,
+        original_message=message,
+        raw_message="馒头好感",
+        font=0,
+        sender=Sender(user_id=user_id, nickname="桃友", role="member"),
+        to_me=False,
+        group_id=group_id,
+    )
+
+
+async def test_profile_command_reports_daily_gain(tmp_path: Path, monkeypatch) -> None:
+    service = AffectionService(AffectionStore(tmp_path / "affection.json"), Config())
+    today = service._now().date().isoformat()
+
+    def bump(profile: Profile) -> None:
+        profile.gain_date = today
+        profile.gain_points = 2
+
+    await service.store.update_profile("90001", "90002", "桃友", bump)
+
+    profile_cmd = register_commands(service, Config())[0]
+    sent: list[str] = []
+
+    async def fake_finish(message: Message | str = "", **kwargs) -> None:
+        sent.append(str(message))
+
+    monkeypatch.setattr(profile_cmd, "finish", fake_finish)
+    await profile_cmd.handlers[0].call(_event())
+
+    assert len(sent) == 1
+    assert "今日好感获取：2/3" in sent[0]

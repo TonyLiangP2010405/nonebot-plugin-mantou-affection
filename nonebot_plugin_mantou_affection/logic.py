@@ -72,6 +72,7 @@ def perform_interaction(
     today: date,
     now_timestamp: float,
     daily_limit: int,
+    daily_gain_limit: int,
     cooldown_seconds: int,
     affection_max: int,
     rng: random.Random,
@@ -82,6 +83,9 @@ def perform_interaction(
         profile.interaction_date = today_text
         profile.interaction_count = 0
         profile.last_interaction_at = 0.0
+    if profile.gain_date != today_text:
+        profile.gain_date = today_text
+        profile.gain_points = 0
 
     remaining = max(0, daily_limit - profile.interaction_count)
     if remaining == 0:
@@ -111,11 +115,13 @@ def perform_interaction(
         )
 
     text, reward = rng.choice(INTERACTIONS)
+    reward = min(reward, max(0, daily_gain_limit - profile.gain_points))
     before = profile.affection
     profile.affection = min(affection_max, profile.affection + reward)
     profile.interaction_count += 1
     profile.last_interaction_at = now_timestamp
     profile.updated_at = now_timestamp
+    profile.gain_points += profile.affection - before
     picked = text_picker(profile.affection) if text_picker is not None else None
     reply = picked.replace("{bot}", bot_name) if picked else text.format(bot=bot_name)
     return InteractionResult(
@@ -145,6 +151,7 @@ def apply_link_reward(
     today: date,
     now_timestamp: float,
     daily_limit: int,
+    daily_gain_limit: int,
     cooldown_seconds: int,
     affection_max: int,
 ) -> LinkRewardResult:
@@ -153,6 +160,9 @@ def apply_link_reward(
         profile.linked_date = today_text
         profile.linked_points = 0
         profile.plugin_last_awards = {}
+    if profile.gain_date != today_text:
+        profile.gain_date = today_text
+        profile.gain_points = 0
 
     if daily_limit <= 0 or profile.linked_points >= daily_limit:
         return LinkRewardResult(
@@ -167,12 +177,15 @@ def apply_link_reward(
     available = daily_limit - profile.linked_points
     requested = max(-available, min(available, reward))
     if requested >= 0:
-        actual_reward = min(requested, affection_max - profile.affection)
+        remaining_gain = max(0, daily_gain_limit - profile.gain_points)
+        actual_reward = min(requested, affection_max - profile.affection, remaining_gain)
     else:
         actual_reward = max(requested, -profile.affection)
     plugin_last_awards[source] = now_timestamp
     profile.plugin_last_awards = plugin_last_awards
     profile.linked_points += abs(actual_reward)
     profile.affection += actual_reward
+    if actual_reward > 0:
+        profile.gain_points += actual_reward
     profile.updated_at = now_timestamp
     return LinkRewardResult(True, "ok", actual_reward, profile.affection, profile.linked_points)

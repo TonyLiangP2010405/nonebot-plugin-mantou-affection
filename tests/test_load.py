@@ -33,12 +33,14 @@ async def test_public_read_api_returns_shared_snapshot() -> None:
         get_affection_response,
         get_affection_snapshot,
     )
+    from nonebot_plugin_mantou_affection.config import Config
 
     await add_affection("read-api-group", "read-api-user", 10, source="test:read-api")
-    assert await get_affection("read-api-group", "read-api-user") == 10
+    daily_gain_limit = Config().mantou_affection_daily_gain_limit
+    assert await get_affection("read-api-group", "read-api-user") == daily_gain_limit
     snapshot = await get_affection_snapshot("read-api-group", "read-api-user")
-    assert snapshot.affection == 10
-    assert snapshot.title == "有点眼熟"
+    assert snapshot.affection == daily_gain_limit
+    assert snapshot.title == "初次见面"
     assert snapshot.band == "neutral"
     response = await get_affection_response(
         "crystelf.poke",
@@ -46,5 +48,5 @@ async def test_public_read_api_returns_shared_snapshot() -> None:
         "read-api-user",
         seed="stable",
     )
-    assert response.affection == 10
+    assert response.affection == daily_gain_limit
     assert response.text

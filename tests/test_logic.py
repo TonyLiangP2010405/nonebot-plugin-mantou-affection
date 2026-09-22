@@ -13,7 +13,7 @@ from nonebot_plugin_mantou_affection.logic import (
     progress_text,
     snapshot_for,
 )
-from nonebot_plugin_mantou_affection.models import InteractionResult, Profile
+from nonebot_plugin_mantou_affection.models import InteractionResult, LinkRewardResult, Profile
 
 
 def _run_interaction(
@@ -23,6 +23,7 @@ def _run_interaction(
     text_picker: Callable[[int], str | None] | None = None,
     now_timestamp: float = 100.0,
     daily_limit: int = 5,
+    daily_gain_limit: int = 999,
 ) -> InteractionResult:
     return perform_interaction(
         profile,
@@ -30,10 +31,34 @@ def _run_interaction(
         today=date(2026, 9, 21),
         now_timestamp=now_timestamp,
         daily_limit=daily_limit,
+        daily_gain_limit=daily_gain_limit,
         cooldown_seconds=0,
         affection_max=999,
         rng=rng,
         text_picker=text_picker,
+    )
+
+
+def _run_link_reward(
+    profile: Profile,
+    *,
+    source: str = "nonebot_plugin_taozi",
+    reward: int = 2,
+    today: date = date(2026, 9, 21),
+    now_timestamp: float = 100.0,
+    daily_limit: int = 10,
+    daily_gain_limit: int = 999,
+) -> LinkRewardResult:
+    return apply_link_reward(
+        profile,
+        source=source,
+        reward=reward,
+        today=today,
+        now_timestamp=now_timestamp,
+        daily_limit=daily_limit,
+        daily_gain_limit=daily_gain_limit,
+        cooldown_seconds=0,
+        affection_max=999,
     )
 
 
@@ -75,6 +100,7 @@ def test_interaction_cooldown_and_daily_limit() -> None:
         today=date(2026, 9, 21),
         now_timestamp=100.0,
         daily_limit=1,
+        daily_gain_limit=999,
         cooldown_seconds=60,
         affection_max=999,
         rng=random.Random(1),
@@ -85,6 +111,7 @@ def test_interaction_cooldown_and_daily_limit() -> None:
         today=date(2026, 9, 21),
         now_timestamp=101.0,
         daily_limit=1,
+        daily_gain_limit=999,
         cooldown_seconds=60,
         affection_max=999,
         rng=random.Random(1),
@@ -107,6 +134,7 @@ def test_interaction_reports_cooldown() -> None:
         today=date(2026, 9, 21),
         now_timestamp=120.0,
         daily_limit=5,
+        daily_gain_limit=999,
         cooldown_seconds=60,
         affection_max=999,
         rng=random.Random(1),
@@ -163,6 +191,38 @@ def test_interaction_rewards_keep_builtin_distribution() -> None:
     assert profile.affection == sum(deltas)
 
 
+def test_interaction_gain_is_capped_by_daily_gain_limit() -> None:
+    seed = 5
+    assert random.Random(seed).choice(INTERACTIONS)[1] == 3
+    profile = Profile("1")
+    result = _run_interaction(profile, rng=random.Random(seed), daily_gain_limit=1)
+    assert result.accepted is True
+    assert result.delta == 1
+    assert result.affection == 1
+    assert profile.gain_date == "2026-09-21"
+    assert profile.gain_points == 1
+
+
+def test_interaction_without_gain_budget_still_counts() -> None:
+    profile = Profile("1", affection=5, gain_date="2026-09-21", gain_points=3)
+    result = _run_interaction(profile, rng=random.Random(5), daily_gain_limit=3)
+    assert result.accepted is True
+    assert result.reason == "ok"
+    assert result.delta == 0
+    assert result.affection == 5
+    assert result.remaining == 4
+    assert profile.interaction_count == 1
+    assert profile.gain_points == 3
+
+
+def test_interaction_gain_budget_resets_next_day() -> None:
+    profile = Profile("1", gain_date="2026-09-20", gain_points=3)
+    result = _run_interaction(profile, rng=random.Random(5), daily_gain_limit=3)
+    assert profile.gain_date == "2026-09-21"
+    assert profile.gain_points == 3
+    assert result.delta == 3
+
+
 def test_adjustment_is_clamped() -> None:
     profile = Profile("1", affection=5)
     assert adjust_affection(profile, -10, 999, 1.0) == -5
@@ -180,6 +240,7 @@ def test_link_reward_cooldown_limit_and_daily_reset() -> None:
         today=date(2026, 9, 21),
         now_timestamp=100.0,
         daily_limit=3,
+        daily_gain_limit=999,
         cooldown_seconds=60,
         affection_max=999,
     )
@@ -190,6 +251,7 @@ def test_link_reward_cooldown_limit_and_daily_reset() -> None:
         today=date(2026, 9, 21),
         now_timestamp=120.0,
         daily_limit=3,
+        daily_gain_limit=999,
         cooldown_seconds=60,
         affection_max=999,
     )
@@ -200,6 +262,7 @@ def test_link_reward_cooldown_limit_and_daily_reset() -> None:
         today=date(2026, 9, 21),
         now_timestamp=121.0,
         daily_limit=3,
+        daily_gain_limit=999,
         cooldown_seconds=60,
         affection_max=999,
     )
@@ -210,6 +273,7 @@ def test_link_reward_cooldown_limit_and_daily_reset() -> None:
         today=date(2026, 9, 22),
         now_timestamp=200.0,
         daily_limit=3,
+        daily_gain_limit=999,
         cooldown_seconds=60,
         affection_max=999,
     )
@@ -230,9 +294,62 @@ def test_link_reward_can_reduce_affection_and_counts_absolute_budget() -> None:
         today=date(2026, 9, 21),
         now_timestamp=100.0,
         daily_limit=10,
+        daily_gain_limit=999,
         cooldown_seconds=0,
         affection_max=999,
     )
     assert result.delta == -3
     assert result.affection == 2
     assert result.linked_points == 3
+
+
+def test_link_reward_positive_gain_is_capped_by_daily_gain_limit() -> None:
+    profile = Profile("1")
+    result = _run_link_reward(profile, reward=2, daily_gain_limit=1)
+    assert result.accepted is True
+    assert result.delta == 1
+    assert result.affection == 1
+    assert profile.gain_date == "2026-09-21"
+    assert profile.gain_points == 1
+    assert profile.linked_points == 1
+
+
+def test_link_reward_applies_link_and_gain_budgets_together() -> None:
+    by_link = Profile("1")
+    link_capped = _run_link_reward(by_link, reward=2, daily_limit=1, daily_gain_limit=999)
+    by_gain = Profile("2")
+    gain_capped = _run_link_reward(by_gain, reward=2, daily_limit=999, daily_gain_limit=1)
+
+    assert link_capped.delta == 1
+    assert by_link.linked_points == 1
+    assert by_link.gain_points == 1
+    assert gain_capped.delta == 1
+    assert by_gain.linked_points == 1
+    assert by_gain.gain_points == 1
+
+
+def test_link_reward_negative_change_ignores_daily_gain_limit() -> None:
+    profile = Profile("1", affection=5, gain_date="2026-09-21", gain_points=3)
+    result = _run_link_reward(
+        profile, source="some_plugin:bad_action", reward=-3, daily_gain_limit=3
+    )
+    assert result.delta == -3
+    assert result.affection == 2
+    assert profile.gain_points == 3
+
+
+def test_link_reward_gain_budget_resets_next_day() -> None:
+    profile = Profile(
+        "1",
+        gain_date="2026-09-20",
+        gain_points=3,
+        linked_date="2026-09-20",
+        linked_points=3,
+    )
+    result = _run_link_reward(
+        profile, today=date(2026, 9, 22), now_timestamp=200.0, daily_gain_limit=3
+    )
+    assert profile.gain_date == "2026-09-22"
+    assert profile.gain_points == 2
+    assert profile.linked_points == 2
+    assert result.delta == 2

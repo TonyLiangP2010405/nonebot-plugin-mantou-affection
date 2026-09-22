@@ -9,6 +9,7 @@
 - 七级好感称号和群排行榜
 - 自动感知其他插件的命令、正则及完整匹配 Matcher
 - 每插件独立冷却、每日联动奖励上限，避免刷分
+- 互动与联动共享每日好感获取总上限，最快约一年满级
 - SUPERUSER 手动增减群友好感度
 - 群友发言时馒头按概率冒泡的小动作（好感度 >0 才触发，默认 1%）
 - 为其他插件提供好感上报与状态读取 API
@@ -47,6 +48,7 @@ MANTOU_AFFECTION_TEXT_PATH=
 MANTOU_AFFECTION_INTERACTION_LIMIT=5
 MANTOU_AFFECTION_INTERACTION_COOLDOWN=7200
 MANTOU_AFFECTION_MAX=999
+MANTOU_AFFECTION_DAILY_GAIN_LIMIT=3
 MANTOU_AFFECTION_RANKING_SIZE=10
 MANTOU_AFFECTION_LINK_ENABLED=true
 MANTOU_AFFECTION_LINK_DAILY_LIMIT=10
@@ -70,6 +72,10 @@ MANTOU_AFFECTION_AMBIENT_PROBABILITY=0.01
   "nonebot_plugin_miao": 1
 }
 ```
+
+`MANTOU_AFFECTION_DAILY_GAIN_LIMIT` 是每天通过互动和联动最多能获得的好感度总和（默认 3 点，互动与联动共享
+同一份额度）。好感上限是 999，按默认值最快约 333 天满级；如果想严格满一年以上，可以设为 2（约 500 天）。
+SUPERUSER 手动增减不受这个上限限制，`/馒头好感` 会显示当天已获取的点数。
 
 `MANTOU_AFFECTION_AMBIENT_ENABLED` 控制群友发言时馒头是否可能冒泡，`MANTOU_AFFECTION_AMBIENT_PROBABILITY`
 是单次触发的概率（0～1，默认 1%）。SUPERUSER 也可以用 `/馒头反应概率` 在运行时查看或覆盖，覆盖值写进
@@ -110,8 +116,8 @@ MANTOU_AFFECTION_LINK_REWARDS={"nonebot_plugin_taozi":2,"nonebot_plugin_daily_at
 
 | 指令 | 权限 | 范围 | 说明 |
 |---|---|---|---|
-| `/馒头互动` | 群员 | 群聊 | 和馒头互动并获得 0～3 点好感（每日 5 次，间隔至少 2 小时） |
-| `/馒头好感` | 群员 | 群聊 | 查看好感度、关系称号和联动额度 |
+| `/馒头互动` | 群员 | 群聊 | 和馒头互动并获得 0～3 点好感（每日 5 次，间隔至少 2 小时，受每日获取总上限约束） |
+| `/馒头好感` | 群员 | 群聊 | 查看好感度、关系称号、今日获取量和联动额度 |
 | `/馒头好感榜` | 群员 | 群聊 | 查看本群好感度排行榜 |
 | `/馒头好感帮助` | 群员 | 群聊 | 查看菜单 |
 | `/馒头好感调整 @群友 +10` | SUPERUSER | 群聊 | 手动增加或扣除好感度 |
@@ -127,7 +133,7 @@ MANTOU_AFFECTION_LINK_REWARDS={"nonebot_plugin_taozi":2,"nonebot_plugin_daily_at
 4. 本次执行没有抛出异常；
 5. 没有触发该插件的联动冷却或每日上限；
 
-则按配置向发起者静默增减好感度。普通 `on_message` 监听器不会自动变化，避免聊天学习、消息统计等插件在每条群消息上刷分。每日联动上限按变化值的绝对值计算。
+则按配置向发起者静默增减好感度。普通 `on_message` 监听器不会自动变化，避免聊天学习、消息统计等插件在每条群消息上刷分。每日联动上限按变化值的绝对值计算；正向奖励还要与 `/馒头互动` 共享每日获取总上限，额度用完后只做截断，不再增加好感度。
 
 ### 主动上报 API
 
@@ -177,7 +183,7 @@ response = await get_affection_response(
 print(response.text)
 ```
 
-`add_affection` 与 `change_affection` 都会遵守每日联动上限和同一 `source` 的冷却，并返回实际变化值。`add_affection` 只接受正数，`change_affection` 接受正负数；两个读取 API 不会改变数据。
+`add_affection` 与 `change_affection` 都会遵守每日联动上限、每日获取总上限和同一 `source` 的冷却，并返回实际变化值。`add_affection` 只接受正数，`change_affection` 接受正负数，其中负向变化不受每日获取总上限限制；两个读取 API 不会改变数据。
 
 当前工作区还完成了四类展示联动：每日运势随关系阶段改写短句；Crystelf 戳一戳会增加好感并改变回复；水群榜展示每位群友的馒头好感；桃纸助手的桃签和词典卡片会出现不同程度的“馒头私语”。所有接入均为软依赖，好感插件未加载时原插件照常运行。
 

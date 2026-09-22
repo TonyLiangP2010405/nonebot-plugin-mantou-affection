@@ -61,6 +61,7 @@ class AffectionService:
                 today=now.date(),
                 now_timestamp=now.timestamp(),
                 daily_limit=self.config.mantou_affection_interaction_limit,
+                daily_gain_limit=self.config.mantou_affection_daily_gain_limit,
                 cooldown_seconds=self.config.mantou_affection_interaction_cooldown,
                 affection_max=self.config.mantou_affection_max,
                 rng=self.rng,
@@ -109,6 +110,11 @@ class AffectionService:
             else 0
         )
 
+    def gained_points_today(self, profile: Profile) -> int:
+        return (
+            profile.gain_points if profile.gain_date == self._now().date().isoformat() else 0
+        )
+
     async def reward_external(
         self,
         group_id: str,
@@ -128,6 +134,7 @@ class AffectionService:
                 today=now.date(),
                 now_timestamp=now.timestamp(),
                 daily_limit=self.config.mantou_affection_link_daily_limit,
+                daily_gain_limit=self.config.mantou_affection_daily_gain_limit,
                 cooldown_seconds=self.config.mantou_affection_link_cooldown,
                 affection_max=self.config.mantou_affection_max,
             )

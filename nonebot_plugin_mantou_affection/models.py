@@ -28,6 +28,8 @@ class Profile:
     last_interaction_at: float = 0.0
     linked_date: str = ""
     linked_points: int = 0
+    gain_date: str = ""
+    gain_points: int = 0
     plugin_last_awards: dict[str, float] = field(default_factory=dict)
     updated_at: float = 0.0
 
@@ -44,6 +46,8 @@ class Profile:
             last_interaction_at=max(0.0, _safe_float(data.get("last_interaction_at"))),
             linked_date=str(data.get("linked_date", "")),
             linked_points=max(0, _safe_int(data.get("linked_points"))),
+            gain_date=str(data.get("gain_date", "")),
+            gain_points=max(0, _safe_int(data.get("gain_points"))),
             plugin_last_awards={
                 str(key): max(0.0, _safe_float(value))
                 for key, value in (data.get("plugin_last_awards") or {}).items()
