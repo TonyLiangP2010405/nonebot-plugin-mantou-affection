@@ -19,7 +19,7 @@ EVENT_MESSAGE = (
     "1. {first}\n"
     "2. {second}\n"
     "3. {third}\n"
-    "请在 {timeout} 秒内作答，直接发送 1、2、3 即可（不用@），超时好感度 -{penalty}！"
+    "请在 {timeout} 秒内作答，直接发送 1、2、3 即可（答题不用@），超时好感度 -{penalty}！"
 )
 TIMEOUT_REPLY = "{bot}等不到你的回答，失望地走开了，好感度 -{penalty}"
 
@@ -217,7 +217,10 @@ def register_ambient(
         pending = coordinator.start(group_id, user_id) if coordinator.triggered() else None
         if pending is not None:
             try:
-                await ambient.send(coordinator.event_message(pending))
+                await ambient.send(
+                    MessageSegment.at(event.user_id)
+                    + MessageSegment.text(f" {coordinator.event_message(pending)}")
+                )
             except Exception:
                 logger.exception("[mantou-affection] 发送随机事件失败")
                 coordinator.discard(group_id, user_id)

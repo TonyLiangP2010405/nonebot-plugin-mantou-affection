@@ -193,9 +193,11 @@ async def test_full_event_ratio_sends_event_message(
     await ambient.handlers[0].call(_event())
 
     assert len(sent) == 1
+    assert [segment.type for segment in sent[0]] == ["at", "text"]
+    assert sent[0][0].data.get("qq") == str(_event().user_id)
     text = str(sent[0])
-    assert text.startswith("⚡ 触发随机事件！")
-    assert "请在 3 秒内作答，直接发送 1、2、3 即可（不用@），超时好感度 -5！" in text
+    assert "⚡ 触发随机事件！" in text
+    assert "请在 3 秒内作答，直接发送 1、2、3 即可（答题不用@），超时好感度 -5！" in text
     pending = coordinator.pending[KEY]
     library_options = {
         frozenset(option.text for option in event.options)
