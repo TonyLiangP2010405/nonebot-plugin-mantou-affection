@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from nonebot_plugin_mantou_affection.models import Profile
@@ -41,3 +42,48 @@ async def test_invalid_data_file_falls_back_to_empty(tmp_path: Path) -> None:
     path.write_text("not json", encoding="utf-8")
     profile = await AffectionStore(path).get_profile("1", "2")
     assert profile.affection == 0
+
+
+async def test_settings_round_trip_and_persist(tmp_path: Path) -> None:
+    path = tmp_path / "affection.json"
+    store = AffectionStore(path)
+
+    assert await store.get_setting("ambient_probability", 0.01) == 0.01
+    await store.set_setting("ambient_probability", 0.05)
+
+    assert await store.get_setting("ambient_probability", 0.01) == 0.05
+    reloaded = await AffectionStore(path).get_setting("ambient_probability", 0.01)
+    assert reloaded == 0.05
+
+
+async def test_settings_do_not_disturb_groups(tmp_path: Path) -> None:
+    path = tmp_path / "affection.json"
+    store = AffectionStore(path)
+
+    def update(profile: Profile) -> None:
+        profile.affection = 3
+
+    await store.update_profile("1", "2", "桃友", update)
+    await store.set_setting("ambient_probability", 0.2)
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["settings"] == {"ambient_probability": 0.2}
+    assert payload["groups"]["1"]["2"]["affection"] == 3
+
+
+async def test_legacy_file_without_settings_is_upgraded(tmp_path: Path) -> None:
+    path = tmp_path / "affection.json"
+    path.write_text(
+        json.dumps({"version": 1, "groups": {"1": {"2": {"affection": 7}}}}),
+        encoding="utf-8",
+    )
+    store = AffectionStore(path)
+
+    assert await store.get_setting("ambient_probability", 0.01) == 0.01
+    assert (await store.get_profile("1", "2")).affection == 7
+
+    await store.set_setting("ambient_probability", 0.5)
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["settings"] == {"ambient_probability": 0.5}
+    assert payload["groups"]["1"]["2"]["affection"] == 7

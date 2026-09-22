@@ -2,6 +2,7 @@ import tempfile
 from pathlib import Path
 
 import nonebot
+import pytest
 from nonebot.adapters.onebot.v11 import Adapter
 
 
@@ -18,3 +19,13 @@ def pytest_configure() -> None:
     plugin = nonebot.load_plugin("nonebot_plugin_mantou_affection")
     if plugin is None:
         raise RuntimeError("nonebot_plugin_mantou_affection 加载失败")
+
+
+@pytest.fixture()
+def bundled_texts_path() -> Path:
+    return (
+        Path(__file__).resolve().parents[1]
+        / "nonebot_plugin_mantou_affection"
+        / "resources"
+        / "affection_texts.json"
+    )

@@ -10,6 +10,7 @@
 - 自动感知其他插件的命令、正则及完整匹配 Matcher
 - 每插件独立冷却、每日联动奖励上限，避免刷分
 - SUPERUSER 手动增减群友好感度
+- 群友发言时馒头按概率冒泡的小动作（好感度 >0 才触发，默认 1%）
 - 为其他插件提供好感上报与状态读取 API
 - 使用 `nonebot-plugin-localstore` 和原子写入持久化数据
 
@@ -44,12 +45,14 @@ MANTOU_AFFECTION_BOT_NAME=馒头
 MANTOU_AFFECTION_TIMEZONE=Asia/Shanghai
 MANTOU_AFFECTION_TEXT_PATH=
 MANTOU_AFFECTION_INTERACTION_LIMIT=5
-MANTOU_AFFECTION_INTERACTION_COOLDOWN=60
+MANTOU_AFFECTION_INTERACTION_COOLDOWN=7200
 MANTOU_AFFECTION_MAX=999
 MANTOU_AFFECTION_RANKING_SIZE=10
 MANTOU_AFFECTION_LINK_ENABLED=true
 MANTOU_AFFECTION_LINK_DAILY_LIMIT=10
 MANTOU_AFFECTION_LINK_COOLDOWN=300
+MANTOU_AFFECTION_AMBIENT_ENABLED=true
+MANTOU_AFFECTION_AMBIENT_PROBABILITY=0.01
 ```
 
 `MANTOU_AFFECTION_LINK_REWARDS` 是“插件模块名 -> 单次变化值”的 JSON 对象，支持正数和负数。默认值如下：
@@ -68,13 +71,26 @@ MANTOU_AFFECTION_LINK_COOLDOWN=300
 }
 ```
 
+`MANTOU_AFFECTION_AMBIENT_ENABLED` 控制群友发言时馒头是否可能冒泡，`MANTOU_AFFECTION_AMBIENT_PROBABILITY`
+是单次触发的概率（0～1，默认 1%）。SUPERUSER 也可以用 `/馒头反应概率` 在运行时查看或覆盖，覆盖值写进
+数据文件，重启后依然生效。群友发言时，只要他对馒头的好感度大于 0，馒头就有这个概率 @他冒出一句小动作
+旁白；旁白不引用发言内容，已被命令接管的发言也不会触发，不会影响正常对话。
+
 ### 大型文案库
 
 内置文案位于 `nonebot_plugin_mantou_affection/resources/affection_texts.json`，按“插件场景 + 好感阶段”组织。
-当前场景包括 `daily_attendance.fortune`、`crystelf.poke`、`taozi.fortune` 和 `taozi.lexicon`；
-每个场景可分别配置 `neutral`、`warm`、`close`、`flirty`、`intimate` 数组。
+`mantou.interact`、`daily_attendance.fortune`、`crystelf.poke`、`msg_rank_card.rank`、`taozi.fortune` 和
+`taozi.lexicon` 各 5 个阶段 × 1000 条；`mantou.ambient` 是馒头在群友发言时按概率冒泡的
+小动作旁白，每个阶段 2000 条；全库合计 40000 条。
+每个场景分别配置 `neutral`、`warm`、`close`、`flirty`、`intimate` 数组。
 
-如果准备维护几百或几千条文案，建议把同结构 JSON 放在 bot 的数据目录外，并设置：
+`/馒头互动` 的回复取自 `mantou.interact` 场景：好感度奖励仍按原有分布随机（0～3 点），回复文案则随互动后的
+好感阶段变化，从初见时的礼貌疏远逐渐变成亲密；文案中的 `{bot}` 会被替换为配置的机器人名字。
+`msg_rank_card.rank` 场景为水群榜卡片上每位群友名字旁的极短好感短评（4～16 字），随好感阶段变化。
+`mantou.ambient` 场景只描写馒头自己的动作神态（4～30 字，不需要 `{bot}` 占位符），不回应群友说了什么，
+语气同样随好感阶段从礼貌走向亲密。
+
+如果想要覆盖内置文案或继续扩充，可以把同结构 JSON 放在 bot 的数据目录外，并设置：
 
 ```env
 MANTOU_AFFECTION_TEXT_PATH=/absolute/path/to/mantou_affection_texts.json
@@ -94,11 +110,12 @@ MANTOU_AFFECTION_LINK_REWARDS={"nonebot_plugin_taozi":2,"nonebot_plugin_daily_at
 
 | 指令 | 权限 | 范围 | 说明 |
 |---|---|---|---|
-| `/馒头互动` | 群员 | 群聊 | 和馒头互动并获得 0～3 点好感 |
+| `/馒头互动` | 群员 | 群聊 | 和馒头互动并获得 0～3 点好感（每日 5 次，间隔至少 2 小时） |
 | `/馒头好感` | 群员 | 群聊 | 查看好感度、关系称号和联动额度 |
 | `/馒头好感榜` | 群员 | 群聊 | 查看本群好感度排行榜 |
 | `/馒头好感帮助` | 群员 | 群聊 | 查看菜单 |
 | `/馒头好感调整 @群友 +10` | SUPERUSER | 群聊 | 手动增加或扣除好感度 |
+| `/馒头反应概率 5%` | SUPERUSER | 群聊/私聊 | 查看或调整小动作触发概率（持久保存） |
 
 ## 插件联动
 

@@ -25,14 +25,19 @@ class AffectionStore:
         if self._data is not None:
             return self._data
         if not self.path.is_file():
-            self._data = {"version": 1, "groups": {}}
+            self._data = {"version": 1, "groups": {}, "settings": {}}
             return self._data
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             payload = {}
         groups = payload.get("groups") if isinstance(payload, dict) else None
-        self._data = {"version": 1, "groups": groups if isinstance(groups, dict) else {}}
+        settings = payload.get("settings") if isinstance(payload, dict) else None
+        self._data = {
+            "version": 1,
+            "groups": groups if isinstance(groups, dict) else {},
+            "settings": settings if isinstance(settings, dict) else {},
+        }
         return self._data
 
     def _save_sync(self) -> None:
@@ -115,3 +120,19 @@ class AffectionStore:
     async def ranking(self, group_id: str, limit: int) -> list[RankingEntry]:
         async with self._lock:
             return await asyncio.to_thread(self._ranking_sync, str(group_id), limit)
+
+    def _get_setting_sync(self, key: str, default: T) -> T:
+        settings = self._load_sync()["settings"]
+        return settings.get(str(key), default)
+
+    async def get_setting(self, key: str, default: T) -> T:
+        async with self._lock:
+            return await asyncio.to_thread(self._get_setting_sync, str(key), default)
+
+    def _set_setting_sync(self, key: str, value: Any) -> None:
+        self._load_sync()["settings"][str(key)] = value
+        self._save_sync()
+
+    async def set_setting(self, key: str, value: Any) -> None:
+        async with self._lock:
+            await asyncio.to_thread(self._set_setting_sync, str(key), value)

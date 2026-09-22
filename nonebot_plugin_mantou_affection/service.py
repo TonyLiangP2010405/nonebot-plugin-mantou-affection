@@ -3,12 +3,17 @@ from __future__ import annotations
 import random
 import time
 from datetime import datetime
+from typing import Any, Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .config import Config
+from .copywriting import AffectionTextLibrary
 from .logic import adjust_affection, apply_link_reward, perform_interaction, snapshot_for
 from .models import AffectionSnapshot, InteractionResult, LinkRewardResult, Profile, RankingEntry
 from .storage import AffectionStore
+
+AMBIENT_PROBABILITY_SETTING = "ambient_probability"
+AMBIENT_SCENE = "mantou.ambient"
 
 
 def normalize_nickname(value: str, fallback: str) -> str:
@@ -22,10 +27,12 @@ class AffectionService:
         store: AffectionStore,
         config: Config,
         *,
+        text_library: AffectionTextLibrary | None = None,
         rng: random.Random | None = None,
     ):
         self.store = store
         self.config = config
+        self.text_library = text_library
         self.rng = rng or random.Random()
         try:
             self.timezone = ZoneInfo(config.mantou_affection_timezone)
@@ -45,6 +52,7 @@ class AffectionService:
     async def interact(self, group_id: str, user_id: str, nickname: str) -> InteractionResult:
         now = self._now()
         nickname = normalize_nickname(nickname, user_id)
+        text_picker = self._interact_text_picker()
 
         def update(profile: Profile) -> InteractionResult:
             return perform_interaction(
@@ -56,9 +64,40 @@ class AffectionService:
                 cooldown_seconds=self.config.mantou_affection_interaction_cooldown,
                 affection_max=self.config.mantou_affection_max,
                 rng=self.rng,
+                text_picker=text_picker,
             )
 
         return await self.store.update_profile(group_id, user_id, nickname, update)
+
+    def _interact_text_picker(self) -> Callable[[int], str | None] | None:
+        library = self.text_library
+        if library is None:
+            return None
+
+        def pick(affection: int) -> str | None:
+            return library.pick("mantou.interact", snapshot_for(affection))
+
+        return pick
+
+    async def ambient_probability(self) -> float:
+        stored: Any = await self.store.get_setting(AMBIENT_PROBABILITY_SETTING, None)
+        if isinstance(stored, bool) or not isinstance(stored, (int, float)):
+            return self.config.mantou_affection_ambient_probability
+        return min(1.0, max(0.0, float(stored)))
+
+    async def set_ambient_probability(self, value: float) -> None:
+        await self.store.set_setting(AMBIENT_PROBABILITY_SETTING, float(value))
+
+    async def ambient_reaction(self, group_id: str, user_id: str) -> str | None:
+        if not self.config.mantou_affection_ambient_enabled or self.text_library is None:
+            return None
+        profile = await self.store.get_profile(group_id, user_id)
+        if profile.affection <= 0:
+            return None
+        probability = await self.ambient_probability()
+        if self.rng.random() >= probability:
+            return None
+        return self.text_library.pick(AMBIENT_SCENE, snapshot_for(profile.affection))
 
     async def ranking(self, group_id: str) -> list[RankingEntry]:
         return await self.store.ranking(group_id, self.config.mantou_affection_ranking_size)

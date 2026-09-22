@@ -9,7 +9,7 @@ from nonebot.rule import Rule
 
 from .config import Config
 from .logic import level_for, progress_text
-from .parsing import parse_adjustment
+from .parsing import parse_adjustment, parse_probability
 from .service import AffectionService, normalize_nickname
 
 
@@ -27,6 +27,21 @@ def _nickname(event: GroupMessageEvent) -> str:
 
 def _gain_text(delta: int) -> str:
     return f"好感度 +{delta}" if delta else "好感度没有变化"
+
+
+def _format_wait(seconds: int) -> str:
+    if seconds >= 3600:
+        hours, remainder = divmod(seconds, 3600)
+        minutes = remainder // 60
+        return f"{hours} 小时 {minutes} 分钟" if minutes else f"{hours} 小时"
+    if seconds >= 60:
+        return f"{seconds // 60} 分钟"
+    return f"{seconds} 秒"
+
+
+def _format_probability(value: float) -> str:
+    percent = f"{value * 100:.6f}".rstrip("0").rstrip(".")
+    return f"{percent or '0'}%"
 
 
 def register_commands(service: AffectionService, config: Config) -> tuple:
@@ -62,6 +77,13 @@ def register_commands(service: AffectionService, config: Config) -> tuple:
         "馒头好感调整",
         permission=SUPERUSER,
         rule=GROUP_ONLY,
+        priority=10,
+        block=True,
+    )
+    probability_cmd = on_command(
+        "馒头反应概率",
+        aliases={"馒头小动作概率"},
+        permission=SUPERUSER,
         priority=10,
         block=True,
     )
@@ -102,7 +124,7 @@ def register_commands(service: AffectionService, config: Config) -> tuple:
         if result.reason == "cooldown":
             await interact_cmd.finish(
                 f"让{config.mantou_affection_bot_name}喘口气吧，"
-                f"{result.wait_seconds} 秒后再来互动。"
+                f"{_format_wait(result.wait_seconds)}后再来互动。"
             )
         await interact_cmd.finish(
             f"{result.text}\n{_gain_text(result.delta)}，当前 {result.affection}\n"
@@ -159,4 +181,33 @@ def register_commands(service: AffectionService, config: Config) -> tuple:
         )
         await adjust_cmd.finish(message)
 
-    return profile_cmd, interact_cmd, ranking_cmd, help_cmd, adjust_cmd
+    @probability_cmd.handle()
+    async def handle_probability(args: Message = CommandArg()) -> None:
+        raw = args.extract_plain_text().strip()
+        if not raw:
+            try:
+                current = await service.ambient_probability()
+            except Exception:
+                logger.exception("[mantou-affection] 读取小动作概率失败")
+                await probability_cmd.finish("读取失败，请检查数据目录权限后重试。")
+                return
+            await probability_cmd.finish(
+                f"当前馒头小动作概率：{_format_probability(current)}"
+            )
+            return
+        try:
+            value = parse_probability(raw)
+        except ValueError as error:
+            await probability_cmd.finish(str(error))
+            return
+        try:
+            await service.set_ambient_probability(value)
+        except Exception:
+            logger.exception("[mantou-affection] 保存小动作概率失败")
+            await probability_cmd.finish("保存失败，请检查数据目录权限后重试。")
+            return
+        await probability_cmd.finish(
+            f"馒头小动作概率已调整为 {_format_probability(value)}"
+        )
+
+    return profile_cmd, interact_cmd, ranking_cmd, help_cmd, adjust_cmd, probability_cmd

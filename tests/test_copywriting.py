@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from nonebot_plugin_mantou_affection.copywriting import AffectionTextLibrary
 from nonebot_plugin_mantou_affection.logic import snapshot_for
 
@@ -10,6 +12,32 @@ def _write_library(path: Path, text: str) -> None:
         json.dumps({"plugin.scene": {"flirty": [text]}}, ensure_ascii=False),
         encoding="utf-8",
     )
+
+
+@pytest.mark.parametrize(
+    ("score", "band"),
+    [(0, "neutral"), (30, "warm"), (60, "close"), (100, "flirty"), (160, "intimate")],
+)
+def test_bundled_interact_scene_covers_every_band(
+    bundled_texts_path: Path, score: int, band: str
+) -> None:
+    library = AffectionTextLibrary(bundled_texts_path)
+    snapshot = snapshot_for(score)
+    assert snapshot.band == band
+    assert library.pick("mantou.interact", snapshot)
+
+
+@pytest.mark.parametrize(
+    ("score", "band"),
+    [(10, "neutral"), (30, "warm"), (60, "close"), (100, "flirty"), (160, "intimate")],
+)
+def test_bundled_ambient_scene_covers_every_band(
+    bundled_texts_path: Path, score: int, band: str
+) -> None:
+    library = AffectionTextLibrary(bundled_texts_path)
+    snapshot = snapshot_for(score)
+    assert snapshot.band == band
+    assert library.pick("mantou.ambient", snapshot)
 
 
 def test_seeded_copy_is_stable(tmp_path: Path) -> None:

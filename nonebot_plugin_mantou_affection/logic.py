@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import random
 from datetime import date
+from typing import Callable
 
 from .models import AffectionSnapshot, InteractionResult, Level, LinkRewardResult, Profile
 
@@ -74,6 +75,7 @@ def perform_interaction(
     cooldown_seconds: int,
     affection_max: int,
     rng: random.Random,
+    text_picker: Callable[[int], str | None] | None = None,
 ) -> InteractionResult:
     today_text = today.isoformat()
     if profile.interaction_date != today_text:
@@ -114,10 +116,12 @@ def perform_interaction(
     profile.interaction_count += 1
     profile.last_interaction_at = now_timestamp
     profile.updated_at = now_timestamp
+    picked = text_picker(profile.affection) if text_picker is not None else None
+    reply = picked.replace("{bot}", bot_name) if picked else text.format(bot=bot_name)
     return InteractionResult(
         True,
         "ok",
-        text.format(bot=bot_name),
+        reply,
         profile.affection - before,
         max(0, daily_limit - profile.interaction_count),
         0,

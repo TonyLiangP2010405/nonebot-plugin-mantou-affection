@@ -1,9 +1,11 @@
 import random
 from datetime import date
+from typing import Callable
 
 import pytest
 
 from nonebot_plugin_mantou_affection.logic import (
+    INTERACTIONS,
     adjust_affection,
     apply_link_reward,
     level_for,
@@ -11,7 +13,28 @@ from nonebot_plugin_mantou_affection.logic import (
     progress_text,
     snapshot_for,
 )
-from nonebot_plugin_mantou_affection.models import Profile
+from nonebot_plugin_mantou_affection.models import InteractionResult, Profile
+
+
+def _run_interaction(
+    profile: Profile,
+    *,
+    rng: random.Random,
+    text_picker: Callable[[int], str | None] | None = None,
+    now_timestamp: float = 100.0,
+    daily_limit: int = 5,
+) -> InteractionResult:
+    return perform_interaction(
+        profile,
+        bot_name="馒头",
+        today=date(2026, 9, 21),
+        now_timestamp=now_timestamp,
+        daily_limit=daily_limit,
+        cooldown_seconds=0,
+        affection_max=999,
+        rng=rng,
+        text_picker=text_picker,
+    )
 
 
 @pytest.mark.parametrize(
@@ -91,6 +114,53 @@ def test_interaction_reports_cooldown() -> None:
     assert result.accepted is False
     assert result.reason == "cooldown"
     assert result.wait_seconds == 40
+
+
+def test_interaction_uses_text_picker_with_updated_affection() -> None:
+    profile = Profile("1", affection=29)
+    seen: list[int] = []
+
+    def picker(affection: int) -> str | None:
+        seen.append(affection)
+        return "{bot}记住了这次互动。"
+
+    result = _run_interaction(profile, rng=random.Random(1), text_picker=picker)
+    assert result.accepted is True
+    assert seen == [result.affection]
+    assert result.affection == 30
+    assert result.text == "馒头记住了这次互动。"
+    assert "{bot}" not in result.text
+
+
+def test_interaction_falls_back_to_builtin_copy() -> None:
+    builtin = {text.format(bot="馒头") for text, _ in INTERACTIONS}
+    plain = _run_interaction(Profile("1"), rng=random.Random(2))
+    missing = _run_interaction(
+        Profile("2"), rng=random.Random(2), text_picker=lambda affection: None
+    )
+    empty = _run_interaction(Profile("3"), rng=random.Random(2), text_picker=lambda affection: "")
+    assert plain.text in builtin
+    assert missing.text == plain.text
+    assert empty.text == plain.text
+
+
+def test_interaction_rewards_keep_builtin_distribution() -> None:
+    rng = random.Random(7)
+    reference = random.Random(7)
+    profile = Profile("1")
+    rounds = len(INTERACTIONS)
+    deltas: list[int] = []
+    for step in range(rounds):
+        result = _run_interaction(
+            profile,
+            rng=rng,
+            now_timestamp=100.0 + step,
+            daily_limit=rounds,
+            text_picker=lambda affection: "馒头记住了这次互动。",
+        )
+        deltas.append(result.delta)
+    assert deltas == [reference.choice(INTERACTIONS)[1] for _ in range(rounds)]
+    assert profile.affection == sum(deltas)
 
 
 def test_adjustment_is_clamped() -> None:

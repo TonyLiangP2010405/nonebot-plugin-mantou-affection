@@ -12,7 +12,7 @@ __plugin_meta__ = PluginMetadata(
     description="为群聊机器人馒头提供互动、关系阶段和跨插件共享好感状态",
     usage=(
         "/馒头互动｜/馒头好感｜/馒头好感榜｜/馒头好感帮助\n"
-        "SUPERUSER：/馒头好感调整 @群友 +10"
+        "SUPERUSER：/馒头好感调整 @群友 +10｜/馒头反应概率 5%"
     ),
     type="application",
     homepage="https://github.com/TonyLiangP2010405/nonebot-plugin-mantou-affection",
@@ -24,6 +24,7 @@ require("nonebot_plugin_localstore")
 
 from nonebot_plugin_localstore import get_plugin_data_dir
 
+from .ambient import register_ambient
 from .commands import register_commands
 from .copywriting import AffectionTextLibrary
 from .integration import register_plugin_linkage
@@ -34,12 +35,13 @@ from .storage import AffectionStore
 plugin_config = get_plugin_config(Config)
 data_file = Path(get_plugin_data_dir()) / "affection.json"
 store = AffectionStore(data_file)
-service = AffectionService(store, plugin_config)
 text_library = AffectionTextLibrary(
     Path(__file__).parent / "resources" / "affection_texts.json",
     plugin_config.mantou_affection_text_path,
 )
+service = AffectionService(store, plugin_config, text_library=text_library)
 matchers = register_commands(service, plugin_config)
+ambient_matcher = register_ambient(service, plugin_config)
 plugin_linkage = register_plugin_linkage(service, plugin_config)
 
 
