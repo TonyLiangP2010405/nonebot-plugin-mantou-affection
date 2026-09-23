@@ -9,7 +9,7 @@
 - 七级好感称号和群排行榜
 - 自动感知其他插件的命令、正则及完整匹配 Matcher
 - 每插件独立冷却、每日联动奖励上限，避免刷分
-- 互动与联动共享每日好感获取总上限，最快约一年满级
+- 互动与联动共享每日好感获取总上限，最快约一年满级；额度用满后互动不会再扣好感
 - SUPERUSER 手动增减群友好感度
 - 群友发言时馒头按概率冒泡的小动作（好感度 >0 才触发，默认 1%），其中约 1/3 会升级为限时随机事件
 - 戳一戳当天累进不耐烦，戳太多馒头会不想理你（`poke` API 一行接入）
@@ -58,7 +58,7 @@ MANTOU_AFFECTION_LINK_COOLDOWN=300
 MANTOU_AFFECTION_AMBIENT_ENABLED=true
 MANTOU_AFFECTION_AMBIENT_PROBABILITY=0.01
 MANTOU_AFFECTION_AMBIENT_EVENT_RATIO=0.333
-MANTOU_AFFECTION_EVENT_TIMEOUT=10
+MANTOU_AFFECTION_EVENT_TIMEOUT=20
 MANTOU_AFFECTION_EVENT_TIMEOUT_PENALTY=5
 MANTOU_AFFECTION_POKE_NEGATIVE_BASE=0.1
 MANTOU_AFFECTION_POKE_MAX_PENALTY=5
@@ -85,13 +85,17 @@ MANTOU_AFFECTION_POKE_IGNORE_THRESHOLD=10
 同一份额度）。好感上限是 999，按默认值最快约 333 天满级；如果想严格满一年以上，可以设为 2（约 500 天）。
 SUPERUSER 手动增减不受这个上限限制，`/馒头好感` 会显示当天已获取的点数。
 
+额度用完之后不会再让好感倒退：`/馒头互动` 抽到 -1 时按 0 处理（`delta=0`），正向奖励也截断到 0，这时互动
+仍然算一次、只是不再加分，文案会补一行「今天的好感已经拿满啦，明天再来吧。」；抽到发呆档（原始奖励就是
+0）则直接用互动池里配对的那句旁白，不套用阶段文案，避免暗示加了好感。
+
 `MANTOU_AFFECTION_AMBIENT_ENABLED` 控制群友发言时馒头是否可能冒泡，`MANTOU_AFFECTION_AMBIENT_PROBABILITY`
 是单次触发的概率（0～1，默认 1%）。SUPERUSER 也可以用 `/馒头反应概率` 在运行时查看或覆盖，覆盖值写进
 数据文件，重启后依然生效。群友发言时，只要他对馒头的好感度大于 0，馒头就有这个概率 @他冒出一句小动作
 旁白；旁白不引用发言内容，已被命令接管的发言也不会触发，不会影响正常对话。
 
 `MANTOU_AFFECTION_AMBIENT_EVENT_RATIO` 是小动作命中后升级为随机事件的比例（默认 0.333，也就是约 1/3）。
-`MANTOU_AFFECTION_EVENT_TIMEOUT` 是答题时限（秒，默认 10），`MANTOU_AFFECTION_EVENT_TIMEOUT_PENALTY`
+`MANTOU_AFFECTION_EVENT_TIMEOUT` 是答题时限（秒，默认 20），`MANTOU_AFFECTION_EVENT_TIMEOUT_PENALTY`
 是超时扣除的好感度点数（默认 5）。
 
 `MANTOU_AFFECTION_POKE_NEGATIVE_BASE` 是戳一戳不耐烦概率的累进基数（默认 0.1，即当天第 1 戳 10%、第 2 戳
@@ -109,7 +113,7 @@ SUPERUSER 手动增减不受这个上限限制，`/馒头好感` 会显示当天
 1. 把本子捡起来递回去，说下次放稳一点
 2. 先蹲下来把折角一页页抚平，再问它今天记了些什么
 3. 说一本本子而已，回头给你买个更贵的
-请在 10 秒内作答，直接发送 1、2、3 即可（答题不用@），超时好感度 -5！
+请在 20 秒内作答，直接发送 1、2、3 即可（答题不用@），超时好感度 -5！
 ```
 
 **群里任何人都可以作答**，直接发 `1`、`2` 或 `3` 即可（不用 @机器人），每人只算第一次；发别的内容不算
@@ -138,7 +142,8 @@ SUPERUSER 手动增减不受这个上限限制，`/馒头好感` 会显示当天
 每个场景分别配置 `neutral`、`warm`、`close`、`flirty`、`intimate` 数组。
 
 `/馒头互动` 的回复取自 `mantou.interact` 场景：好感度奖励仍按原有分布随机（-1～3 点），回复文案则随互动后的
-好感阶段变化，从初见时的礼貌疏远逐渐变成亲密；文案中的 `{bot}` 会被替换为配置的机器人名字。
+好感阶段变化，从初见时的礼貌疏远逐渐变成亲密；文案中的 `{bot}` 会被替换为配置的机器人名字。抽到发呆档
+（奖励 0）时会直接用互动池里配对的那句旁白，不走阶段文案。
 `msg_rank_card.rank` 场景为水群榜卡片上每位群友名字旁的极短好感短评（4～16 字），随好感阶段变化。
 `mantou.ambient` 场景只描写馒头自己的动作神态（4～30 字，不需要 `{bot}` 占位符），不回应群友说了什么，
 语气同样随好感阶段从礼貌走向亲密。
@@ -188,7 +193,7 @@ MANTOU_AFFECTION_LINK_REWARDS={"nonebot_plugin_taozi":2,"nonebot_plugin_daily_at
 
 | 指令 | 权限 | 范围 | 说明 |
 |---|---|---|---|
-| `/馒头互动` | 群员 | 群聊 | 和馒头互动，好感 -1～+3 点（每日 5 次，间隔至少 2 小时，受每日获取总上限约束） |
+| `/馒头互动` | 群员 | 群聊 | 和馒头互动，好感 -1～+3 点（每日 5 次，间隔至少 2 小时；受每日获取总上限约束，额度满后只扣次数不扣好感） |
 | `/馒头好感` | 群员 | 群聊 | 查看好感度、关系称号、今日获取量和联动额度 |
 | `/馒头好感榜` | 群员 | 群聊 | 查看本群好感度排行榜 |
 | `/馒头好感帮助` | 群员 | 群聊 | 查看菜单 |
@@ -286,8 +291,8 @@ await matcher.finish(result.text)
    今天还是 0 的群友，都照常走下面的概率判定，能重新把好感一点点攒回来。
 3. 其余情况按 `count × MANTOU_AFFECTION_POKE_NEGATIVE_BASE`（上限 100%）判定不耐烦：命中则
    `annoyed=True`，扣 `min(count, MANTOU_AFFECTION_POKE_MAX_PENALTY)` 点（第 3 戳 -3、第 5 戳起 -5），
-   文案取 `crystelf.poke.negative` 场景、按扣完后的好感阶段；好感度为 0 的群友即使命中，`delta` 也只会
-   停在 0。
+   文案取 `crystelf.poke.negative` 场景、按扣完后的好感阶段。**历史最高好感为 0 的群友（从没攒到过好感）
+   不参与这条判定**，永远走下面的正面 +1 路径，不会被嫌弃。
 4. 未命中则 `annoyed=False`、`delta=+1`，这个 +1 受每日获取总上限约束（额度用完时 `delta=0` 但仍返回
    文案），入账部分计入当日额度；它不走联动冷却，也不占用 `linked_points`。
 5. `text` 在 `delta != 0` 时末尾会追加一行「好感度 +1，当前 12」这样的提示；`delta=0` 时只有文案本身。

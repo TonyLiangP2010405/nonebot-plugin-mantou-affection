@@ -16,6 +16,22 @@ from nonebot_plugin_mantou_affection.logic import (
 from nonebot_plugin_mantou_affection.models import InteractionResult, LinkRewardResult, Profile
 
 
+class FixedChoice(random.Random):
+    """让 choice 固定返回指定 reward 的那一档，避免依赖随机种子。"""
+
+    def __init__(self, reward: int):
+        super().__init__(0)
+        self.reward = reward
+
+    def choice(self, seq):
+        return next(item for item in seq if item[1] == self.reward)
+
+
+IDLE_TEXT = next(text for text, reward in INTERACTIONS if reward == 0)
+NEGATIVE_COPY = "馒头被你闹得躲进蒸笼深处，只留给你一个背影。"
+GAIN_HINT = "今天的好感已经拿满啦，明天再来吧。"
+
+
 def _run_interaction(
     profile: Profile,
     *,
@@ -381,3 +397,92 @@ def test_link_reward_gain_budget_resets_next_day() -> None:
     assert profile.gain_points == 2
     assert profile.linked_points == 2
     assert result.delta == 2
+
+
+def test_interaction_pool_has_single_idle_entry() -> None:
+    assert [text for text, reward in INTERACTIONS if reward == 0] == [IDLE_TEXT]
+
+
+def test_interaction_idle_draw_uses_pooled_copy() -> None:
+    profile = Profile("1", affection=5)
+    seen: list[tuple[int, int]] = []
+
+    def picker(affection: int, reward: int) -> str | None:
+        seen.append((affection, reward))
+        return "不该出现的阶段文案"
+
+    result = _run_interaction(profile, rng=FixedChoice(0), text_picker=picker)
+
+    assert result.accepted is True
+    assert result.delta == 0
+    assert result.affection == 5
+    assert seen == []
+    assert result.text == IDLE_TEXT.format(bot="馒头")
+    assert "{bot}" not in result.text
+
+
+def test_interaction_gain_hint_when_positive_draw_is_capped() -> None:
+    profile = Profile("1", affection=5, gain_date="2026-09-21", gain_points=3)
+    seen: list[tuple[int, int]] = []
+
+    def picker(affection: int, reward: int) -> str:
+        seen.append((affection, reward))
+        return "馒头把今天攒下来的桃气分给了你一点。"
+
+    result = _run_interaction(
+        profile, rng=FixedChoice(3), text_picker=picker, daily_gain_limit=3
+    )
+
+    assert result.delta == 0
+    assert result.affection == 5
+    assert profile.gain_points == 3
+    assert seen == [(5, 0)]
+    assert result.text == f"馒头把今天攒下来的桃气分给了你一点。\n{GAIN_HINT}"
+
+
+def test_interaction_negative_draw_is_immune_when_gain_limit_used_up() -> None:
+    profile = Profile("1", affection=5, gain_date="2026-09-21", gain_points=3)
+    seen: list[tuple[int, int]] = []
+
+    def picker(affection: int, reward: int) -> str:
+        seen.append((affection, reward))
+        return "馒头从蒸笼边探出头，认真听你说完了今天的事。"
+
+    result = _run_interaction(
+        profile, rng=FixedChoice(-1), text_picker=picker, daily_gain_limit=3
+    )
+
+    assert result.delta == 0
+    assert result.affection == 5
+    assert profile.gain_points == 3
+    assert seen == [(5, 0)]
+    assert result.text == f"馒头从蒸笼边探出头，认真听你说完了今天的事。\n{GAIN_HINT}"
+
+
+def test_interaction_negative_draw_still_applies_with_gain_room() -> None:
+    profile = Profile("1", affection=5, gain_date="2026-09-21", gain_points=2)
+    seen: list[tuple[int, int]] = []
+
+    def picker(affection: int, reward: int) -> str | None:
+        seen.append((affection, reward))
+        return NEGATIVE_COPY
+
+    result = _run_interaction(
+        profile, rng=FixedChoice(-1), text_picker=picker, daily_gain_limit=3
+    )
+
+    assert result.delta == -1
+    assert result.affection == 4
+    assert profile.gain_points == 2
+    assert seen == [(4, -1)]
+    assert result.text == NEGATIVE_COPY
+    assert GAIN_HINT not in result.text
+
+
+def test_interaction_idle_draw_ignores_gain_budget() -> None:
+    profile = Profile("1", affection=5, gain_date="2026-09-21", gain_points=3)
+    result = _run_interaction(profile, rng=FixedChoice(0), daily_gain_limit=3)
+
+    assert result.delta == 0
+    assert result.text == IDLE_TEXT.format(bot="馒头")
+    assert GAIN_HINT not in result.text

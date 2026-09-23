@@ -130,7 +130,13 @@ def perform_interaction(
         )
 
     text, reward = rng.choice(INTERACTIONS)
-    reward = min(reward, max(0, daily_gain_limit - profile.gain_points))
+    rolled = reward
+    remaining_gain = max(0, daily_gain_limit - profile.gain_points)
+    if reward > 0:
+        reward = min(reward, remaining_gain)
+    elif reward < 0 and remaining_gain <= 0:
+        reward = 0
+
     before = profile.affection
     profile.affection = min(affection_max, max(0, profile.affection + reward))
     profile.interaction_count += 1
@@ -139,8 +145,14 @@ def perform_interaction(
     gained = profile.affection - before
     if gained > 0:
         profile.gain_points += gained
-    picked = text_picker(profile.affection, reward) if text_picker is not None else None
-    reply = picked.replace("{bot}", bot_name) if picked else text.format(bot=bot_name)
+
+    if rolled == 0:
+        reply = text.format(bot=bot_name)
+    else:
+        picked = text_picker(profile.affection, reward) if text_picker is not None else None
+        reply = picked.replace("{bot}", bot_name) if picked else text.format(bot=bot_name)
+        if reward == 0:
+            reply += "\n今天的好感已经拿满啦，明天再来吧。"
     return InteractionResult(
         True,
         "ok",
@@ -260,7 +272,7 @@ def perform_poke(
         reply = _with_change_line(POKE_IGNORE_REPLY, delta, profile.affection)
         return PokeResult(delta=delta, text=reply, count=count, annoyed=True)
 
-    if rng.random() < min(1.0, count * negative_base):
+    if profile.peak_affection > 0 and rng.random() < min(1.0, count * negative_base):
         delta = adjust_affection(profile, -min(count, max_penalty), affection_max, now_timestamp)
         reply = _pick_poke_reply(
             text_picker,
@@ -287,6 +299,8 @@ def perform_poke(
         POKE_POSITIVE_FALLBACK,
         bot_name,
     )
+    if delta == 0 and remaining_gain <= 0:
+        reply += "\n今天的好感已经拿满啦，明天再来吧。"
     return PokeResult(
         delta=delta,
         text=_with_change_line(reply, delta, profile.affection),

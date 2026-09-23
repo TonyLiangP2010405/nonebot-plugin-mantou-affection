@@ -42,7 +42,7 @@ def test_daily_gain_default_is_three_points() -> None:
 def test_random_event_defaults() -> None:
     config = Config()
     assert config.mantou_affection_ambient_event_ratio == 0.333
-    assert config.mantou_affection_event_timeout == 10
+    assert config.mantou_affection_event_timeout == 20
     assert config.mantou_affection_event_timeout_penalty == 5
 
 

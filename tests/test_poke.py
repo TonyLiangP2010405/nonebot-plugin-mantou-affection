@@ -112,6 +112,7 @@ def _poke(
 
 
 def _profile(**kwargs) -> Profile:
+    kwargs.setdefault("peak_affection", kwargs.get("affection", 0))
     return Profile("1", poke_date=TODAY.isoformat(), **kwargs)
 
 
@@ -213,21 +214,22 @@ def test_new_user_below_threshold_uses_roll_path(count_before: int) -> None:
     assert result.text != POKE_IGNORE_REPLY
 
 
-def test_new_user_annoyed_roll_keeps_zero_affection() -> None:
-    profile = _profile(affection=0, peak_affection=0)
+@pytest.mark.parametrize("count_before", [0, 4, 8])
+def test_new_user_never_rolls_annoyed(count_before: int) -> None:
+    profile = _profile(affection=0, peak_affection=0, poke_count=count_before)
     scenes: list[str] = []
 
     def picker(scene: str, affection: int) -> str:
         scenes.append(scene)
-        return NEGATIVE_TEXTS[snapshot_for(affection).band]
+        return BAND_TEXTS[snapshot_for(affection).band]
 
     result = _poke(profile, rng=FixedRng(0.0), text_picker=picker)
-    assert result.annoyed is True
-    assert result.delta == 0
-    assert profile.affection == 0
-    assert scenes == [POKE_NEGATIVE_SCENE]
-    assert result.text != POKE_IGNORE_REPLY
-    assert "\n" not in result.text
+
+    assert result.annoyed is False
+    assert result.delta == 1
+    assert scenes == [POKE_POSITIVE_SCENE]
+    assert profile.affection == 1
+    assert POKE_IGNORE_REPLY not in result.text
 
 
 def test_poke_positive_gain_counts_towards_daily_limit() -> None:
@@ -437,7 +439,7 @@ def test_poke_text_appends_change_line_only_when_delta_moves() -> None:
     blocked = _profile(affection=30, gain_date=TODAY.isoformat(), gain_points=3)
     result = _poke(blocked, rng=FixedRng(0.9))
     assert result.delta == 0
-    assert "\n" not in result.text
+    assert result.text.endswith("\n今天的好感已经拿满啦，明天再来吧。")
 
 
 async def test_zeroed_date_is_marked_by_every_deduction_path(tmp_path: Path) -> None:
@@ -484,3 +486,28 @@ async def test_zeroed_date_only_silences_pokes_for_the_rest_of_that_day(tmp_path
     assert result.annoyed is False
     assert result.delta == 1
     assert POKE_IGNORE_REPLY not in result.text
+
+
+async def test_new_user_poke_ignores_annoyance_roll(tmp_path: Path) -> None:
+    service = _service(tmp_path, _library(tmp_path))
+    service.rng = FixedRng(0.0)
+
+    result = await service.poke("100", "200", "桃友")
+
+    assert result.annoyed is False
+    assert result.delta == 1
+    profile = await service.profile("100", "200")
+    assert profile.affection == 1
+    assert profile.peak_affection == 1
+
+
+async def test_poke_annoyance_roll_applies_once_affection_was_earned(tmp_path: Path) -> None:
+    service = _service(tmp_path, _library(tmp_path))
+    await service.adjust("100", "200", "桃友", 10)
+    service.rng = FixedRng(0.0)
+
+    result = await service.poke("100", "200", "桃友")
+
+    assert result.annoyed is True
+    assert result.delta == -1
+    assert (await service.profile("100", "200")).affection == 9
