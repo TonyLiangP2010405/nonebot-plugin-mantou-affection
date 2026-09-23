@@ -12,7 +12,7 @@
 - 互动与联动共享每日好感获取总上限，最快约一年满级；额度用满后互动不会再扣好感
 - SUPERUSER 手动增减群友好感度
 - 群友发言时馒头按概率冒泡的小动作（好感度 >0 才触发，默认 1%），其中约 1/3 会升级为限时随机事件
-- 戳一戳当天累进不耐烦，戳太多馒头会不想理你（`poke` API 一行接入）
+- 戳一戳稳定 +1（受每日获取总上限约束），1% 概率戳出一次扣分翻倍的答题事件
 - 为其他插件提供好感上报与状态读取 API
 - 使用 `nonebot-plugin-localstore` 和原子写入持久化数据
 
@@ -60,9 +60,7 @@ MANTOU_AFFECTION_AMBIENT_PROBABILITY=0.01
 MANTOU_AFFECTION_AMBIENT_EVENT_RATIO=0.333
 MANTOU_AFFECTION_EVENT_TIMEOUT=20
 MANTOU_AFFECTION_EVENT_TIMEOUT_PENALTY=5
-MANTOU_AFFECTION_POKE_NEGATIVE_BASE=0.1
-MANTOU_AFFECTION_POKE_MAX_PENALTY=5
-MANTOU_AFFECTION_POKE_IGNORE_THRESHOLD=10
+MANTOU_AFFECTION_POKE_EVENT_CHANCE=0.01
 ```
 
 `MANTOU_AFFECTION_LINK_REWARDS` 是“插件模块名 -> 单次变化值”的 JSON 对象，支持正数和负数。默认值如下：
@@ -98,10 +96,8 @@ SUPERUSER 手动增减不受这个上限限制，`/馒头好感` 会显示当天
 `MANTOU_AFFECTION_EVENT_TIMEOUT` 是答题时限（秒，默认 20），`MANTOU_AFFECTION_EVENT_TIMEOUT_PENALTY`
 是超时扣除的好感度点数（默认 5）。
 
-`MANTOU_AFFECTION_POKE_NEGATIVE_BASE` 是戳一戳不耐烦概率的累进基数（默认 0.1，即当天第 1 戳 10%、第 2 戳
-20%，第 10 戳起必定不耐烦）。`MANTOU_AFFECTION_POKE_MAX_PENALTY` 是单次不耐烦最多扣多少点（默认 5，扣分
-随当天次数累进，第 5 戳及以后封顶 -5）。`MANTOU_AFFECTION_POKE_IGNORE_THRESHOLD` 是「不想理你」的当天
-次数阈值（默认 10，达到后不再判定概率，直接固定文案）。
+`MANTOU_AFFECTION_POKE_EVENT_CHANCE` 是戳一戳戳出随机事件的概率（默认 0.01，即 1%）。戳出来的事件是
+「扣分翻倍」版：负向选项与超时扣分都按 2 倍结算。
 
 ### 随机事件
 
@@ -121,8 +117,9 @@ SUPERUSER 手动增减不受这个上限限制，`/馒头好感` 会显示当天
 回退成普通旁白）。
 
 三个选项的顺序每次都会重新打乱，看起来都很合理，但只有最懂馒头心思的那个是最好的：最优 +2、普通 +1、
-最差 -2，各自的加减记在**答题者自己**的好感度上。窗口结束时发一条合并消息，按答题先后每人一行；触发者
-必须作答，否则扣超时 -5（点数可在配置里调整）：
+最差 -2，各自的加减记在**答题者自己**的好感度上。事件有两种来源，扣分不同：小动作升级来的按原值结算
+（最差 -2、超时 -5），戳一戳戳出来的按**2 倍**结算（最差 -4、超时 -10），正向 +1 / +2 不受影响。窗口结束时发一条合并消息，按答题先后每人一行；触发者
+必须作答，否则扣超时（点数可在配置里调整）：
 
 ```
 @甲 馒头开心地收下了「先蹲下来把折角一页页抚平，再问它今天记了些什么」，好感度 +2，当前 12
@@ -150,8 +147,8 @@ SUPERUSER 手动增减不受这个上限限制，`/馒头好感` 会显示当天
 
 `mantou.interact.negative` 是互动扣好感时专用的「小情绪」场景（10～40 字，可用 `{bot}`）：`neutral` 疏远
 尴尬、`warm` 小委屈、`close` 闹别扭、`flirty` 吃醋失落、`intimate` 受伤但包容。`crystelf.poke.negative`
-是同结构的被戳烦了的短情绪（8～40 字，不含占位符），供 Crystelf 戳一戳插件在戳烦时使用。这两个场景
-目前每个阶段先放 4 条占位文案，之后会继续扩充。
+是同结构的被戳烦了的短情绪（8～40 字，不含占位符），保留给以后的负面场景使用，当前代码不再引用它。
+这两个场景目前每个阶段先放 4 条占位文案，之后会继续扩充。
 
 随机事件库位于 `nonebot_plugin_mantou_affection/resources/affection_events.json`，结构为“场景 + 三个选项”：
 
@@ -266,7 +263,7 @@ print(response.text)
 
 ### 戳一戳 API
 
-戳一戳的整套判定收在本插件里，调用方一行接入即可，不用自己维护概率或计数：
+戳一戳的判定收在本插件里，调用方一行接入即可：
 
 ```python
 from nonebot_plugin_mantou_affection import PokeResult, poke
@@ -275,29 +272,32 @@ result: PokeResult = await poke(
     group_id=event.group_id,
     user_id=event.user_id,
     nickname=event.sender.card or event.sender.nickname,
+    send=matcher.send,  # 可选：戳出随机事件时用来发送事件消息与结算
 )
 await matcher.finish(result.text)
 ```
 
-`PokeResult` 的四个字段：`delta`（本次实际好感变化，正/0/负）、`text`（回复文案，已替换 `{bot}`）、
-`count`（这是今天第几次戳）、`annoyed`（本次是否不耐烦，含「不想理你」阶段）。
+`PokeResult` 有两个字段：`delta`（本次实际好感变化）、`text`（回复文案，`{bot}` 已替换）。
 
 机制：
 
-1. 每次戳先按当天日期重置计数再自增，`count` 即当天的第几次。
-2. 当天戳满 `MANTOU_AFFECTION_POKE_IGNORE_THRESHOLD`（默认 10 次），或好感度**当天被扣到 0** 时进入无语
-   阶段：`annoyed=True`，文案固定为「馒头理都不想理你。」，扣分照常累进但好感度不会低于 0。
-   这里看的是「历史最高好感大于 0、当前为 0、且归零发生在今天」：从未有过好感的新群友，以及昨天归零、
-   今天还是 0 的群友，都照常走下面的概率判定，能重新把好感一点点攒回来。
-3. 其余情况按 `count × MANTOU_AFFECTION_POKE_NEGATIVE_BASE`（上限 100%）判定不耐烦：命中则
-   `annoyed=True`，扣 `min(count, MANTOU_AFFECTION_POKE_MAX_PENALTY)` 点（第 3 戳 -3、第 5 戳起 -5），
-   文案取 `crystelf.poke.negative` 场景、按扣完后的好感阶段。**历史最高好感为 0 的群友（从没攒到过好感）
-   不参与这条判定**，永远走下面的正面 +1 路径，不会被嫌弃。
-4. 未命中则 `annoyed=False`、`delta=+1`，这个 +1 受每日获取总上限约束（额度用完时 `delta=0` 但仍返回
-   文案），入账部分计入当日额度；它不走联动冷却，也不占用 `linked_points`。
-5. `text` 在 `delta != 0` 时末尾会追加一行「好感度 +1，当前 12」这样的提示；`delta=0` 时只有文案本身。
-6. 文案统一做 `{bot}` → 配置机器人名替换；文案库缺失或场景为空时回退为「馒头朝你笑了笑。」（正面）或
-   「馒头往旁边挪了挪。」（不耐烦），无语阶段固定文案不变。
+1. 每次戳稳定 **+1**，不会扣好感；这个 +1 受每日获取总上限约束，额度用完时 `delta=0`，文案会补一行
+   「今天的好感已经拿满啦，明天再来吧。」
+2. `text` 在 `delta != 0` 时末尾会追加一行「好感度 +1，当前 12」这样的提示；`delta=0` 时只有文案本身。
+3. 有 `MANTOU_AFFECTION_POKE_EVENT_CHANCE`（默认 1%）的概率戳出一次随机事件：这时 `text` 就是事件消息
+   本体（不带戳一戳文案，也不 @任何人），事件消息发到群里后任何人发 `1`/`2`/`3` 作答，窗口结束统一结算，
+   答题者与触发者的好感变化都按**扣分翻倍**处理：负向选项 -4、超时 -10，正向 +1 / +2 不变。
+4. 本群已经有未结束的事件、事件库为空，或调用时没有传 `send`，都会退化成普通戳一戳文案（+1 照常入账）。
+5. 文案统一做 `{bot}` → 配置机器人名替换；文案库缺失或场景为空时回退为「馒头朝你笑了笑。」。
+
+```
+⚡ 触发随机事件！
+馒头的小本子从桌上滑下去，页角折了一道印子，它蹲在地上看了很久。
+1. 把本子捡起来递回去，说下次放稳一点
+2. 先蹲下来把折角一页页抚平，再问它今天记了些什么
+3. 说一本本子而已，回头给你买个更贵的
+请在 20 秒内作答，直接发送 1、2、3 即可（答题不用@），超时好感度 -10！
+```
 
 当前工作区还完成了四类展示联动：每日运势随关系阶段改写短句；Crystelf 戳一戳会增加好感并改变回复；水群榜展示每位群友的馒头好感；桃纸助手的桃签和词典卡片会出现不同程度的“馒头私语”。所有接入均为软依赖，好感插件未加载时原插件照常运行。
 

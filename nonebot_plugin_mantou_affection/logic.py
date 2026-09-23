@@ -34,11 +34,8 @@ INTERACTIONS: tuple[tuple[str, int], ...] = (
 )
 
 
-POKE_IGNORE_REPLY = "馒头理都不想理你。"
 POKE_POSITIVE_FALLBACK = "馒头朝你笑了笑。"
-POKE_NEGATIVE_FALLBACK = "馒头往旁边挪了挪。"
 POKE_POSITIVE_SCENE = "crystelf.poke"
-POKE_NEGATIVE_SCENE = "crystelf.poke.negative"
 
 
 def level_for(affection: int) -> Level:
@@ -220,17 +217,6 @@ def apply_link_reward(
     return LinkRewardResult(True, "ok", actual_reward, profile.affection, profile.linked_points)
 
 
-def _pick_poke_reply(
-    text_picker: Callable[[str, int], str | None] | None,
-    scene: str,
-    affection: int,
-    fallback: str,
-    bot_name: str,
-) -> str:
-    picked = text_picker(scene, affection) if text_picker is not None else None
-    return (picked or fallback).replace("{bot}", bot_name)
-
-
 def _with_change_line(text: str, delta: int, affection: int) -> str:
     """好感度有变化时在文案末尾补一行变更提示。"""
 
@@ -245,65 +231,24 @@ def perform_poke(
     today: date,
     now_timestamp: float,
     bot_name: str,
-    negative_base: float,
-    max_penalty: int,
-    ignore_threshold: int,
     daily_gain_limit: int,
     affection_max: int,
-    rng: random.Random,
     text_picker: Callable[[str, int], str | None] | None = None,
 ) -> PokeResult:
     today_text = today.isoformat()
-    if profile.poke_date != today_text:
-        profile.poke_date = today_text
-        profile.poke_count = 0
     if profile.gain_date != today_text:
         profile.gain_date = today_text
         profile.gain_points = 0
-    profile.poke_count += 1
-    count = profile.poke_count
-
-    if count >= ignore_threshold or (
-        profile.affection <= 0
-        and profile.peak_affection > 0
-        and profile.zeroed_date == today_text
-    ):
-        delta = adjust_affection(profile, -min(count, max_penalty), affection_max, now_timestamp)
-        reply = _with_change_line(POKE_IGNORE_REPLY, delta, profile.affection)
-        return PokeResult(delta=delta, text=reply, count=count, annoyed=True)
-
-    if profile.peak_affection > 0 and rng.random() < min(1.0, count * negative_base):
-        delta = adjust_affection(profile, -min(count, max_penalty), affection_max, now_timestamp)
-        reply = _pick_poke_reply(
-            text_picker,
-            POKE_NEGATIVE_SCENE,
-            profile.affection,
-            POKE_NEGATIVE_FALLBACK,
-            bot_name,
-        )
-        return PokeResult(
-            delta=delta,
-            text=_with_change_line(reply, delta, profile.affection),
-            count=count,
-            annoyed=True,
-        )
 
     remaining_gain = max(0, daily_gain_limit - profile.gain_points)
     delta = adjust_affection(profile, min(1, remaining_gain), affection_max, now_timestamp)
     if delta > 0:
         profile.gain_points += delta
-    reply = _pick_poke_reply(
-        text_picker,
-        POKE_POSITIVE_SCENE,
-        profile.affection,
-        POKE_POSITIVE_FALLBACK,
-        bot_name,
+
+    picked = (
+        text_picker(POKE_POSITIVE_SCENE, profile.affection) if text_picker is not None else None
     )
+    reply = (picked or POKE_POSITIVE_FALLBACK).replace("{bot}", bot_name)
     if delta == 0 and remaining_gain <= 0:
         reply += "\n今天的好感已经拿满啦，明天再来吧。"
-    return PokeResult(
-        delta=delta,
-        text=_with_change_line(reply, delta, profile.affection),
-        count=count,
-        annoyed=False,
-    )
+    return PokeResult(delta=delta, text=_with_change_line(reply, delta, profile.affection))

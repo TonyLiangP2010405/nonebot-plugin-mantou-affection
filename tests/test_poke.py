@@ -1,17 +1,20 @@
+import asyncio
 import json
 import random
+from contextlib import suppress
 from datetime import date
 from pathlib import Path
+from time import time
 
 import pytest
+from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message
+from nonebot.adapters.onebot.v11.event import Sender
 
+from nonebot_plugin_mantou_affection.ambient import EventCoordinator, register_ambient
 from nonebot_plugin_mantou_affection.config import Config
 from nonebot_plugin_mantou_affection.copywriting import AffectionTextLibrary
+from nonebot_plugin_mantou_affection.events import EventLibrary
 from nonebot_plugin_mantou_affection.logic import (
-    INTERACTIONS,
-    POKE_IGNORE_REPLY,
-    POKE_NEGATIVE_FALLBACK,
-    POKE_NEGATIVE_SCENE,
     POKE_POSITIVE_FALLBACK,
     POKE_POSITIVE_SCENE,
     perform_poke,
@@ -21,7 +24,13 @@ from nonebot_plugin_mantou_affection.models import PokeResult, Profile
 from nonebot_plugin_mantou_affection.service import AffectionService
 from nonebot_plugin_mantou_affection.storage import AffectionStore
 
-TODAY = date(2026, 9, 22)
+TODAY = date(2026, 9, 23)
+TODAY_TEXT = TODAY.isoformat()
+GROUP_ID = "90001"
+USER_ID = "90002"
+OTHER_ID = "90003"
+POKE_GROUP = 90051
+GAIN_HINT = "今天的好感已经拿满啦，明天再来吧。"
 BAND_TEXTS = {
     "neutral": "被戳到的{bot}往旁边挪了挪。",
     "warm": "{bot}小声说别戳啦。",
@@ -29,17 +38,10 @@ BAND_TEXTS = {
     "flirty": "{bot}闷闷地问你是不是只喜欢戳它。",
     "intimate": "{bot}轻轻握住你的手让你停下。",
 }
-NEGATIVE_TEXTS = {
-    "neutral": "{bot}假装没被戳到，继续看别处。",
-    "warm": "{bot}捂着被戳的地方，小声嘟囔。",
-    "close": "{bot}按住你的手指，说再戳就不理你了。",
-    "flirty": "{bot}酸酸地嘟囔你上次也是这样保证的。",
-    "intimate": "{bot}叹了口气，说它不喜欢这样。",
-}
 
 
 class FixedRng(random.Random):
-    """固定 random() 返回值，用来精确控制不耐烦判定的命中。"""
+    """固定 random() 返回值，用来精确控制事件触发判定。"""
 
     def __init__(self, value: float):
         super().__init__(0)
@@ -49,21 +51,37 @@ class FixedRng(random.Random):
         return self.value
 
 
-class LossRng(FixedRng):
-    """让互动必定抽到 -1 那一档。"""
+async def _noop_send(message) -> None:
+    return None
 
-    def choice(self, seq):
-        return next(item for item in seq if item[1] < 0)
+
+def _event(
+    text: str, user_id: int = 90002, group_id: int = 90001, nickname: str = "桃友"
+) -> GroupMessageEvent:
+    message = Message(text)
+    return GroupMessageEvent(
+        time=int(time()),
+        self_id=10000,
+        post_type="message",
+        sub_type="normal",
+        user_id=user_id,
+        message_type="group",
+        message_id=1,
+        message=message,
+        original_message=message,
+        raw_message=text,
+        font=0,
+        sender=Sender(user_id=user_id, nickname=nickname, role="member"),
+        to_me=False,
+        group_id=group_id,
+    )
 
 
 def _library(tmp_path: Path) -> AffectionTextLibrary:
     path = tmp_path / "poke_texts.json"
     path.write_text(
         json.dumps(
-            {
-                POKE_POSITIVE_SCENE: {band: [text] for band, text in BAND_TEXTS.items()},
-                POKE_NEGATIVE_SCENE: {band: [text] for band, text in NEGATIVE_TEXTS.items()},
-            },
+            {POKE_POSITIVE_SCENE: {band: [text] for band, text in BAND_TEXTS.items()}},
             ensure_ascii=False,
         ),
         encoding="utf-8",
@@ -74,249 +92,141 @@ def _library(tmp_path: Path) -> AffectionTextLibrary:
 def _service(
     tmp_path: Path,
     text_library: AffectionTextLibrary | None = None,
+    rng: random.Random | None = None,
     **config_kwargs,
 ) -> AffectionService:
     return AffectionService(
         AffectionStore(tmp_path / "affection.json"),
         Config(**config_kwargs),
         text_library=text_library,
-        rng=FixedRng(0.9),
+        rng=rng or FixedRng(0.9),
+    )
+
+
+def _events_path(bundled_texts_path: Path) -> Path:
+    return bundled_texts_path.with_name("affection_events.json")
+
+
+def _coordinator(
+    service: AffectionService, config: Config, bundled_texts_path: Path, *, rng: random.Random
+) -> EventCoordinator:
+    return EventCoordinator(
+        service, config, EventLibrary(_events_path(bundled_texts_path)), rng=rng
     )
 
 
 def _poke(
     profile: Profile,
     *,
-    rng: random.Random,
-    today: date = TODAY,
     affection_max: int = 999,
     daily_gain_limit: int = 3,
-    negative_base: float = 0.1,
-    max_penalty: int = 5,
-    ignore_threshold: int = 10,
     text_picker=None,
 ) -> PokeResult:
     return perform_poke(
         profile,
-        today=today,
+        today=TODAY,
         now_timestamp=100.0,
         bot_name="馒头",
-        negative_base=negative_base,
-        max_penalty=max_penalty,
-        ignore_threshold=ignore_threshold,
         daily_gain_limit=daily_gain_limit,
         affection_max=affection_max,
-        rng=rng,
         text_picker=text_picker,
     )
-
-
-def _profile(**kwargs) -> Profile:
-    kwargs.setdefault("peak_affection", kwargs.get("affection", 0))
-    return Profile("1", poke_date=TODAY.isoformat(), **kwargs)
 
 
 def _first_line(result: PokeResult) -> str:
     return result.text.split("\n")[0]
 
 
-def _change_line(result: PokeResult, affection: int) -> str:
-    return f"好感度 {result.delta:+d}，当前 {affection}"
+def _lines(message: Message) -> list[str]:
+    body = "".join(segment.data["text"] for segment in message if segment.type == "text")
+    return [line for line in body.split("\n") if line.strip()]
 
 
-def test_ignore_reply_is_the_fixed_contract_text() -> None:
-    assert POKE_IGNORE_REPLY == "馒头理都不想理你。"
+def _at_ids(message: Message) -> list[str]:
+    return [str(segment.data["qq"]) for segment in message if segment.type == "at"]
 
 
-@pytest.mark.parametrize(
-    ("count_before", "value", "annoyed"),
-    [
-        (0, 0.05, True),
-        (0, 0.15, False),
-        (2, 0.25, True),
-        (2, 0.35, False),
-        (8, 0.85, True),
-        (8, 0.95, False),
-    ],
-)
-def test_poke_negative_probability_grows_with_daily_count(
-    count_before: int, value: float, annoyed: bool
-) -> None:
-    profile = _profile(affection=100, poke_count=count_before)
-    result = _poke(profile, rng=FixedRng(value))
-    assert result.count == count_before + 1
-    assert result.annoyed is annoyed
+async def _cancel_task(coordinator: EventCoordinator, group_id: str = GROUP_ID) -> None:
+    pending = coordinator.pending.get(group_id)
+    if pending is None or pending.task is None:
+        return
+    pending.task.cancel()
+    with suppress(asyncio.CancelledError):
+        await pending.task
 
 
-@pytest.mark.parametrize(
-    ("count_before", "expected_penalty"),
-    [(0, -1), (2, -3), (4, -5), (7, -5)],
-)
-def test_poke_penalty_grows_with_daily_count(count_before: int, expected_penalty: int) -> None:
-    profile = _profile(affection=100, poke_count=count_before)
-    result = _poke(profile, rng=FixedRng(0.0))
-    assert result.annoyed is True
-    assert result.delta == expected_penalty
-    assert profile.affection == 100 + expected_penalty
+# ------------------------------------------------------------ 纯 +1 机制
 
 
-def test_poke_penalty_stops_at_zero_affection() -> None:
-    profile = _profile(affection=2, poke_count=4)
-    result = _poke(profile, rng=FixedRng(0.0))
-    assert result.annoyed is True
-    assert result.delta == -2
-    assert profile.affection == 0
-
-
-@pytest.mark.parametrize("count_before", [9, 12])
-def test_poke_ignore_stage_uses_fixed_reply(count_before: int) -> None:
-    profile = _profile(affection=100, poke_count=count_before)
-    result = _poke(profile, rng=FixedRng(0.0), text_picker=lambda scene, score: "不该用的文案")
-    assert result.annoyed is True
-    assert _first_line(result) == POKE_IGNORE_REPLY
-    assert result.delta == -5
-    assert profile.affection == 95
-    assert result.text.split("\n")[1] == _change_line(result, 95)
-
-
-@pytest.mark.parametrize("count_before", [0, 3])
-def test_poke_ignore_stage_same_day_after_affection_wiped(count_before: int) -> None:
-    profile = _profile(
-        affection=0, peak_affection=9, poke_count=count_before, zeroed_date=TODAY.isoformat()
-    )
-    result = _poke(profile, rng=FixedRng(0.9))
-    assert result.annoyed is True
-    assert result.delta == 0
-    assert profile.affection == 0
-    assert result.text == POKE_IGNORE_REPLY
-
-
-@pytest.mark.parametrize("count_before", [0, 3])
-def test_poke_ignore_stage_expires_next_day(count_before: int) -> None:
-    profile = _profile(
-        affection=0, peak_affection=9, poke_count=count_before, zeroed_date="2026-09-21"
-    )
-    result = _poke(profile, rng=FixedRng(0.9))
-    assert result.annoyed is False
-    assert result.delta == 1
-    assert profile.affection == 1
-    assert POKE_IGNORE_REPLY not in result.text
-
-
-@pytest.mark.parametrize("count_before", [0, 5, 8])
-def test_new_user_below_threshold_uses_roll_path(count_before: int) -> None:
-    profile = _profile(affection=0, peak_affection=0, poke_count=count_before)
-    result = _poke(profile, rng=FixedRng(0.9))
-    assert result.count == count_before + 1
-    assert result.annoyed is False
-    assert result.delta == 1
-    assert profile.affection == 1
-    assert result.text != POKE_IGNORE_REPLY
-
-
-@pytest.mark.parametrize("count_before", [0, 4, 8])
-def test_new_user_never_rolls_annoyed(count_before: int) -> None:
-    profile = _profile(affection=0, peak_affection=0, poke_count=count_before)
-    scenes: list[str] = []
+def test_poke_grants_one_point_and_keeps_copy() -> None:
+    profile = Profile("1", affection=30)
+    seen: list[tuple[str, int]] = []
 
     def picker(scene: str, affection: int) -> str:
-        scenes.append(scene)
+        seen.append((scene, affection))
         return BAND_TEXTS[snapshot_for(affection).band]
 
-    result = _poke(profile, rng=FixedRng(0.0), text_picker=picker)
+    result = _poke(profile, text_picker=picker)
 
-    assert result.annoyed is False
     assert result.delta == 1
-    assert scenes == [POKE_POSITIVE_SCENE]
-    assert profile.affection == 1
-    assert POKE_IGNORE_REPLY not in result.text
+    assert profile.affection == 31
+    assert seen == [(POKE_POSITIVE_SCENE, 31)]
+    assert _first_line(result) == BAND_TEXTS["warm"].replace("{bot}", "馒头")
+    assert result.text.split("\n")[1] == "好感度 +1，当前 31"
 
 
-def test_poke_positive_gain_counts_towards_daily_limit() -> None:
-    profile = _profile(affection=20, gain_date=TODAY.isoformat(), gain_points=1)
-    result = _poke(profile, rng=FixedRng(0.9))
-    assert result.annoyed is False
+@pytest.mark.parametrize("score", [0, 30, 100, 160])
+def test_poke_never_reduces_affection(score: int) -> None:
+    profile = Profile("1", affection=score)
+    result = _poke(profile, text_picker=lambda scene, affection: None)
+    assert result.delta == 1
+    assert profile.affection == score + 1
+
+
+def test_poke_gain_counts_towards_daily_limit() -> None:
+    profile = Profile("1", affection=20, gain_date=TODAY_TEXT, gain_points=1)
+    result = _poke(profile)
     assert result.delta == 1
     assert profile.gain_points == 2
+    assert GAIN_HINT not in result.text
 
 
-def test_poke_positive_gain_is_capped_by_daily_gain_limit() -> None:
-    profile = _profile(affection=10, gain_date=TODAY.isoformat(), gain_points=3)
-    result = _poke(profile, rng=FixedRng(0.9))
-    assert result.annoyed is False
+def test_poke_gain_is_capped_by_daily_limit() -> None:
+    profile = Profile("1", affection=20, gain_date=TODAY_TEXT, gain_points=3)
+    result = _poke(profile)
     assert result.delta == 0
-    assert result.text
-    assert profile.affection == 10
+    assert profile.affection == 20
     assert profile.gain_points == 3
-
-
-def test_poke_positive_copy_follows_affection_band() -> None:
-    profile = _profile(affection=99)
-    seen: list[tuple[str, int]] = []
-
-    def picker(scene: str, affection: int) -> str:
-        seen.append((scene, affection))
-        return BAND_TEXTS[snapshot_for(affection).band]
-
-    result = _poke(profile, rng=FixedRng(0.9), text_picker=picker)
-    assert seen == [(POKE_POSITIVE_SCENE, 100)]
-    assert _first_line(result) == BAND_TEXTS["flirty"].replace("{bot}", "馒头")
-    assert result.text.split("\n")[1] == _change_line(result, 100)
-    assert "{bot}" not in result.text
-
-
-def test_poke_negative_copy_follows_affection_after_penalty() -> None:
-    profile = _profile(affection=101, poke_count=2)
-    seen: list[tuple[str, int]] = []
-
-    def picker(scene: str, affection: int) -> str:
-        seen.append((scene, affection))
-        return NEGATIVE_TEXTS[snapshot_for(affection).band]
-
-    result = _poke(profile, rng=FixedRng(0.0), text_picker=picker)
-    assert result.delta == -3
-    assert seen == [(POKE_NEGATIVE_SCENE, 98)]
-    assert _first_line(result) == NEGATIVE_TEXTS["close"].replace("{bot}", "馒头")
-    assert result.text.split("\n")[1] == _change_line(result, 98)
-
-
-@pytest.mark.parametrize(
-    ("fixed_value", "expected"),
-    [(0.9, POKE_POSITIVE_FALLBACK), (0.0, POKE_NEGATIVE_FALLBACK)],
-)
-def test_poke_falls_back_without_library(fixed_value: float, expected: str) -> None:
-    profile = _profile(affection=50)
-    result = _poke(profile, rng=FixedRng(fixed_value))
-    assert _first_line(result) == expected
-
-
-def test_poke_reply_falls_back_when_scene_is_empty() -> None:
-    profile = _profile(affection=50)
-    result = _poke(profile, rng=FixedRng(0.9), text_picker=lambda scene, score: None)
-    assert _first_line(result) == POKE_POSITIVE_FALLBACK
-
-
-def test_poke_resets_counter_next_day() -> None:
-    profile = Profile("1", affection=50, poke_date="2026-09-21", poke_count=9)
-    result = _poke(profile, rng=FixedRng(0.9))
-    assert result.count == 1
-    assert result.annoyed is False
-    assert profile.poke_date == TODAY.isoformat()
-    assert profile.poke_count == 1
+    assert result.text.endswith(GAIN_HINT)
+    assert "\n好感度" not in result.text
 
 
 def test_poke_resets_daily_gain_next_day() -> None:
-    profile = Profile(
-        "1",
-        affection=50,
-        poke_date="2026-09-21",
-        poke_count=3,
-        gain_date="2026-09-21",
-        gain_points=3,
-    )
-    result = _poke(profile, rng=FixedRng(0.9))
+    profile = Profile("1", affection=20, gain_date="2026-09-22", gain_points=3)
+    result = _poke(profile)
     assert result.delta == 1
     assert profile.gain_points == 1
+    assert GAIN_HINT not in result.text
+
+
+def test_poke_gain_is_capped_by_affection_max() -> None:
+    profile = Profile("1", affection=999)
+    result = _poke(profile)
+    assert result.delta == 0
+    assert profile.affection == 999
+    assert GAIN_HINT not in result.text
+
+
+def test_poke_falls_back_without_library() -> None:
+    profile = Profile("1", affection=50)
+    result = _poke(profile)
+    assert _first_line(result) == POKE_POSITIVE_FALLBACK
+
+
+def test_poke_reply_falls_back_when_scene_is_empty() -> None:
+    profile = Profile("1", affection=50)
+    result = _poke(profile, text_picker=lambda scene, affection: None)
+    assert _first_line(result) == POKE_POSITIVE_FALLBACK
 
 
 async def test_service_poke_uses_library_and_normalizes_nickname(tmp_path: Path) -> None:
@@ -328,186 +238,239 @@ async def test_service_poke_uses_library_and_normalizes_nickname(tmp_path: Path)
     await service.store.update_profile("100", "200", "桃友", bump)
     result = await service.poke("100", "200", "  桃  \n 友 ")
 
-    assert result.count == 1
     assert result.delta == 1
-    assert result.annoyed is False
     assert _first_line(result) == BAND_TEXTS["warm"].replace("{bot}", "馒头")
-    assert result.text.split("\n")[1] == _change_line(result, 31)
-    profile = await service.profile("100", "200")
-    assert profile.nickname == "桃 友"
-
-
-async def test_service_poke_reaches_ignore_stage(tmp_path: Path) -> None:
-    service = _service(tmp_path, _library(tmp_path), mantou_affection_daily_gain_limit=999)
-
-    def bump(profile: Profile) -> None:
-        profile.affection = 60
-
-    await service.store.update_profile("100", "200", "桃友", bump)
-
-    for expected_count in range(1, 10):
-        result = await service.poke("100", "200", "桃友")
-        assert result.count == expected_count
-        assert result.annoyed is False
-        assert result.delta == 1
-
-    result = await service.poke("100", "200", "桃友")
-    assert result.count == 10
-    assert result.annoyed is True
-    assert _first_line(result) == POKE_IGNORE_REPLY
-    assert result.delta == -5
-    assert result.text.split("\n")[1] == _change_line(result, 60 + 9 - 5)
-    assert (await service.profile("100", "200")).affection == 60 + 9 - 5
-
-
-async def test_new_user_is_poked_normally(tmp_path: Path) -> None:
-    service = _service(tmp_path, _library(tmp_path), mantou_affection_daily_gain_limit=10)
-
-    deltas = []
-    for expected_count in (1, 2, 3):
-        result = await service.poke("100", "200", "桃友")
-        assert result.count == expected_count
-        assert result.annoyed is False
-        assert result.text != POKE_IGNORE_REPLY
-        deltas.append(result.delta)
-
-    assert deltas == [1, 1, 1]
-    profile = await service.profile("100", "200")
-    assert profile.affection == 3
-    assert profile.peak_affection == 3
-
-
-async def test_peak_affection_tracks_every_gain_and_survives_reset(tmp_path: Path) -> None:
-    service = _service(tmp_path, _library(tmp_path), mantou_affection_daily_gain_limit=10)
-
-    await service.adjust("100", "200", "桃友", 4)
-    assert (await service.profile("100", "200")).peak_affection == 4
-
-    await service.reward_external("100", "200", "桃友", "nonebot_plugin_taozi", 2)
-    profile = await service.profile("100", "200")
-    assert profile.affection == 6
-    assert profile.peak_affection == 6
-
-    assert (await service.poke("100", "200", "桃友")).delta == 1
-    profile = await service.profile("100", "200")
-    assert profile.affection == 7
-    assert profile.peak_affection == 7
-
-    await service.adjust("100", "200", "桃友", -20)
-    profile = await service.profile("100", "200")
-    assert profile.affection == 0
-    assert profile.peak_affection == 7
-
-    result = await service.poke("100", "200", "桃友")
-    assert result.annoyed is True
-    assert result.delta == 0
-    assert result.text == POKE_IGNORE_REPLY
+    assert result.text.split("\n")[1] == "好感度 +1，当前 31"
+    assert (await service.profile("100", "200")).nickname == "桃 友"
 
 
 async def test_public_poke_api_returns_poke_result(
     bundled_texts_path: Path, monkeypatch
 ) -> None:
     from nonebot_plugin_mantou_affection import PokeResult as ExportedResult
-    from nonebot_plugin_mantou_affection import poke, service
+    from nonebot_plugin_mantou_affection import plugin_config, poke
 
     assert ExportedResult is PokeResult
 
     texts = json.loads(bundled_texts_path.read_text(encoding="utf-8"))["crystelf.poke"]
-    monkeypatch.setattr(service, "rng", FixedRng(0.9))
+    monkeypatch.setattr(plugin_config, "mantou_affection_poke_event_chance", 0.0)
 
     result = await poke("poke-api-group", "poke-api-user", nickname="桃友")
 
     assert isinstance(result, PokeResult)
-    assert result.count == 1
-    assert result.annoyed is False
     assert result.delta == 1
     assert _first_line(result) in texts["neutral"]
     assert result.text.split("\n")[1] == "好感度 +1，当前 1"
 
 
-def test_poke_text_appends_change_line_only_when_delta_moves() -> None:
-    gained = _profile(affection=30)
-    result = _poke(gained, rng=FixedRng(0.9))
+async def test_public_poke_api_accepts_send_without_event(monkeypatch) -> None:
+    from nonebot_plugin_mantou_affection import plugin_config, poke
+
+    sent: list[str] = []
+
+    async def fake_send(message) -> None:
+        sent.append(str(message))
+
+    monkeypatch.setattr(plugin_config, "mantou_affection_poke_event_chance", 0.0)
+
+    result = await poke("poke-no-event", "poke-no-event", nickname="桃友", send=fake_send)
+
     assert result.delta == 1
-    assert result.text.endswith("\n好感度 +1，当前 31")
-
-    lost = _profile(affection=30, poke_count=2)
-    result = _poke(lost, rng=FixedRng(0.0))
-    assert result.delta == -3
-    assert result.text.endswith("\n好感度 -3，当前 27")
-
-    blocked = _profile(affection=30, gain_date=TODAY.isoformat(), gain_points=3)
-    result = _poke(blocked, rng=FixedRng(0.9))
-    assert result.delta == 0
-    assert result.text.endswith("\n今天的好感已经拿满啦，明天再来吧。")
+    assert sent == []
 
 
-async def test_zeroed_date_is_marked_by_every_deduction_path(tmp_path: Path) -> None:
-    assert any(reward < 0 for _, reward in INTERACTIONS)
-    service = _service(tmp_path, _library(tmp_path), mantou_affection_daily_gain_limit=999)
-    today = service._now().date().isoformat()
-
-    await service.adjust("100", "200", "桃友", 6)
-    await service.adjust("100", "200", "桃友", -6)
-    assert (await service.profile("100", "200")).zeroed_date == today
-
-    await service.adjust("300", "200", "桃友", 2)
-    await service.reward_external("300", "200", "桃友", "some_plugin:bad_action", -2)
-    assert (await service.profile("300", "200")).zeroed_date == today
-
-    await service.adjust("400", "200", "桃友", 1)
-    service.rng = LossRng(0.9)
-    result = await service.interact("400", "200", "桃友")
-    assert result.delta == -1
-    profile = await service.profile("400", "200")
-    assert profile.affection == 0
-    assert profile.zeroed_date == today
-
-    poke_result = await service.poke("400", "200", "桃友")
-    assert poke_result.annoyed is True
-    assert _first_line(poke_result) == POKE_IGNORE_REPLY
+# ------------------------------------------- 戳出随机事件 / 扣分翻倍
 
 
-async def test_zeroed_date_only_silences_pokes_for_the_rest_of_that_day(tmp_path: Path) -> None:
-    service = _service(tmp_path, _library(tmp_path), mantou_affection_daily_gain_limit=999)
-    await service.adjust("100", "200", "桃友", 3)
-    await service.adjust("100", "200", "桃友", -3)
-    assert (await service.profile("100", "200")).zeroed_date == service._now().date().isoformat()
-    assert (await service.poke("100", "200", "桃友")).annoyed is True
+async def test_poke_event_message_shows_double_timeout_penalty(
+    tmp_path: Path, bundled_texts_path: Path
+) -> None:
+    config = Config(mantou_affection_event_timeout=3)
+    service = _service(tmp_path, config=config)
+    coordinator = _coordinator(service, config, bundled_texts_path, rng=FixedRng(0.0))
 
-    def rewind_next_day(profile: Profile) -> None:
-        profile.poke_date = "2000-01-01"
-        profile.zeroed_date = "2000-01-01"
+    pending = coordinator.start(GROUP_ID, USER_ID, "桃友", penalty_scale=2)
+    assert pending is not None
+    message = coordinator.event_message(pending)
 
-    await service.store.update_profile("100", "200", "桃友", rewind_next_day)
-    result = await service.poke("100", "200", "桃友")
+    assert "请在 3 秒内作答" in message
+    assert "超时好感度 -10！" in message
+    assert coordinator.pending == {GROUP_ID: pending}
 
-    assert result.count == 1
-    assert result.annoyed is False
+
+async def test_start_poke_event_requires_send(tmp_path: Path, bundled_texts_path: Path) -> None:
+    config = Config()
+    service = _service(tmp_path, config=config)
+    coordinator = _coordinator(service, config, bundled_texts_path, rng=FixedRng(0.0))
+
+    started = await coordinator.start_poke_event(
+        group_id=GROUP_ID, user_id=USER_ID, nickname="桃友", send=None, chance=1.0
+    )
+
+    assert started is None
+    assert coordinator.pending == {}
+
+
+async def test_start_poke_event_respects_chance(tmp_path: Path, bundled_texts_path: Path) -> None:
+    config = Config()
+    service = _service(tmp_path, config=config)
+    coordinator = _coordinator(service, config, bundled_texts_path, rng=FixedRng(0.9))
+
+    started = await coordinator.start_poke_event(
+        group_id=GROUP_ID, user_id=USER_ID, nickname="桃友", send=_noop_send, chance=0.01
+    )
+
+    assert started is None
+    assert coordinator.pending == {}
+
+
+async def test_start_poke_event_falls_back_when_group_busy(
+    tmp_path: Path, bundled_texts_path: Path
+) -> None:
+    config = Config()
+    service = _service(tmp_path, config=config)
+    coordinator = _coordinator(service, config, bundled_texts_path, rng=FixedRng(0.0))
+    running = coordinator.start(GROUP_ID, "90009", "路人")
+    assert running is not None
+
+    started = await coordinator.start_poke_event(
+        group_id=GROUP_ID, user_id=USER_ID, nickname="桃友", send=_noop_send, chance=1.0
+    )
+
+    assert started is None
+    assert coordinator.pending[GROUP_ID] is running
+    await _cancel_task(coordinator)
+
+
+async def test_start_poke_event_without_library_falls_back(tmp_path: Path) -> None:
+    config = Config()
+    service = _service(tmp_path, config=config)
+    coordinator = EventCoordinator(service, config, None, rng=FixedRng(0.0))
+
+    started = await coordinator.start_poke_event(
+        group_id=GROUP_ID, user_id=USER_ID, nickname="桃友", send=_noop_send, chance=1.0
+    )
+
+    assert started is None
+
+
+async def test_poke_api_returns_event_message_when_triggered(
+    tmp_path: Path, bundled_texts_path: Path, monkeypatch
+) -> None:
+    from nonebot_plugin_mantou_affection import poke
+
+    config = Config(mantou_affection_event_timeout=3)
+    service = _service(tmp_path, config=config)
+    coordinator = _coordinator(service, config, bundled_texts_path, rng=FixedRng(0.0))
+    monkeypatch.setattr("nonebot_plugin_mantou_affection.event_coordinator", coordinator)
+    monkeypatch.setattr("nonebot_plugin_mantou_affection.plugin_config", config)
+    events: list[str] = []
+
+    async def fake_send(message) -> None:
+        events.append(str(message))
+
+    result = await poke(POKE_GROUP, USER_ID, nickname="桃友", send=fake_send)
+
     assert result.delta == 1
-    assert POKE_IGNORE_REPLY not in result.text
+    assert result.text.startswith("⚡ 触发随机事件！")
+    assert "超时好感度 -10！" in result.text
+    # 事件消息由调用方发送(poke 返回的 text), send 只用于结算消息
+    assert events == []
+    assert POKE_POSITIVE_FALLBACK not in result.text
+    assert "好感度 +1" not in result.text
+    assert coordinator.pending[str(POKE_GROUP)].penalty_scale == 2
+    await _cancel_task(coordinator, str(POKE_GROUP))
 
 
-async def test_new_user_poke_ignores_annoyance_roll(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("option_delta", "expected_value"),
+    [(-2, -4), (1, 1), (2, 2)],
+)
+async def test_poke_event_settlement_doubles_only_penalties(
+    tmp_path: Path, bundled_texts_path: Path, option_delta: int, expected_value: int
+) -> None:
+    config = Config()
+    service = _service(tmp_path, config=config)
+
+    def bump(profile: Profile) -> None:
+        profile.affection = 20
+
+    await service.store.update_profile(GROUP_ID, USER_ID, "桃友", bump)
+    coordinator = _coordinator(service, config, bundled_texts_path, rng=FixedRng(0.0))
+    pending = coordinator.start(GROUP_ID, USER_ID, "桃友", penalty_scale=2)
+    assert pending is not None
+    index = next(
+        position
+        for position, option in enumerate(pending.options)
+        if option.delta == option_delta
+    )
+    assert coordinator.answer(GROUP_ID, USER_ID, "桃友", str(index + 1)) is True
+    sent: list[Message] = []
+
+    async def fake_send(message: Message) -> None:
+        sent.append(message)
+
+    task = coordinator.schedule(pending, group_id=GROUP_ID, send=fake_send, timeout=0.01)
+    await asyncio.wait_for(task, 2)
+
+    line = _lines(sent[0])[0]
+    assert f"，好感度 {expected_value:+d}，当前 {20 + expected_value}" in line
+    assert (await service.profile(GROUP_ID, USER_ID)).affection == 20 + expected_value
+
+
+async def test_poke_event_timeout_applies_double_penalty(
+    tmp_path: Path, bundled_texts_path: Path
+) -> None:
+    config = Config()
+    service = _service(tmp_path, config=config)
+
+    def bump(profile: Profile) -> None:
+        profile.affection = 30
+
+    await service.store.update_profile(GROUP_ID, USER_ID, "桃友", bump)
+    coordinator = _coordinator(service, config, bundled_texts_path, rng=FixedRng(0.0))
+    pending = coordinator.start(GROUP_ID, USER_ID, "桃友", penalty_scale=2)
+    assert pending is not None
+    sent: list[Message] = []
+
+    async def fake_send(message: Message) -> None:
+        sent.append(message)
+
+    task = coordinator.schedule(pending, group_id=GROUP_ID, send=fake_send, timeout=0.01)
+    await asyncio.wait_for(task, 2)
+
+    assert _at_ids(sent[0]) == [USER_ID]
+    assert _lines(sent[0])[0].endswith("好感度 -10，当前 20")
+    assert (await service.profile(GROUP_ID, USER_ID)).affection == 20
+
+
+async def test_poke_event_answers_use_existing_answer_matcher(
+    tmp_path: Path, bundled_texts_path: Path, monkeypatch
+) -> None:
+    from nonebot_plugin_mantou_affection import poke
+
+    config = Config(mantou_affection_event_timeout=3)
     service = _service(tmp_path, _library(tmp_path))
-    service.rng = FixedRng(0.0)
+    coordinator = _coordinator(service, config, bundled_texts_path, rng=FixedRng(0.0))
+    _ambient, answer = register_ambient(service, config, coordinator)
+    monkeypatch.setattr("nonebot_plugin_mantou_affection.event_coordinator", coordinator)
+    monkeypatch.setattr("nonebot_plugin_mantou_affection.plugin_config", config)
 
-    result = await service.poke("100", "200", "桃友")
+    async def fake_send(message) -> None:
+        return None
 
-    assert result.annoyed is False
-    assert result.delta == 1
-    profile = await service.profile("100", "200")
-    assert profile.affection == 1
-    assert profile.peak_affection == 1
+    result = await poke(POKE_GROUP, USER_ID, nickname="桃友", send=fake_send)
+    assert result.text.startswith("⚡ 触发随机事件！")
+    pending = coordinator.pending[str(POKE_GROUP)]
 
+    await answer.handlers[0].call(
+        _event("2", user_id=90003, group_id=POKE_GROUP, nickname="路人")
+    )
+    await answer.handlers[0].call(
+        _event("9", user_id=90003, group_id=POKE_GROUP, nickname="路人")
+    )
+    await answer.handlers[0].call(_event("3", group_id=POKE_GROUP))
 
-async def test_poke_annoyance_roll_applies_once_affection_was_earned(tmp_path: Path) -> None:
-    service = _service(tmp_path, _library(tmp_path))
-    await service.adjust("100", "200", "桃友", 10)
-    service.rng = FixedRng(0.0)
-
-    result = await service.poke("100", "200", "桃友")
-
-    assert result.annoyed is True
-    assert result.delta == -1
-    assert (await service.profile("100", "200")).affection == 9
+    assert list(pending.answers) == [OTHER_ID, USER_ID]
+    assert pending.penalty_scale == 2
+    await _cancel_task(coordinator, str(POKE_GROUP))

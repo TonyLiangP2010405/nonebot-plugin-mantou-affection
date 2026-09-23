@@ -21,9 +21,7 @@ class Config(BaseModel):
     mantou_affection_ambient_event_ratio: float = Field(default=0.333, ge=0.0, le=1.0)
     mantou_affection_event_timeout: int = Field(default=20, ge=3, le=120)
     mantou_affection_event_timeout_penalty: int = Field(default=5, ge=1, le=100)
-    mantou_affection_poke_negative_base: float = Field(default=0.1, ge=0.0, le=1.0)
-    mantou_affection_poke_max_penalty: int = Field(default=5, ge=1, le=50)
-    mantou_affection_poke_ignore_threshold: int = Field(default=10, ge=2, le=100)
+    mantou_affection_poke_event_chance: float = Field(default=0.01, ge=0.0, le=1.0)
     mantou_affection_link_rewards: dict[str, int] = Field(
         default_factory=lambda: {
             "nonebot_plugin_taozi": 2,

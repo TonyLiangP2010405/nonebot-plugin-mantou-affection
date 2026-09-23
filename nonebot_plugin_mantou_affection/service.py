@@ -81,9 +81,7 @@ class AffectionService:
                 text_picker=text_picker,
             )
 
-        return await self.store.update_profile(
-            group_id, user_id, nickname, update, now.date().isoformat()
-        )
+        return await self.store.update_profile(group_id, user_id, nickname, update)
 
     def _interact_text_picker(self) -> Callable[[int, int], str | None] | None:
         library = self.text_library
@@ -117,18 +115,12 @@ class AffectionService:
                 today=now.date(),
                 now_timestamp=now.timestamp(),
                 bot_name=self.config.mantou_affection_bot_name,
-                negative_base=self.config.mantou_affection_poke_negative_base,
-                max_penalty=self.config.mantou_affection_poke_max_penalty,
-                ignore_threshold=self.config.mantou_affection_poke_ignore_threshold,
                 daily_gain_limit=self.config.mantou_affection_daily_gain_limit,
                 affection_max=self.config.mantou_affection_max,
-                rng=self.rng,
                 text_picker=text_picker,
             )
 
-        return await self.store.update_profile(
-            group_id, user_id, nickname, update, now.date().isoformat()
-        )
+        return await self.store.update_profile(group_id, user_id, nickname, update)
 
     async def ambient_probability(self) -> float:
         stored: Any = await self.store.get_setting(AMBIENT_PROBABILITY_SETTING, None)
@@ -189,9 +181,7 @@ class AffectionService:
                 affection_max=self.config.mantou_affection_max,
             )
 
-        return await self.store.update_profile(
-            group_id, user_id, nickname, update, now.date().isoformat()
-        )
+        return await self.store.update_profile(group_id, user_id, nickname, update)
 
     async def adjust(
         self,
@@ -200,7 +190,6 @@ class AffectionService:
         nickname: str,
         delta: int,
     ) -> tuple[int, Profile]:
-        today = self._now().date().isoformat()
         nickname = normalize_nickname(nickname, user_id)
 
         def update(profile: Profile) -> tuple[int, Profile]:
@@ -212,4 +201,4 @@ class AffectionService:
             )
             return applied, profile
 
-        return await self.store.update_profile(group_id, user_id, nickname, update, today)
+        return await self.store.update_profile(group_id, user_id, nickname, update)

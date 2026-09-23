@@ -27,7 +27,7 @@ def test_public_api_is_exported() -> None:
     assert callable(get_affection_response)
     assert callable(get_affection_snapshot)
     assert callable(poke)
-    assert PokeResult.__dataclass_fields__.keys() == {"delta", "text", "count", "annoyed"}
+    assert PokeResult.__dataclass_fields__.keys() == {"delta", "text"}
 
 
 async def test_public_read_api_returns_shared_snapshot() -> None:

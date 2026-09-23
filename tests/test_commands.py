@@ -51,11 +51,9 @@ def test_link_notify_default_is_on() -> None:
     assert Config(mantou_affection_link_notify=False).mantou_affection_link_notify is False
 
 
-def test_poke_defaults() -> None:
-    config = Config()
-    assert config.mantou_affection_poke_negative_base == 0.1
-    assert config.mantou_affection_poke_max_penalty == 5
-    assert config.mantou_affection_poke_ignore_threshold == 10
+def test_poke_event_chance_default() -> None:
+    assert Config().mantou_affection_poke_event_chance == 0.01
+    assert Config(mantou_affection_poke_event_chance=0.5).mantou_affection_poke_event_chance == 0.5
 
 
 def test_gain_text_shows_sign() -> None:

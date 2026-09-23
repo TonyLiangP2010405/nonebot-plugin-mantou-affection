@@ -42,11 +42,13 @@ class PendingEvent:
         options: tuple[EventOption, ...],
         trigger_id: str,
         trigger_name: str,
+        penalty_scale: int = 1,
     ):
         self.event = event
         self.options = options
         self.trigger_id = trigger_id
         self.trigger_name = trigger_name
+        self.penalty_scale = penalty_scale
         self.answers: dict[str, PendingAnswer] = {}
         self.task: asyncio.Task | None = None
 
@@ -57,6 +59,11 @@ class PendingEvent:
             return False
         self.answers[user_id] = PendingAnswer(user_id, nickname, index)
         return True
+
+    def scaled_delta(self, delta: int) -> int:
+        """负向变化按倍率放大，正向保持不变。"""
+
+        return delta * self.penalty_scale if delta < 0 else delta
 
 
 class EventCoordinator:
@@ -81,7 +88,13 @@ class EventCoordinator:
 
         return self.rng.random() < self.config.mantou_affection_ambient_event_ratio
 
-    def start(self, group_id: str, user_id: str, nickname: str) -> PendingEvent | None:
+    def start(
+        self,
+        group_id: str,
+        user_id: str,
+        nickname: str,
+        penalty_scale: int = 1,
+    ) -> PendingEvent | None:
         """抽一个事件并登记待作答状态；本群已有未结束事件或事件库为空时返回 None。"""
 
         key = str(group_id)
@@ -95,6 +108,7 @@ class EventCoordinator:
             self.library.shuffled_options(event),
             trigger_id=str(user_id),
             trigger_name=nickname,
+            penalty_scale=penalty_scale,
         )
         self.pending[key] = pending
         return pending
@@ -121,7 +135,7 @@ class EventCoordinator:
             second=options[1].text,
             third=options[2].text,
             timeout=self.config.mantou_affection_event_timeout,
-            penalty=self.config.mantou_affection_event_timeout_penalty,
+            penalty=self.config.mantou_affection_event_timeout_penalty * pending.penalty_scale,
         )
 
     async def settle(
@@ -148,15 +162,19 @@ class EventCoordinator:
 
         for answer in pending.answers.values():
             option = pending.options[answer.index]
+            delta = pending.scaled_delta(option.delta)
             _, profile = await self.service.adjust(
-                str(group_id), answer.user_id, answer.nickname, option.delta
+                str(group_id), answer.user_id, answer.nickname, delta
             )
             add_line(
-                answer.user_id, f"{self._option_reply(option)}，当前 {profile.affection}"
+                answer.user_id,
+                f"{self._option_reply(option, delta)}，当前 {profile.affection}",
             )
 
         if pending.trigger_id not in pending.answers:
-            penalty = self.config.mantou_affection_event_timeout_penalty
+            penalty = (
+                self.config.mantou_affection_event_timeout_penalty * pending.penalty_scale
+            )
             _, profile = await self.service.adjust(
                 str(group_id), pending.trigger_id, pending.trigger_name, -penalty
             )
@@ -167,7 +185,7 @@ class EventCoordinator:
 
         return Message(segments)
 
-    def _option_reply(self, option: EventOption) -> str:
+    def _option_reply(self, option: EventOption, delta: int) -> str:
         if option.delta >= 2:
             verb = "开心地收下了"
         elif option.delta > 0:
@@ -176,8 +194,37 @@ class EventCoordinator:
             verb = "嫌弃地躲开了"
         return (
             f"{self.config.mantou_affection_bot_name}{verb}"
-            f"「{option.text}」，好感度 {option.delta:+d}"
+            f"「{option.text}」，好感度 {delta:+d}"
         )
+
+    async def start_poke_event(
+        self,
+        *,
+        group_id: str,
+        user_id: str,
+        nickname: str,
+        send: Callable[[Message | str], Awaitable[object]] | None,
+        chance: float,
+    ) -> str | None:
+        """戳一戳时按概率发起随机事件，成功返回事件消息文本；否则返回 None。
+
+        戳出来的事件是「扣分翻倍」版：负向选项与超时扣分都按 2 倍结算。
+        事件消息由调用方发送（作为 poke 返回的 text），send 只用于结算消息。
+        """
+
+        if send is None or self.rng.random() >= chance:
+            return None
+        pending = self.start(str(group_id), str(user_id), nickname, penalty_scale=2)
+        if pending is None:
+            return None
+        message = self.event_message(pending)
+        self.schedule(
+            pending,
+            group_id=str(group_id),
+            send=send,
+            timeout=self.config.mantou_affection_event_timeout,
+        )
+        return message
 
     def schedule(
         self,

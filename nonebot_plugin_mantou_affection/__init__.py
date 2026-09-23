@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from nonebot import get_plugin_config, require
@@ -22,6 +23,7 @@ __plugin_meta__ = PluginMetadata(
 
 require("nonebot_plugin_localstore")
 
+from nonebot.adapters.onebot.v11 import Message
 from nonebot_plugin_localstore import get_plugin_data_dir
 
 from .ambient import EventCoordinator, register_ambient
@@ -42,10 +44,9 @@ text_library = AffectionTextLibrary(
 )
 event_library = EventLibrary(Path(__file__).parent / "resources" / "affection_events.json")
 service = AffectionService(store, plugin_config, text_library=text_library)
+event_coordinator = EventCoordinator(service, plugin_config, event_library)
 matchers = register_commands(service, plugin_config)
-ambient_matcher, answer_matcher = register_ambient(
-    service, plugin_config, EventCoordinator(service, plugin_config, event_library)
-)
+ambient_matcher, answer_matcher = register_ambient(service, plugin_config, event_coordinator)
 plugin_linkage = register_plugin_linkage(service, plugin_config)
 
 
@@ -91,10 +92,29 @@ async def get_affection(group_id: str | int, user_id: str | int) -> int:
     return (await service.profile(str(group_id), str(user_id))).affection
 
 
-async def poke(group_id: str | int, user_id: str | int, *, nickname: str = "") -> PokeResult:
-    """戳一戳馒头：记录当天次数，按累进不耐烦规则返回好感变化与回复文案。"""
+async def poke(
+    group_id: str | int,
+    user_id: str | int,
+    *,
+    nickname: str = "",
+    send: Callable[[Message | str], Awaitable[object]] | None = None,
+) -> PokeResult:
+    """戳一戳馒头：好感 +1；有概率戳出一次随机事件，此时 text 为事件消息。
 
-    return await service.poke(str(group_id), str(user_id), nickname)
+    send 是可选的异步发送函数，用于把事件消息与答题结算发到群里；不传则只会正常 +1。
+    """
+
+    result = await service.poke(str(group_id), str(user_id), nickname)
+    event_text = await event_coordinator.start_poke_event(
+        group_id=str(group_id),
+        user_id=str(user_id),
+        nickname=nickname,
+        send=send,
+        chance=plugin_config.mantou_affection_poke_event_chance,
+    )
+    if event_text is None:
+        return result
+    return PokeResult(delta=result.delta, text=event_text)
 
 
 async def get_affection_snapshot(

@@ -44,91 +44,21 @@ def test_profile_round_trip_keeps_gain_fields() -> None:
     assert restored.gain_points == 2
 
 
-def test_profile_defaults_have_empty_poke_fields() -> None:
-    profile = Profile.from_dict("1", {})
-    assert profile.poke_date == ""
-    assert profile.poke_count == 0
+def test_profile_ignores_removed_poke_fields() -> None:
+    profile = Profile.from_dict(
+        "1",
+        {
+            "affection": 5,
+            "poke_date": "2026-09-22",
+            "poke_count": 9,
+            "peak_affection": 30,
+            "zeroed_date": "2026-09-22",
+        },
+    )
 
-
-@pytest.mark.parametrize(
-    ("raw", "expected"),
-    [
-        ({"poke_date": "2026-09-22", "poke_count": 3}, ("2026-09-22", 3)),
-        ({"poke_date": "2026-09-22"}, ("2026-09-22", 0)),
-        ({"poke_count": "4"}, ("", 4)),
-        ({"poke_date": "2026-09-22", "poke_count": "abc"}, ("2026-09-22", 0)),
-        ({"poke_date": "2026-09-22", "poke_count": None}, ("2026-09-22", 0)),
-        ({"poke_date": "2026-09-22", "poke_count": -3}, ("2026-09-22", 0)),
-    ],
-)
-def test_profile_poke_fields_tolerate_dirty_data(raw: dict, expected: tuple) -> None:
-    profile = Profile.from_dict("1", raw)
-    assert (profile.poke_date, profile.poke_count) == expected
-
-
-def test_profile_round_trip_keeps_poke_fields() -> None:
-    profile = Profile("1", poke_date="2026-09-22", poke_count=3)
+    assert profile.affection == 5
     data = profile.to_dict()
-    assert data["poke_date"] == "2026-09-22"
-    assert data["poke_count"] == 3
-
-    restored = Profile.from_dict("1", data)
-    assert restored.poke_date == "2026-09-22"
-    assert restored.poke_count == 3
-
-
-def test_profile_defaults_have_zero_peak_affection() -> None:
-    assert Profile.from_dict("1", {}).peak_affection == 0
-    assert Profile.from_dict("1", None).peak_affection == 0
-
-
-@pytest.mark.parametrize(
-    ("raw", "expected"),
-    [
-        ({"affection": 5, "peak_affection": 9}, 9),
-        ({"affection": 0, "peak_affection": 9}, 9),
-        ({"affection": 5}, 5),
-        ({"affection": 5, "peak_affection": "abc"}, 5),
-        ({"affection": 5, "peak_affection": None}, 5),
-        ({"affection": 5, "peak_affection": -3}, 5),
-        ({"peak_affection": 4}, 4),
-    ],
-)
-def test_profile_peak_affection_tolerates_legacy_data(raw: dict, expected: int) -> None:
-    assert Profile.from_dict("1", raw).peak_affection == expected
-
-
-def test_profile_round_trip_keeps_peak_affection() -> None:
-    profile = Profile("1", affection=3, peak_affection=8)
-    data = profile.to_dict()
-    assert data["peak_affection"] == 8
-
-    assert Profile.from_dict("1", data).peak_affection == 8
-
-
-def test_profile_defaults_have_empty_zeroed_date() -> None:
-    assert Profile.from_dict("1", {}).zeroed_date == ""
-    assert Profile.from_dict("1", None).zeroed_date == ""
-
-
-@pytest.mark.parametrize(
-    ("raw", "expected"),
-    [
-        ({"zeroed_date": "2026-09-22"}, "2026-09-22"),
-        ({
-            "affection": 0
-        }, ""),
-        ({"zeroed_date": ""}, ""),
-        ({"zeroed_date": "2026-09-22", "affection": 5}, "2026-09-22"),
-    ],
-)
-def test_profile_zeroed_date_tolerates_legacy_data(raw: dict, expected: str) -> None:
-    assert Profile.from_dict("1", raw).zeroed_date == expected
-
-
-def test_profile_round_trip_keeps_zeroed_date() -> None:
-    profile = Profile("1", affection=0, peak_affection=6, zeroed_date="2026-09-22")
-    data = profile.to_dict()
-    assert data["zeroed_date"] == "2026-09-22"
-
-    assert Profile.from_dict("1", data).zeroed_date == "2026-09-22"
+    assert "poke_date" not in data
+    assert "poke_count" not in data
+    assert "peak_affection" not in data
+    assert "zeroed_date" not in data
