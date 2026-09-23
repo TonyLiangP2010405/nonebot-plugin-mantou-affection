@@ -29,9 +29,17 @@ MEANINGFUL_STATE_KEYS = {
 
 
 def is_meaningful_trigger(state: dict) -> bool:
-    """只奖励有明确命令/正则/完整匹配的 Matcher，忽略普通消息监听器。"""
+    """只奖励有明确命令/正则/完整匹配的 Matcher，忽略普通消息监听器。
 
-    return any(key in state for key in MEANINGFUL_STATE_KEYS)
+    注意：NoneBot 处理消息事件时 TrieRule.get_value 会无条件往共享 state
+    写入 PREFIX_KEY（非命令消息的值是 command=None 的空壳），所以必须
+    检查值是否真正匹配，而不能只查 key 是否存在。
+    """
+
+    prefix = state.get(PREFIX_KEY)
+    if prefix is not None and getattr(prefix, "command", None) is not None:
+        return True
+    return any(state.get(key) is not None for key in MEANINGFUL_STATE_KEYS - {PREFIX_KEY})
 
 
 def matcher_source(matcher: Matcher) -> str:

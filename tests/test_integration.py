@@ -14,7 +14,7 @@ from nonebot_plugin_mantou_affection.logic import INTERACTIONS, snapshot_for
 
 
 def test_command_and_regex_matchers_are_meaningful() -> None:
-    assert is_meaningful_trigger({PREFIX_KEY: {}})
+    assert is_meaningful_trigger({PREFIX_KEY: SimpleNamespace(command=("水群榜",))})
     assert is_meaningful_trigger({REGEX_MATCHED: object()})
     assert is_meaningful_trigger({FULLMATCH_KEY: "桃系词典"})
 
@@ -22,6 +22,14 @@ def test_command_and_regex_matchers_are_meaningful() -> None:
 def test_plain_message_listener_is_not_rewarded() -> None:
     assert not is_meaningful_trigger({})
     assert not is_meaningful_trigger({"unrelated": True})
+    # TrieRule.get_value 对每条消息事件都无条件写入 PREFIX_KEY 空壳,
+    # 普通消息监听器绝不能因此被视为有效触发(本 bug 的生产事故回归测试)
+    trie_empty_shell = SimpleNamespace(
+        command=None, raw_command=None, command_arg=None,
+        command_start=None, command_whitespace=None,
+    )
+    assert not is_meaningful_trigger({PREFIX_KEY: trie_empty_shell})
+    assert not is_meaningful_trigger({PREFIX_KEY: None})
 
 
 def test_plugin_service_is_wired_to_text_library() -> None:
