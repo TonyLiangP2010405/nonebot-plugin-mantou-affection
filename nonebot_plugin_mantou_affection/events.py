@@ -9,16 +9,14 @@ from typing import Any
 from nonebot import logger
 
 EVENT_DELTAS = (-2, 1, 2)
-UPSET_DELTA = -3
-UPSET_SCALES = (0.5, 2.0)
+UPSET_DELTAS = (-10, -5, 10)
 OPTION_COUNT = 3
 
 
 @dataclass(frozen=True)
 class EventOption:
     text: str
-    delta: int = 0
-    scale: float | None = None
+    delta: int
 
 
 @dataclass(frozen=True)
@@ -28,9 +26,9 @@ class Event:
 
     @property
     def upset(self) -> bool:
-        """闹别扭事件：选项带倍率而不是固定增减。"""
+        """闹别扭事件：正解 +10、普通错误 -5、倍减陷阱 -10。"""
 
-        return any(option.scale is not None for option in self.options)
+        return sorted(option.delta for option in self.options) == sorted(UPSET_DELTAS)
 
 
 class EventLibrary:
@@ -58,34 +56,10 @@ class EventLibrary:
         if not isinstance(raw, dict):
             return None
         text = str(raw.get("text", "")).strip()
-        if not text:
+        delta = raw.get("delta")
+        if not text or isinstance(delta, bool) or not isinstance(delta, int):
             return None
-
-        has_delta = "delta" in raw
-        has_scale = "scale" in raw
-        if has_delta == has_scale:
-            return None
-        if has_delta:
-            delta = raw.get("delta")
-            if isinstance(delta, bool) or not isinstance(delta, int):
-                return None
-            return EventOption(text, delta)
-        scale = raw.get("scale")
-        if isinstance(scale, bool) or not isinstance(scale, (int, float)):
-            return None
-        return EventOption(text, scale=float(scale))
-
-    @staticmethod
-    def _is_normal(options: list[EventOption]) -> bool:
-        if any(option.scale is not None for option in options):
-            return False
-        return sorted(option.delta for option in options) == sorted(EVENT_DELTAS)
-
-    @staticmethod
-    def _is_upset(options: list[EventOption]) -> bool:
-        scales = sorted(option.scale for option in options if option.scale is not None)
-        deltas = [option.delta for option in options if option.scale is None]
-        return scales == list(UPSET_SCALES) and deltas == [UPSET_DELTA]
+        return EventOption(text, delta)
 
     @classmethod
     def _normalize(cls, data: Any) -> tuple[Event, ...]:
@@ -111,10 +85,11 @@ class EventLibrary:
                     f"[mantou-affection] 跳过第 {index + 1} 条随机事件：缺少场景或选项"
                 )
                 continue
-            if not cls._is_normal(valid) and not cls._is_upset(valid):
+            deltas = sorted(option.delta for option in valid)
+            if deltas not in (sorted(EVENT_DELTAS), sorted(UPSET_DELTAS)):
                 logger.warning(
                     f"[mantou-affection] 跳过第 {index + 1} 条随机事件："
-                    f"选项必须是 {EVENT_DELTAS} 或一个 scale {UPSET_SCALES} 配一个 {UPSET_DELTA}"
+                    f"选项数值必须是 {EVENT_DELTAS} 或 {UPSET_DELTAS}"
                 )
                 continue
             events.append(Event(text, tuple(valid)))

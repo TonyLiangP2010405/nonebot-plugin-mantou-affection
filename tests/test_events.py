@@ -26,9 +26,9 @@ def _upset_event(index: int) -> dict:
     return {
         "text": f"闹别扭 {index}",
         "options": [
-            {"text": f"正确哄法 {index}", "scale": 2},
-            {"text": f"普通错误 {index}", "delta": -3},
-            {"text": f"倍减陷阱 {index}", "scale": 0.5},
+            {"text": f"正确哄法 {index}", "delta": 10},
+            {"text": f"普通错误 {index}", "delta": -5},
+            {"text": f"倍减陷阱 {index}", "delta": -10},
         ],
     }
 
@@ -156,10 +156,7 @@ def test_bundled_upset_library_is_valid(bundled_texts_path: Path) -> None:
         assert event.text
         assert event.upset is True
         assert len(event.options) == 3
-        scales = sorted(option.scale for option in event.options if option.scale is not None)
-        deltas = [option.delta for option in event.options if option.scale is None]
-        assert scales == [0.5, 2.0]
-        assert deltas == [-3]
+        assert sorted(option.delta for option in event.options) == [-10, -5, 10]
 
 
 def test_normal_event_is_not_upset(tmp_path: Path) -> None:
@@ -167,10 +164,10 @@ def test_normal_event_is_not_upset(tmp_path: Path) -> None:
     event = library.pick()
     assert event is not None
     assert event.upset is False
-    assert all(option.scale is None for option in event.options)
+    assert sorted(option.delta for option in event.options) == [-2, 1, 2]
 
 
-def test_upset_event_options_keep_scale_after_shuffle(tmp_path: Path) -> None:
+def test_upset_event_keeps_values_after_shuffle(tmp_path: Path) -> None:
     library = EventLibrary(
         _write(tmp_path / "events.json", {"events": [_upset_event(1)]})
     )
@@ -180,77 +177,75 @@ def test_upset_event_options_keep_scale_after_shuffle(tmp_path: Path) -> None:
     for _ in range(10):
         options = EventLibrary.shuffled_options(event)
         assert event.upset is True
-        assert sorted(
-            option.scale for option in options if option.scale is not None
-        ) == [0.5, 2.0]
-        assert [option.delta for option in options if option.scale is None] == [-3]
+        assert sorted(option.delta for option in options) == [-10, -5, 10]
+        assert [option.text for option in options].count("正确哄法 1") == 1
 
 
 @pytest.mark.parametrize(
     "broken",
     [
         {
-            "text": "混用 delta 与 scale",
+            "text": "缺了倍减陷阱",
             "options": [
-                {"text": "甲", "delta": 2, "scale": 2},
-                {"text": "乙", "delta": -3},
-                {"text": "丙", "scale": 0.5},
+                {"text": "甲", "delta": 10},
+                {"text": "乙", "delta": -5},
+                {"text": "丙", "delta": -5},
             ],
         },
         {
-            "text": "错误数值",
+            "text": "混进普通题数值",
             "options": [
-                {"text": "甲", "scale": 2},
-                {"text": "乙", "delta": -3},
-                {"text": "丙", "scale": 1},
-            ],
-        },
-        {
-            "text": "缺少倍减项",
-            "options": [
-                {"text": "甲", "scale": 2},
-                {"text": "乙", "delta": -3},
+                {"text": "甲", "delta": 10},
+                {"text": "乙", "delta": -5},
                 {"text": "丙", "delta": -2},
             ],
         },
         {
-            "text": "重复倍率",
+            "text": "普通题混进正解值",
             "options": [
-                {"text": "甲", "scale": 2},
-                {"text": "乙", "scale": 2},
-                {"text": "丙", "delta": -3},
+                {"text": "甲", "delta": 10},
+                {"text": "乙", "delta": 1},
+                {"text": "丙", "delta": -2},
             ],
         },
         {
-            "text": "普通题混进倍率",
+            "text": "普通题混进倍减值",
             "options": [
                 {"text": "甲", "delta": 2},
                 {"text": "乙", "delta": 1},
-                {"text": "丙", "scale": 0.5},
+                {"text": "丙", "delta": -10},
             ],
         },
         {
-            "text": "闹别扭题混进 -2",
+            "text": "闹别扭题混进 0",
             "options": [
-                {"text": "甲", "scale": 2},
-                {"text": "丙", "delta": -2},
-                {"text": "丙", "scale": 0.5},
+                {"text": "甲", "delta": 10},
+                {"text": "乙", "delta": 0},
+                {"text": "丙", "delta": -10},
             ],
         },
         {
-            "text": "选项既无 delta 也无 scale",
+            "text": "仍在用旧的 scale 写法",
             "options": [
                 {"text": "甲", "scale": 2},
                 {"text": "乙", "delta": -3},
+                {"text": "丙", "scale": 0.5},
+            ],
+        },
+        {
+            "text": "delta 不是整数",
+            "options": [
+                {"text": "甲", "delta": 10.5},
+                {"text": "乙", "delta": -5},
+                {"text": "丙", "delta": -10},
+            ],
+        },
+        {
+            "text": "选项缺少 delta",
+            "options": [
+                {"text": "甲", "delta": 10},
+                {"text": "乙", "delta": -5},
                 {"text": "丙"},
-            ],
-        },
-        {
-            "text": "scale 不是数字",
-            "options": [
-                {"text": "甲", "scale": "2"},
-                {"text": "乙", "delta": -3},
-                {"text": "丙", "scale": 0.5},
             ],
         },
     ],

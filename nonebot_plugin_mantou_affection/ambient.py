@@ -11,7 +11,6 @@ from .commands import GROUP_ONLY
 from .config import Config
 from .events import Event, EventLibrary, EventOption
 from .logic import UPSET_EVENT_RATIOS, snapshot_for
-from .models import Profile
 from .service import AffectionService
 
 ANSWERS = {"1": 0, "2": 1, "3": 2}
@@ -27,10 +26,12 @@ EVENT_MESSAGE = (
 EVENT_PREFIX = "⚡ 触发随机事件！"
 UPSET_PREFIX = "💢 馒头闹别扭了！"
 TIMEOUT_REPLY = "{bot}等不到你的回答，失望地走开了，好感度 -{penalty}"
-UPSET_DOUBLE_REPLY = "{bot}一下子被哄好了，好感度翻倍，当前 {affection}！"
-UPSET_HALVE_REPLY = "{bot}听完更委屈了，好感度减半，当前 {affection}…"
-UPSET_DELTA_REPLY = "{bot}别过脸去，好感度 {delta:+d}，当前 {affection}"
-UPSET_TIMEOUT_REPLY = "{bot}等不到你的回答，心凉了半截，好感度减半，当前 {affection}"
+UPSET_BEST_REPLY = "{bot}一下子被哄好了，好感度 {delta:+d}，当前 {affection}！"
+UPSET_MILD_REPLY = "{bot}别过脸去，好感度 {delta:+d}，当前 {affection}"
+UPSET_WORST_REPLY = "{bot}听完更委屈了，好感度 {delta:+d}，当前 {affection}…"
+UPSET_TIMEOUT_REPLY = "{bot}等不到你的回答，心凉了半截，好感度 {delta:+d}，当前 {affection}"
+UPSET_BEST_DELTA = 10
+UPSET_WORST_DELTA = -10
 
 
 class PendingAnswer:
@@ -164,6 +165,11 @@ class EventCoordinator:
 
     def event_message(self, pending: PendingEvent) -> str:
         options = pending.options
+        base_penalty = (
+            -UPSET_WORST_DELTA
+            if pending.event.upset
+            else self.config.mantou_affection_event_timeout_penalty
+        )
         return EVENT_MESSAGE.format(
             prefix=UPSET_PREFIX if pending.event.upset else EVENT_PREFIX,
             scene=pending.event.text,
@@ -171,7 +177,7 @@ class EventCoordinator:
             second=options[1].text,
             third=options[2].text,
             timeout=self.config.mantou_affection_event_timeout,
-            penalty=self.config.mantou_affection_event_timeout_penalty * pending.penalty_scale,
+            penalty=base_penalty * pending.penalty_scale,
         )
 
     async def settle(
@@ -213,10 +219,13 @@ class EventCoordinator:
 
         bot_name = self.config.mantou_affection_bot_name
         if pending.event.upset:
-            profile = await self._scale_affection(
-                group_id, pending.trigger_id, pending.trigger_name, 0.5
+            penalty = UPSET_WORST_DELTA * pending.penalty_scale
+            _, profile = await self.service.adjust(
+                group_id, pending.trigger_id, pending.trigger_name, penalty
             )
-            return UPSET_TIMEOUT_REPLY.format(bot=bot_name, affection=profile.affection)
+            return UPSET_TIMEOUT_REPLY.format(
+                bot=bot_name, delta=penalty, affection=profile.affection
+            )
 
         penalty = self.config.mantou_affection_event_timeout_penalty * pending.penalty_scale
         _, profile = await self.service.adjust(
@@ -224,16 +233,6 @@ class EventCoordinator:
         )
         reply = TIMEOUT_REPLY.format(bot=bot_name, penalty=penalty)
         return f"{reply}，当前 {profile.affection}"
-
-    async def _scale_affection(
-        self, group_id: str, user_id: str, nickname: str, scale: float
-    ) -> Profile:
-        """按倍率改写好感度（向下取整），返回结算后的档案。"""
-
-        current = (await self.service.profile(group_id, user_id)).affection
-        target = min(self.config.mantou_affection_max, int(current * scale))
-        _, profile = await self.service.adjust(group_id, user_id, nickname, target - current)
-        return profile
 
     async def _settle_answer(
         self,
@@ -245,22 +244,18 @@ class EventCoordinator:
         """结算一位答题者，返回这一行的完整文案。"""
 
         bot_name = self.config.mantou_affection_bot_name
-        if option.scale is not None:
-            scale = option.scale
-            profile = await self._scale_affection(
-                group_id, answer.user_id, answer.nickname, scale
-            )
-            template = UPSET_DOUBLE_REPLY if scale > 1 else UPSET_HALVE_REPLY
-            return template.format(bot=bot_name, affection=profile.affection)
-
         delta = pending.scaled_delta(option.delta)
         _, profile = await self.service.adjust(
             group_id, answer.user_id, answer.nickname, delta
         )
-        if pending.event.upset and option.delta < 0:
-            return UPSET_DELTA_REPLY.format(
-                bot=bot_name, delta=delta, affection=profile.affection
-            )
+        if pending.event.upset:
+            if option.delta == UPSET_BEST_DELTA:
+                template = UPSET_BEST_REPLY
+            elif option.delta == UPSET_WORST_DELTA:
+                template = UPSET_WORST_REPLY
+            else:
+                template = UPSET_MILD_REPLY
+            return template.format(bot=bot_name, delta=delta, affection=profile.affection)
         return f"{self._option_reply(option, delta)}，当前 {profile.affection}"
 
     def _option_reply(self, option: EventOption, delta: int) -> str:
