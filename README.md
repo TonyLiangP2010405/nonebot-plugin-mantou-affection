@@ -251,6 +251,7 @@ MANTOU_AFFECTION_LINK_REWARDS={"nonebot_plugin_taozi":2,"nonebot_plugin_daily_at
 | `/馒头好感榜` | 群员 | 群聊 | 查看本群好感度排行榜 |
 | `/馒头好感帮助` | 群员 | 群聊 | 查看菜单 |
 | `/馒头好感调整 @群友 +10` | SUPERUSER | 群聊 | 手动增加或扣除好感度 |
+| `/馒头好感重置 确认` | SUPERUSER | 群聊/私聊 | 清空所有群所有群友的好感度（需二次确认） |
 | `/馒头反应概率 5%` | SUPERUSER | 群聊/私聊 | 查看或调整小动作触发概率（持久保存） |
 
 ## 插件联动

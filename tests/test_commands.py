@@ -103,6 +103,7 @@ def test_registered_matchers_include_probability_command() -> None:
         _ranking_cmd,
         _help_cmd,
         _adjust_cmd,
+        _reset_cmd,
         probability_cmd,
     ) = matchers
     assert probability_cmd.priority == 10
@@ -153,3 +154,32 @@ async def test_profile_command_reports_daily_gain(tmp_path: Path, monkeypatch) -
 
     assert len(sent) == 1
     assert "今日好感获取：2/3" in sent[0]
+
+
+async def test_reset_command_requires_confirmation(tmp_path: Path, monkeypatch) -> None:
+    service = AffectionService(AffectionStore(tmp_path / "affection.json"), Config())
+
+    def bump(profile: Profile) -> None:
+        profile.affection = 10
+
+    await service.store.update_profile("1", "10", "甲", bump)
+
+    reset_cmd = register_commands(service, Config())[5]
+    sent: list[str] = []
+
+    async def fake_finish(message: Message | str = "", **kwargs) -> None:
+        sent.append(str(message))
+
+    monkeypatch.setattr(reset_cmd, "finish", fake_finish)
+    handler = reset_cmd.handlers[0]
+
+    await handler.call(Message(""))
+    assert "不可恢复" in sent[-1]
+    assert (await service.store.get_profile("1", "10")).affection == 10
+
+    await handler.call(Message("再看看"))
+    assert (await service.store.get_profile("1", "10")).affection == 10
+
+    await handler.call(Message("确认"))
+    assert "共清空 1 条" in sent[-1]
+    assert (await service.store.get_profile("1", "10")).affection == 0

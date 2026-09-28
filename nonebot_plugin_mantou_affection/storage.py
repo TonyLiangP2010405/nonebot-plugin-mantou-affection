@@ -136,3 +136,14 @@ class AffectionStore:
     async def set_setting(self, key: str, value: Any) -> None:
         async with self._lock:
             await asyncio.to_thread(self._set_setting_sync, str(key), value)
+
+    def _reset_all_sync(self) -> int:
+        data = self._load_sync()
+        count = sum(len(group) for group in data["groups"].values() if isinstance(group, dict))
+        data["groups"] = {}
+        self._save_sync()
+        return count
+
+    async def reset_all(self) -> int:
+        async with self._lock:
+            return await asyncio.to_thread(self._reset_all_sync)

@@ -80,6 +80,12 @@ def register_commands(service: AffectionService, config: Config) -> tuple:
         priority=10,
         block=True,
     )
+    reset_cmd = on_command(
+        "馒头好感重置",
+        permission=SUPERUSER,
+        priority=10,
+        block=True,
+    )
     probability_cmd = on_command(
         "馒头反应概率",
         aliases={"馒头小动作概率"},
@@ -160,7 +166,8 @@ def register_commands(service: AffectionService, config: Config) -> tuple:
             "/馒头互动 —— 和馒头玩一会儿\n"
             "/馒头好感 —— 查看自己的好感档案\n"
             "/馒头好感榜 —— 查看本群排行榜\n"
-            "/馒头好感调整 @群友 +10 —— SUPERUSER 调整好感"
+            "/馒头好感调整 @群友 +10 —— SUPERUSER 调整好感\n"
+            "/馒头好感重置 确认 —— SUPERUSER 清空所有好感数据"
         )
 
     @adjust_cmd.handle()
@@ -182,6 +189,22 @@ def register_commands(service: AffectionService, config: Config) -> tuple:
             f" 好感度已调整 {applied:+d}，当前为 {profile.affection}。"
         )
         await adjust_cmd.finish(message)
+
+    @reset_cmd.handle()
+    async def handle_reset(args: Message = CommandArg()) -> None:
+        if args.extract_plain_text().strip() != "确认":
+            await reset_cmd.finish(
+                "⚠️ 这将清空所有群所有群友的好感度数据，且不可恢复！\n"
+                "确认请发送：/馒头好感重置 确认"
+            )
+            return
+        try:
+            count = await service.store.reset_all()
+        except Exception:
+            logger.exception("[mantou-affection] 重置好感度失败")
+            await reset_cmd.finish("重置失败，请检查数据目录权限后重试。")
+            return
+        await reset_cmd.finish(f"已重置全部好感度数据，共清空 {count} 条群友档案。")
 
     @probability_cmd.handle()
     async def handle_probability(args: Message = CommandArg()) -> None:
@@ -212,4 +235,4 @@ def register_commands(service: AffectionService, config: Config) -> tuple:
             f"馒头小动作概率已调整为 {_format_probability(value)}"
         )
 
-    return profile_cmd, interact_cmd, ranking_cmd, help_cmd, adjust_cmd, probability_cmd
+    return profile_cmd, interact_cmd, ranking_cmd, help_cmd, adjust_cmd, reset_cmd, probability_cmd

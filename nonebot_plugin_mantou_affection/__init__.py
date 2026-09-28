@@ -13,7 +13,7 @@ __plugin_meta__ = PluginMetadata(
     description="为群聊机器人馒头提供互动、关系阶段和跨插件共享好感状态",
     usage=(
         "/馒头互动｜/馒头好感｜/馒头好感榜｜/馒头好感帮助\n"
-        "SUPERUSER：/馒头好感调整 @群友 +10｜/馒头反应概率 5%"
+        "SUPERUSER：/馒头好感调整 @群友 +10｜/馒头好感重置 确认｜/馒头反应概率 5%"
     ),
     type="application",
     homepage="https://github.com/TonyLiangP2010405/nonebot-plugin-mantou-affection",

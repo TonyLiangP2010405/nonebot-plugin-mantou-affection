@@ -87,3 +87,26 @@ async def test_legacy_file_without_settings_is_upgraded(tmp_path: Path) -> None:
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["settings"] == {"ambient_probability": 0.5}
     assert payload["groups"]["1"]["2"]["affection"] == 7
+
+
+async def test_reset_all_clears_groups_but_keeps_settings(tmp_path: Path) -> None:
+    path = tmp_path / "affection.json"
+    store = AffectionStore(path)
+
+    def update(profile: Profile) -> None:
+        profile.affection = 10
+
+    await store.update_profile("1", "10", "甲", update)
+    await store.update_profile("1", "20", "乙", update)
+    await store.update_profile("2", "30", "丙", update)
+    await store.set_setting("ambient_probability", 0.5)
+
+    count = await store.reset_all()
+
+    assert count == 3
+    assert (await store.get_profile("1", "10")).affection == 0
+    assert await store.ranking("1", 10) == []
+    assert await AffectionStore(path).get_setting("ambient_probability", 0.01) == 0.5
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["groups"] == {}
+    assert payload["settings"] == {"ambient_probability": 0.5}
