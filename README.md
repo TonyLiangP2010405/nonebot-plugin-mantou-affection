@@ -11,7 +11,7 @@
 - 每插件独立冷却、每日联动奖励上限，避免刷分
 - 互动与联动共享每日好感获取总上限，最快约一年满级；额度用满后互动不会再扣好感
 - SUPERUSER 手动增减群友好感度
-- 群友发言时馒头按概率冒泡的小动作（好感度 >0 才触发，默认 1%），其中约 1/3 会升级为限时随机事件
+- 群友发言时馒头按概率冒泡的小动作（好感度 >0 才触发，默认 0.1%），其中约 1/3 会升级为限时随机事件
 - 戳一戳稳定 +1（受每日获取总上限约束），1% 概率戳出一次扣分翻倍的答题事件
 - 为其他插件提供好感上报与状态读取 API
 - 使用 `nonebot-plugin-localstore` 和原子写入持久化数据
@@ -56,7 +56,7 @@ MANTOU_AFFECTION_LINK_NOTIFY=true
 MANTOU_AFFECTION_LINK_DAILY_LIMIT=10
 MANTOU_AFFECTION_LINK_COOLDOWN=300
 MANTOU_AFFECTION_AMBIENT_ENABLED=true
-MANTOU_AFFECTION_AMBIENT_PROBABILITY=0.01
+MANTOU_AFFECTION_AMBIENT_PROBABILITY=0.001
 MANTOU_AFFECTION_AMBIENT_EVENT_RATIO=0.333
 MANTOU_AFFECTION_EVENT_TIMEOUT=20
 MANTOU_AFFECTION_EVENT_TIMEOUT_PENALTY=5
@@ -88,7 +88,7 @@ SUPERUSER 手动增减不受这个上限限制，`/馒头好感` 会显示当天
 0）则直接用互动池里配对的那句旁白，不套用阶段文案，避免暗示加了好感。
 
 `MANTOU_AFFECTION_AMBIENT_ENABLED` 控制群友发言时馒头是否可能冒泡，`MANTOU_AFFECTION_AMBIENT_PROBABILITY`
-是单次触发的概率（0～1，默认 1%）。SUPERUSER 也可以用 `/馒头反应概率` 在运行时查看或覆盖，覆盖值写进
+是单次触发的概率（0～1，默认 0.1%）。SUPERUSER 也可以用 `/馒头反应概率` 在运行时查看或覆盖，覆盖值写进
 数据文件，重启后依然生效。群友发言时，只要他对馒头的好感度大于 0，馒头就有这个概率 @他冒出一句小动作
 旁白；旁白不引用发言内容，已被命令接管的发言也不会触发，不会影响正常对话。
 
