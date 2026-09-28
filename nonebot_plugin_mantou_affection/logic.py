@@ -37,6 +37,9 @@ INTERACTIONS: tuple[tuple[str, int], ...] = (
 POKE_POSITIVE_FALLBACK = "馒头朝你笑了笑。"
 POKE_POSITIVE_SCENE = "crystelf.poke"
 
+UPSET_WRONG_RATE = 0.05
+UPSET_TRAP_RATE = 0.10
+
 UPSET_EVENT_RATIOS: dict[str, float] = {
     "neutral": 0.0,
     "warm": 0.1,

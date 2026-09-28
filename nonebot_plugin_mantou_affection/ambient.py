@@ -10,7 +10,12 @@ from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message, MessageSegme
 from .commands import GROUP_ONLY
 from .config import Config
 from .events import Event, EventLibrary, EventOption
-from .logic import UPSET_EVENT_RATIOS, snapshot_for
+from .logic import (
+    UPSET_EVENT_RATIOS,
+    UPSET_TRAP_RATE,
+    UPSET_WRONG_RATE,
+    snapshot_for,
+)
 from .service import AffectionService
 
 ANSWERS = {"1": 0, "2": 1, "3": 2}
@@ -21,7 +26,7 @@ EVENT_MESSAGE = (
     "2. {second}\n"
     "3. {third}\n"
     "大家都可以回答，直接发送 1、2、3 即可（答题不用@），"
-    "请在 {timeout} 秒内作答，超时好感度 -{penalty}！"
+    "请在 {timeout} 秒内作答，超时好感度{penalty}！"
 )
 EVENT_PREFIX = "⚡ 触发随机事件！"
 UPSET_PREFIX = "💢 馒头闹别扭了！"
@@ -31,7 +36,9 @@ UPSET_MILD_REPLY = "{bot}别过脸去，好感度 {delta:+d}，当前 {affection
 UPSET_WORST_REPLY = "{bot}听完更委屈了，好感度 {delta:+d}，当前 {affection}…"
 UPSET_TIMEOUT_REPLY = "{bot}等不到你的回答，心凉了半截，好感度 {delta:+d}，当前 {affection}"
 UPSET_BEST_DELTA = 10
+UPSET_WRONG_DELTA = -5
 UPSET_WORST_DELTA = -10
+UPSET_TIMEOUT_HINT = "按比例大扣"
 
 
 class PendingAnswer:
@@ -165,10 +172,11 @@ class EventCoordinator:
 
     def event_message(self, pending: PendingEvent) -> str:
         options = pending.options
-        base_penalty = (
-            -UPSET_WORST_DELTA
+        penalty_hint = (
+            UPSET_TIMEOUT_HINT
             if pending.event.upset
-            else self.config.mantou_affection_event_timeout_penalty
+            else " -"
+            f"{self.config.mantou_affection_event_timeout_penalty * pending.penalty_scale}"
         )
         return EVENT_MESSAGE.format(
             prefix=UPSET_PREFIX if pending.event.upset else EVENT_PREFIX,
@@ -177,7 +185,7 @@ class EventCoordinator:
             second=options[1].text,
             third=options[2].text,
             timeout=self.config.mantou_affection_event_timeout,
-            penalty=base_penalty * pending.penalty_scale,
+            penalty=penalty_hint,
         )
 
     async def settle(
@@ -219,12 +227,17 @@ class EventCoordinator:
 
         bot_name = self.config.mantou_affection_bot_name
         if pending.event.upset:
-            penalty = UPSET_WORST_DELTA * pending.penalty_scale
+            current = (
+                await self.service.profile(group_id, pending.trigger_id)
+            ).affection
+            penalty = self._upset_penalty(
+                current, UPSET_TRAP_RATE, -UPSET_WORST_DELTA
+            ) * pending.penalty_scale
             _, profile = await self.service.adjust(
-                group_id, pending.trigger_id, pending.trigger_name, penalty
+                group_id, pending.trigger_id, pending.trigger_name, -penalty
             )
             return UPSET_TIMEOUT_REPLY.format(
-                bot=bot_name, delta=penalty, affection=profile.affection
+                bot=bot_name, delta=-penalty, affection=profile.affection
             )
 
         penalty = self.config.mantou_affection_event_timeout_penalty * pending.penalty_scale
@@ -233,6 +246,31 @@ class EventCoordinator:
         )
         reply = TIMEOUT_REPLY.format(bot=bot_name, penalty=penalty)
         return f"{reply}，当前 {profile.affection}"
+
+    @staticmethod
+    def _upset_penalty(affection: int, rate: float, minimum: int) -> int:
+        """按当前好感比例算扣分，好感低时保底固定值。"""
+
+        return max(minimum, int(affection * rate))
+
+    async def _upset_delta(
+        self,
+        group_id: str,
+        pending: PendingEvent,
+        answer: PendingAnswer,
+        option: EventOption,
+    ) -> int:
+        """闹别扭题的负向选项按答题者当前好感换算成比例扣分（正解不变）。"""
+
+        if option.delta >= 0:
+            return option.delta
+        rate, minimum = (
+            (UPSET_WRONG_RATE, -UPSET_WRONG_DELTA)
+            if option.delta == UPSET_WRONG_DELTA
+            else (UPSET_TRAP_RATE, -UPSET_WORST_DELTA)
+        )
+        current = (await self.service.profile(group_id, answer.user_id)).affection
+        return -self._upset_penalty(current, rate, minimum) * pending.penalty_scale
 
     async def _settle_answer(
         self,
@@ -244,7 +282,10 @@ class EventCoordinator:
         """结算一位答题者，返回这一行的完整文案。"""
 
         bot_name = self.config.mantou_affection_bot_name
-        delta = pending.scaled_delta(option.delta)
+        if pending.event.upset:
+            delta = await self._upset_delta(group_id, pending, answer, option)
+        else:
+            delta = pending.scaled_delta(option.delta)
         _, profile = await self.service.adjust(
             group_id, answer.user_id, answer.nickname, delta
         )
