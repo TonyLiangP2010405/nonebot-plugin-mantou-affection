@@ -9,8 +9,9 @@ from typing import Any
 from nonebot import logger
 
 EVENT_DELTAS = (-2, 1, 2)
-UPSET_DELTAS = (-10, -5, 10)
-OPTION_COUNT = 3
+UPSET_DELTAS = (-10, -10, -5, -5, -5, 10)
+NORMAL_OPTION_COUNT = 3
+UPSET_OPTION_COUNT = 6
 
 
 @dataclass(frozen=True)
@@ -26,9 +27,9 @@ class Event:
 
     @property
     def upset(self) -> bool:
-        """闹别扭事件：正解 +10、普通错误 -5、倍减陷阱 -10。"""
+        """闹别扭事件：1 个正解 +10、3 个普通错误 -5、2 个倍减陷阱 -10。"""
 
-        return sorted(option.delta for option in self.options) == sorted(UPSET_DELTAS)
+        return sorted(option.delta for option in self.options) == list(UPSET_DELTAS)
 
 
 class EventLibrary:
@@ -80,13 +81,14 @@ class EventLibrary:
                 else []
             )
             valid = [option for option in options if option is not None]
-            if not text or len(valid) != OPTION_COUNT:
+            if not text or len(valid) not in (NORMAL_OPTION_COUNT, UPSET_OPTION_COUNT):
                 logger.warning(
-                    f"[mantou-affection] 跳过第 {index + 1} 条随机事件：缺少场景或选项"
+                    f"[mantou-affection] 跳过第 {index + 1} 条随机事件："
+                    f"选项数量必须是 {NORMAL_OPTION_COUNT} 或 {UPSET_OPTION_COUNT}"
                 )
                 continue
             deltas = sorted(option.delta for option in valid)
-            if deltas not in (sorted(EVENT_DELTAS), sorted(UPSET_DELTAS)):
+            if deltas not in (sorted(EVENT_DELTAS), list(UPSET_DELTAS)):
                 logger.warning(
                     f"[mantou-affection] 跳过第 {index + 1} 条随机事件："
                     f"选项数值必须是 {EVENT_DELTAS} 或 {UPSET_DELTAS}"

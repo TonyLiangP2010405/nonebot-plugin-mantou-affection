@@ -27,8 +27,11 @@ def _upset_event(index: int) -> dict:
         "text": f"闹别扭 {index}",
         "options": [
             {"text": f"正确哄法 {index}", "delta": 10},
-            {"text": f"普通错误 {index}", "delta": -5},
-            {"text": f"倍减陷阱 {index}", "delta": -10},
+            {"text": f"普通错误甲 {index}", "delta": -5},
+            {"text": f"普通错误乙 {index}", "delta": -5},
+            {"text": f"普通错误丙 {index}", "delta": -5},
+            {"text": f"倍减陷阱甲 {index}", "delta": -10},
+            {"text": f"倍减陷阱乙 {index}", "delta": -10},
         ],
     }
 
@@ -155,8 +158,8 @@ def test_bundled_upset_library_is_valid(bundled_texts_path: Path) -> None:
     for event in library.events:
         assert event.text
         assert event.upset is True
-        assert len(event.options) == 3
-        assert sorted(option.delta for option in event.options) == [-10, -5, 10]
+        assert len(event.options) == 6
+        assert sorted(option.delta for option in event.options) == [-10, -10, -5, -5, -5, 10]
 
 
 def test_normal_event_is_not_upset(tmp_path: Path) -> None:
@@ -177,67 +180,87 @@ def test_upset_event_keeps_values_after_shuffle(tmp_path: Path) -> None:
     for _ in range(10):
         options = EventLibrary.shuffled_options(event)
         assert event.upset is True
-        assert sorted(option.delta for option in options) == [-10, -5, 10]
-        assert [option.text for option in options].count("正确哄法 1") == 1
+        assert sorted(option.delta for option in options) == [-10, -10, -5, -5, -5, 10]
+        texts = [option.text for option in options]
+        assert texts.count("正确哄法 1") == 1
+        assert len(set(texts)) == 6
 
 
 @pytest.mark.parametrize(
     "broken",
     [
         {
-            "text": "缺了倍减陷阱",
+            "text": "只有 5 个选项",
             "options": [
                 {"text": "甲", "delta": 10},
                 {"text": "乙", "delta": -5},
                 {"text": "丙", "delta": -5},
+                {"text": "丁", "delta": -5},
+                {"text": "戊", "delta": -10},
             ],
         },
         {
-            "text": "混进普通题数值",
+            "text": "只有 7 个选项",
             "options": [
                 {"text": "甲", "delta": 10},
                 {"text": "乙", "delta": -5},
-                {"text": "丙", "delta": -2},
+                {"text": "丙", "delta": -5},
+                {"text": "丁", "delta": -5},
+                {"text": "戊", "delta": -10},
+                {"text": "己", "delta": -10},
+                {"text": "庚", "delta": -10},
             ],
         },
         {
-            "text": "普通题混进正解值",
+            "text": "少了两个普通错",
             "options": [
                 {"text": "甲", "delta": 10},
-                {"text": "乙", "delta": 1},
-                {"text": "丙", "delta": -2},
+                {"text": "乙", "delta": -5},
+                {"text": "丙", "delta": -5},
+                {"text": "丁", "delta": -2},
+                {"text": "戊", "delta": -10},
+                {"text": "己", "delta": -10},
             ],
         },
         {
-            "text": "普通题混进倍减值",
+            "text": "多了两个正解",
+            "options": [
+                {"text": "甲", "delta": 10},
+                {"text": "乙", "delta": 10},
+                {"text": "丙", "delta": 10},
+                {"text": "丁", "delta": -5},
+                {"text": "戊", "delta": -10},
+                {"text": "己", "delta": -10},
+            ],
+        },
+        {
+            "text": "三个倍减陷阱",
+            "options": [
+                {"text": "甲", "delta": 10},
+                {"text": "乙", "delta": -5},
+                {"text": "丙", "delta": -5},
+                {"text": "丁", "delta": -10},
+                {"text": "戊", "delta": -10},
+                {"text": "己", "delta": -10},
+            ],
+        },
+        {
+            "text": "仍然是 3 选项的旧格式",
+            "options": [
+                {"text": "甲", "delta": 10},
+                {"text": "乙", "delta": -5},
+                {"text": "丙", "delta": -10},
+            ],
+        },
+        {
+            "text": "普通题混入 6 选项",
             "options": [
                 {"text": "甲", "delta": 2},
                 {"text": "乙", "delta": 1},
-                {"text": "丙", "delta": -10},
-            ],
-        },
-        {
-            "text": "闹别扭题混进 0",
-            "options": [
-                {"text": "甲", "delta": 10},
-                {"text": "乙", "delta": 0},
-                {"text": "丙", "delta": -10},
-            ],
-        },
-        {
-            "text": "仍在用旧的 scale 写法",
-            "options": [
-                {"text": "甲", "scale": 2},
-                {"text": "乙", "delta": -3},
-                {"text": "丙", "scale": 0.5},
-            ],
-        },
-        {
-            "text": "delta 不是整数",
-            "options": [
-                {"text": "甲", "delta": 10.5},
-                {"text": "乙", "delta": -5},
-                {"text": "丙", "delta": -10},
+                {"text": "丙", "delta": -2},
+                {"text": "丁", "delta": 2},
+                {"text": "戊", "delta": 1},
+                {"text": "己", "delta": -2},
             ],
         },
         {
@@ -245,7 +268,10 @@ def test_upset_event_keeps_values_after_shuffle(tmp_path: Path) -> None:
             "options": [
                 {"text": "甲", "delta": 10},
                 {"text": "乙", "delta": -5},
-                {"text": "丙"},
+                {"text": "丙", "delta": -5},
+                {"text": "丁", "delta": -5},
+                {"text": "戊", "delta": -10},
+                {"text": "己"},
             ],
         },
     ],

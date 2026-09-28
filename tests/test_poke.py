@@ -294,7 +294,8 @@ async def test_poke_event_message_shows_double_timeout_penalty(
     message = coordinator.event_message(pending)
 
     assert "请在 3 秒内作答" in message
-    assert "超时好感度 -10！" in message
+    assert "超时好感度 -10！" not in message
+    assert "被点名的群友超时未答好感度 -10！" in message
     assert coordinator.pending == {GROUP_ID: pending}
 
 
@@ -373,7 +374,7 @@ async def test_poke_api_returns_event_message_when_triggered(
 
     assert result.delta == 1
     assert result.text.startswith("⚡ 触发随机事件！")
-    assert "超时好感度 -10！" in result.text
+    assert "被点名的群友超时未答好感度 -10！" in result.text
     # 事件消息由调用方发送(poke 返回的 text), send 只用于结算消息
     assert events == []
     assert POKE_POSITIVE_FALLBACK not in result.text

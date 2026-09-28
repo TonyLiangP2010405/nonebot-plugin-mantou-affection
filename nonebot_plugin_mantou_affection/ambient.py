@@ -18,16 +18,15 @@ from .logic import (
 )
 from .service import AffectionService
 
-ANSWERS = {"1": 0, "2": 1, "3": 2}
+ANSWERS = {"1": 0, "2": 1, "3": 2, "4": 3, "5": 4, "6": 5}
 EVENT_MESSAGE = (
     "{prefix}\n"
     "{scene}\n"
-    "1. {first}\n"
-    "2. {second}\n"
-    "3. {third}\n"
-    "大家都可以回答，直接发送 1、2、3 即可（答题不用@），"
-    "请在 {timeout} 秒内作答，超时好感度{penalty}！"
+    "{options}\n"
+    "大家都可以回答，直接发送 {answer_hint} 即可（答题不用@）；\n"
+    "请在 {timeout} 秒内作答，被点名的群友超时未答好感度{penalty}！"
 )
+ANSWER_HINT_SEPARATOR = "、"
 EVENT_PREFIX = "⚡ 触发随机事件！"
 UPSET_PREFIX = "💢 馒头闹别扭了！"
 TIMEOUT_REPLY = "{bot}等不到你的回答，失望地走开了，好感度 -{penalty}"
@@ -166,7 +165,7 @@ class EventCoordinator:
         if pending is None:
             return False
         index = ANSWERS.get(text.strip())
-        if index is None:
+        if index is None or index >= len(pending.options):
             return False
         return pending.record(str(user_id), nickname, index)
 
@@ -178,12 +177,17 @@ class EventCoordinator:
             else " -"
             f"{self.config.mantou_affection_event_timeout_penalty * pending.penalty_scale}"
         )
+        option_lines = "\n".join(
+            f"{index}. {option.text}" for index, option in enumerate(options, start=1)
+        )
+        answer_hint = ANSWER_HINT_SEPARATOR.join(
+            str(index) for index in range(1, len(options) + 1)
+        )
         return EVENT_MESSAGE.format(
             prefix=UPSET_PREFIX if pending.event.upset else EVENT_PREFIX,
             scene=pending.event.text,
-            first=options[0].text,
-            second=options[1].text,
-            third=options[2].text,
+            options=option_lines,
+            answer_hint=answer_hint,
             timeout=self.config.mantou_affection_event_timeout,
             penalty=penalty_hint,
         )

@@ -80,8 +80,32 @@ def _events_path(bundled_texts_path: Path) -> Path:
     return bundled_texts_path.with_name("affection_events.json")
 
 
-def _upset_events_path(bundled_texts_path: Path) -> Path:
-    return bundled_texts_path.with_name("affection_events_upset.json")
+def _upset_events(count: int = 3) -> list[dict]:
+    """测试自带的 6 选项闹别扭题，避免依赖并发流程正在改写的资源文件。"""
+
+    return [
+        {
+            "text": f"闹别扭场景 {index}",
+            "options": [
+                {"text": f"正解 {index}", "delta": 10},
+                {"text": f"普通错甲 {index}", "delta": -5},
+                {"text": f"普通错乙 {index}", "delta": -5},
+                {"text": f"普通错丙 {index}", "delta": -5},
+                {"text": f"陷阱甲 {index}", "delta": -10},
+                {"text": f"陷阱乙 {index}", "delta": -10},
+            ],
+        }
+        for index in range(1, count + 1)
+    ]
+
+
+def _upset_library(service: AffectionService) -> EventLibrary:
+    path = service.store.path.parent / "upset_events.json"
+    if not path.is_file():
+        path.write_text(
+            json.dumps({"events": _upset_events()}, ensure_ascii=False), encoding="utf-8"
+        )
+    return EventLibrary(path)
 
 
 def _coordinator(
@@ -96,9 +120,7 @@ def _coordinator(
         service,
         config,
         EventLibrary(_events_path(bundled_texts_path)),
-        upset_library=(
-            EventLibrary(_upset_events_path(bundled_texts_path)) if upset_library else None
-        ),
+        upset_library=_upset_library(service) if upset_library else None,
         rng=rng,
     )
 
@@ -270,7 +292,7 @@ async def test_full_event_ratio_sends_event_message(
     text = _body(sent[0]).strip()
     assert text.startswith("⚡ 触发随机事件！")
     assert "大家都可以回答，直接发送 1、2、3 即可（答题不用@）" in text
-    assert "请在 3 秒内作答，超时好感度 -5！" in text
+    assert "请在 3 秒内作答，被点名的群友超时未答好感度 -5！" in text
     pending = coordinator.pending[GROUP_ID]
     assert pending.trigger_id == TRIGGER_ID
     library_options = {
@@ -540,7 +562,7 @@ def test_upset_correct_option_position_varies(
     service = _service(tmp_path)
     positions = set()
 
-    for _ in range(40):
+    for _ in range(60):
         coordinator = _coordinator(
             service, Config(), bundled_texts_path, rng=FixedRng(0.0)
         )
@@ -554,7 +576,7 @@ def test_upset_correct_option_position_varies(
             )
         )
 
-    assert positions == {0, 1, 2}
+    assert positions == {0, 1, 2, 3, 4, 5}
 
 
 def test_upset_event_message_uses_upset_prefix(
@@ -570,9 +592,11 @@ def test_upset_event_message_uses_upset_prefix(
 
     assert message.startswith("💢 馒头闹别扭了！")
     assert pending.event.text in message
-    assert "大家都可以回答，直接发送 1、2、3 即可（答题不用@）" in message
-    assert "请在 20 秒内作答，超时好感度按比例大扣！" in message
+    assert "大家都可以回答，直接发送 1、2、3、4、5、6 即可（答题不用@）" in message
+    assert "请在 20 秒内作答，被点名的群友超时未答好感度按比例大扣！" in message
     assert all(option.text in message for option in pending.options)
+    for position, option in enumerate(pending.options, start=1):
+        assert f"{position}. {option.text}" in message
 
 
 def test_normal_event_message_uses_plain_prefix(
@@ -961,5 +985,89 @@ async def test_poke_upset_event_message_shows_relative_hint(
     message = coordinator.event_message(pending)
 
     assert message.startswith("💢 馒头闹别扭了！")
-    assert "超时好感度按比例大扣！" in message
+    assert "被点名的群友超时未答好感度按比例大扣！" in message
     assert "超时好感度 -" not in message
+
+
+async def test_upset_answers_four_to_six_settle(
+    tmp_path: Path, bundled_texts_path: Path
+) -> None:
+    service = _service(tmp_path)
+    coordinator = _coordinator(service, Config(), bundled_texts_path, rng=FixedRng(0.0))
+    await _give_affection(service, 200)
+    for user_id in ("91003", "91004", "91005"):
+        await _give_affection(service, 100, user_id=user_id)
+    pending = coordinator.start(GROUP_ID, TRIGGER_ID, "桃友", affection=999)
+    assert pending is not None and pending.event.upset is True
+    assert len(pending.options) == 6
+
+    for index in (3, 4, 5):
+        assert coordinator.answer(GROUP_ID, f"9100{index}", "路人", str(index)) is True
+    assert coordinator.answer(GROUP_ID, TRIGGER_ID, "桃友", "1") is True
+
+    sent = await _settle(coordinator)
+
+    lines = _lines(sent[0])
+    assert _at_ids(sent[0]) == ["91003", "91004", "91005", TRIGGER_ID]
+    assert len(lines) == 4
+    assert "等不到你的回答" not in str(sent[0])
+    for line, index in zip(lines[:3], (3, 4, 5)):
+        option = pending.options[index - 1]
+        if option.delta >= 0:
+            assert line.endswith("好感度 +10，当前 110！")
+        elif option.delta == -5:
+            assert line.endswith("好感度 -5，当前 95")
+        else:
+            assert line.endswith("好感度 -10，当前 90…")
+    for user_id in ("91003", "91004", "91005"):
+        assert (await service.profile(GROUP_ID, user_id)).affection in (90, 95, 110)
+
+
+async def test_upset_answer_seven_is_ignored(
+    tmp_path: Path, bundled_texts_path: Path
+) -> None:
+    service = _service(tmp_path)
+    coordinator = _coordinator(service, Config(), bundled_texts_path, rng=FixedRng(0.0))
+    await _give_affection(service, 200)
+    pending = coordinator.start(GROUP_ID, TRIGGER_ID, "桃友", affection=999)
+    assert pending is not None and pending.event.upset is True
+
+    for text in ("7", "8", "0", "10"):
+        assert coordinator.answer(GROUP_ID, OTHER_ID, "路人", text) is False
+    assert pending.answers == {}
+    coordinator.discard(GROUP_ID)
+
+
+async def test_normal_event_answer_four_is_ignored(
+    tmp_path: Path, bundled_texts_path: Path
+) -> None:
+    service = _service(tmp_path)
+    coordinator = _coordinator(service, Config(), bundled_texts_path, rng=FixedRng(0.99))
+    await _give_affection(service, 200)
+    pending = coordinator.start(GROUP_ID, TRIGGER_ID, "桃友", affection=0)
+    assert pending is not None and pending.event.upset is False
+
+    assert coordinator.answer(GROUP_ID, OTHER_ID, "路人", "4") is False
+    assert coordinator.answer(GROUP_ID, OTHER_ID, "路人", "6") is False
+    assert coordinator.answer(GROUP_ID, OTHER_ID, "路人", "3") is True
+    assert list(pending.answers) == [OTHER_ID]
+    coordinator.discard(GROUP_ID)
+
+
+async def test_normal_event_message_still_lists_three_options(
+    tmp_path: Path, bundled_texts_path: Path
+) -> None:
+    config = Config()
+    service = _service(tmp_path, config=config)
+    coordinator = _coordinator(service, config, bundled_texts_path, rng=FixedRng(0.99))
+    pending = coordinator.start(GROUP_ID, TRIGGER_ID, "桃友", affection=0)
+    assert pending is not None and pending.event.upset is False
+
+    message = coordinator.event_message(pending)
+
+    assert message.startswith("⚡ 触发随机事件！")
+    assert "大家都可以回答，直接发送 1、2、3 即可（答题不用@）" in message
+    assert "1、2、3、4" not in message
+    for position, option in enumerate(pending.options, start=1):
+        assert f"{position}. {option.text}" in message
+    assert "4." not in message

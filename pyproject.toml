@@ -1,6 +1,6 @@
 [project]
 name = "nonebot-plugin-mantou-affection"
-version = "0.7.2"
+version = "0.8.0"
 description = "为群聊机器人馒头提供互动、等级称号和跨插件共享状态的好感度系统"
 authors = [{ name = "TonyLiangP2010405" }]
 license = "MIT"
@@ -41,6 +41,8 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 target-version = "py39"
+# 文案批量生成的临时目录（未跟踪、用后自删），不参与检查
+extend-exclude = [".textgen_*"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
