@@ -17,6 +17,7 @@ from nonebot_plugin_mantou_affection.ambient import (
 from nonebot_plugin_mantou_affection.config import Config
 from nonebot_plugin_mantou_affection.copywriting import AffectionTextLibrary
 from nonebot_plugin_mantou_affection.events import EventLibrary
+from nonebot_plugin_mantou_affection.logic import UPSET_EVENT_RATIOS, snapshot_for
 from nonebot_plugin_mantou_affection.models import Profile
 from nonebot_plugin_mantou_affection.service import AffectionService
 from nonebot_plugin_mantou_affection.storage import AffectionStore
@@ -24,6 +25,17 @@ from nonebot_plugin_mantou_affection.storage import AffectionStore
 GROUP_ID = "90001"
 TRIGGER_ID = "90002"
 OTHER_ID = "90003"
+
+
+class FixedRng(random.Random):
+    """固定 random() 返回值，用来精确控制抽题与触发判定。"""
+
+    def __init__(self, value: float):
+        super().__init__(0)
+        self.value = value
+
+    def random(self) -> float:
+        return self.value
 
 
 def _event(
@@ -68,6 +80,29 @@ def _events_path(bundled_texts_path: Path) -> Path:
     return bundled_texts_path.with_name("affection_events.json")
 
 
+def _upset_events_path(bundled_texts_path: Path) -> Path:
+    return bundled_texts_path.with_name("affection_events_upset.json")
+
+
+def _coordinator(
+    service: AffectionService,
+    config: Config,
+    bundled_texts_path: Path,
+    *,
+    rng: random.Random,
+    upset_library: bool = True,
+) -> EventCoordinator:
+    return EventCoordinator(
+        service,
+        config,
+        EventLibrary(_events_path(bundled_texts_path)),
+        upset_library=(
+            EventLibrary(_upset_events_path(bundled_texts_path)) if upset_library else None
+        ),
+        rng=rng,
+    )
+
+
 async def _give_affection(service: AffectionService, score: int, user_id: str = TRIGGER_ID) -> None:
     def bump(profile: Profile) -> None:
         profile.affection = score
@@ -91,11 +126,10 @@ def _setup(
     monkeypatch,
     **config_kwargs,
 ) -> tuple:
+    rng = config_kwargs.pop("coordinator_rng", random.Random(0))
     config = Config(mantou_affection_ambient_probability=1.0, **config_kwargs)
     service = _service(tmp_path, AffectionTextLibrary(bundled_texts_path), config)
-    coordinator = EventCoordinator(
-        service, config, EventLibrary(_events_path(bundled_texts_path)), rng=random.Random(0)
-    )
+    coordinator = _coordinator(service, config, bundled_texts_path, rng=rng)
     ambient, answer = register_ambient(service, config, coordinator)
     sent = _capture_send(ambient, monkeypatch)
     return coordinator, sent, ambient, answer
@@ -235,7 +269,8 @@ async def test_full_event_ratio_sends_event_message(
     assert len(sent) == 1
     text = _body(sent[0]).strip()
     assert text.startswith("⚡ 触发随机事件！")
-    assert "请在 3 秒内作答，直接发送 1、2、3 即可（答题不用@），超时好感度 -5！" in text
+    assert "大家都可以回答，直接发送 1、2、3 即可（答题不用@）" in text
+    assert "请在 3 秒内作答，超时好感度 -5！" in text
     pending = coordinator.pending[GROUP_ID]
     assert pending.trigger_id == TRIGGER_ID
     library_options = {
@@ -431,3 +466,412 @@ async def test_event_timeout_applies_penalty(
 async def test_start_without_library_returns_none(tmp_path: Path) -> None:
     coordinator = EventCoordinator(_service(tmp_path), Config(), None, rng=random.Random(0))
     assert coordinator.start(GROUP_ID, TRIGGER_ID, "桃友") is None
+
+
+# ---------------------------------------------- 闹别扭事件 / 抽题与结算
+
+
+@pytest.mark.parametrize(
+    ("affection", "band", "ratio"),
+    [
+        (0, "neutral", 0.0),
+        (10, "neutral", 0.0),
+        (30, "warm", 0.1),
+        (60, "close", 0.2),
+        (100, "flirty", 0.35),
+        (160, "intimate", 0.5),
+        (999, "intimate", 0.5),
+    ],
+)
+def test_upset_ratio_table(affection: int, band: str, ratio: float) -> None:
+    assert snapshot_for(affection).band == band
+    assert UPSET_EVENT_RATIOS[band] == ratio
+
+
+@pytest.mark.parametrize(
+    ("affection", "value", "upset"),
+    [
+        (0, 0.0, False),
+        (30, 0.05, True),
+        (30, 0.15, False),
+        (60, 0.15, True),
+        (60, 0.25, False),
+        (100, 0.30, True),
+        (100, 0.40, False),
+        (160, 0.45, True),
+        (160, 0.55, False),
+    ],
+)
+def test_start_picks_library_by_affection(
+    tmp_path: Path,
+    bundled_texts_path: Path,
+    affection: int,
+    value: float,
+    upset: bool,
+) -> None:
+    service = _service(tmp_path)
+    coordinator = _coordinator(
+        service, Config(), bundled_texts_path, rng=FixedRng(value)
+    )
+
+    pending = coordinator.start(GROUP_ID, TRIGGER_ID, "桃友", affection=affection)
+
+    assert pending is not None
+    assert pending.event.upset is upset
+
+
+def test_start_falls_back_to_normal_library(
+    tmp_path: Path, bundled_texts_path: Path
+) -> None:
+    service = _service(tmp_path)
+    coordinator = _coordinator(
+        service, Config(), bundled_texts_path, rng=FixedRng(0.0), upset_library=False
+    )
+
+    pending = coordinator.start(GROUP_ID, TRIGGER_ID, "桃友", affection=999)
+
+    assert pending is not None
+    assert pending.event.upset is False
+
+
+def test_upset_correct_option_position_varies(
+    tmp_path: Path, bundled_texts_path: Path
+) -> None:
+    service = _service(tmp_path)
+    positions = set()
+
+    for _ in range(40):
+        coordinator = _coordinator(
+            service, Config(), bundled_texts_path, rng=FixedRng(0.0)
+        )
+        pending = coordinator.start(GROUP_ID, TRIGGER_ID, "桃友", affection=999)
+        assert pending is not None and pending.event.upset is True
+        positions.add(
+            next(
+                index
+                for index, option in enumerate(pending.options)
+                if option.scale is not None and option.scale > 1
+            )
+        )
+
+    assert positions == {0, 1, 2}
+
+
+def test_upset_event_message_uses_upset_prefix(
+    tmp_path: Path, bundled_texts_path: Path
+) -> None:
+    config = Config(mantou_affection_event_timeout=20)
+    service = _service(tmp_path, config=config)
+    coordinator = _coordinator(service, config, bundled_texts_path, rng=FixedRng(0.0))
+    pending = coordinator.start(GROUP_ID, TRIGGER_ID, "桃友", affection=999)
+    assert pending is not None
+
+    message = coordinator.event_message(pending)
+
+    assert message.startswith("💢 馒头闹别扭了！")
+    assert pending.event.text in message
+    assert "大家都可以回答，直接发送 1、2、3 即可（答题不用@）" in message
+    assert "请在 20 秒内作答，超时好感度 -5！" in message
+    assert all(option.text in message for option in pending.options)
+
+
+def test_normal_event_message_uses_plain_prefix(
+    tmp_path: Path, bundled_texts_path: Path
+) -> None:
+    config = Config()
+    service = _service(tmp_path, config=config)
+    coordinator = _coordinator(service, config, bundled_texts_path, rng=FixedRng(0.99))
+    pending = coordinator.start(GROUP_ID, TRIGGER_ID, "桃友", affection=0)
+    assert pending is not None
+
+    message = coordinator.event_message(pending)
+
+    assert message.startswith("⚡ 触发随机事件！")
+    assert "大家都可以回答，直接发送 1、2、3 即可（答题不用@）" in message
+    assert message.count("💢") == 0
+
+
+async def _answer_upset(
+    coordinator: EventCoordinator, affection: int, *, scale: float | None = None
+) -> tuple[list[Message], PendingEvent]:
+    await _give_affection(coordinator.service, affection)
+    pending = coordinator.start(GROUP_ID, TRIGGER_ID, "桃友", affection=999)
+    assert pending is not None
+    assert pending.event.upset is True
+    if scale is None:
+        index = next(
+            position
+            for position, option in enumerate(pending.options)
+            if option.scale is None
+        )
+    else:
+        index = next(
+            position
+            for position, option in enumerate(pending.options)
+            if option.scale == scale
+        )
+    assert coordinator.answer(GROUP_ID, TRIGGER_ID, "桃友", str(index + 1)) is True
+    return await _settle(coordinator), pending
+
+
+async def test_upset_double_option_doubles_affection(
+    tmp_path: Path, bundled_texts_path: Path
+) -> None:
+    service = _service(tmp_path)
+    coordinator = _coordinator(service, Config(), bundled_texts_path, rng=FixedRng(0.0))
+
+    sent, _pending = await _answer_upset(coordinator, 30, scale=2)
+
+    assert _at_ids(sent[0]) == [TRIGGER_ID]
+    assert _lines(sent[0])[0].endswith("馒头一下子被哄好了，好感度翻倍，当前 60！")
+    assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == 60
+
+
+async def test_upset_halve_option_floors_affection(
+    tmp_path: Path, bundled_texts_path: Path
+) -> None:
+    service = _service(tmp_path)
+    coordinator = _coordinator(service, Config(), bundled_texts_path, rng=FixedRng(0.0))
+
+    sent, _pending = await _answer_upset(coordinator, 31, scale=0.5)
+
+    assert _lines(sent[0])[0].endswith("馒头听完更委屈了，好感度减半，当前 15…")
+    assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == 15
+
+
+async def test_upset_double_keeps_zero_affection(
+    tmp_path: Path, bundled_texts_path: Path
+) -> None:
+    service = _service(tmp_path)
+    coordinator = _coordinator(service, Config(), bundled_texts_path, rng=FixedRng(0.0))
+
+    sent, _pending = await _answer_upset(coordinator, 0, scale=2)
+
+    assert _lines(sent[0])[0].endswith("馒头一下子被哄好了，好感度翻倍，当前 0！")
+    assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == 0
+
+
+async def test_upset_trap_option_applies_fixed_penalty(
+    tmp_path: Path, bundled_texts_path: Path
+) -> None:
+    service = _service(tmp_path)
+    coordinator = _coordinator(service, Config(), bundled_texts_path, rng=FixedRng(0.0))
+
+    sent, _pending = await _answer_upset(coordinator, 30, scale=None)
+
+    assert _lines(sent[0])[0].endswith("馒头别过脸去，好感度 -3，当前 27")
+    assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == 27
+
+
+async def test_upset_settlement_ignores_daily_gain_limit(
+    tmp_path: Path, bundled_texts_path: Path
+) -> None:
+    config = Config(mantou_affection_daily_gain_limit=1)
+    service = _service(tmp_path, config=config)
+    coordinator = _coordinator(service, config, bundled_texts_path, rng=FixedRng(0.0))
+    today = service._now().date().isoformat()
+
+    def limited(profile: Profile) -> None:
+        profile.affection = 40
+        profile.gain_date = today
+        profile.gain_points = 1
+
+    await service.store.update_profile(GROUP_ID, TRIGGER_ID, "桃友", limited)
+    pending = coordinator.start(GROUP_ID, TRIGGER_ID, "桃友", affection=999)
+    assert pending is not None
+    index = next(
+        position for position, option in enumerate(pending.options) if option.scale == 2
+    )
+    assert coordinator.answer(GROUP_ID, TRIGGER_ID, "桃友", str(index + 1)) is True
+
+    sent = await _settle(coordinator)
+
+    assert _lines(sent[0])[0].endswith("好感度翻倍，当前 80！")
+    profile = await service.profile(GROUP_ID, TRIGGER_ID)
+    assert profile.affection == 80
+    assert profile.gain_points == 1
+
+
+async def test_poke_event_upgrades_to_upset_with_high_affection(
+    tmp_path: Path, bundled_texts_path: Path
+) -> None:
+    service = _service(tmp_path)
+    coordinator = _coordinator(service, Config(), bundled_texts_path, rng=FixedRng(0.0))
+    await _give_affection(service, 999)
+
+    async def fake_send(message) -> None:
+        return None
+
+    started = await coordinator.start_poke_event(
+        group_id=GROUP_ID,
+        user_id=TRIGGER_ID,
+        nickname="桃友",
+        send=fake_send,
+        chance=1.0,
+        affection=999,
+    )
+
+    assert started is not None
+    assert started.startswith("💢 馒头闹别扭了！")
+    pending = coordinator.pending[GROUP_ID]
+    assert pending.event.upset is True
+    assert pending.penalty_scale == 2
+    await _cancel_task(coordinator)
+
+
+@pytest.mark.parametrize(
+    ("affection", "value", "upset"),
+    [
+        (0, 0.0, False),
+        (10, 0.0, False),
+        (30, 0.05, True),
+        (30, 0.55, False),
+        (999, 0.45, True),
+        (999, 0.55, False),
+    ],
+)
+async def test_poke_event_routing_follows_affection(
+    tmp_path: Path, bundled_texts_path: Path, affection: int, value: float, upset: bool
+) -> None:
+    service = _service(tmp_path)
+    coordinator = _coordinator(service, Config(), bundled_texts_path, rng=FixedRng(value))
+
+    async def fake_send(message) -> None:
+        return None
+
+    started = await coordinator.start_poke_event(
+        group_id=GROUP_ID,
+        user_id=TRIGGER_ID,
+        nickname="桃友",
+        send=fake_send,
+        chance=1.0,
+        affection=affection,
+    )
+
+    assert started is not None
+    pending = coordinator.pending[GROUP_ID]
+    assert pending.event.upset is upset
+    assert pending.penalty_scale == 2
+    await _cancel_task(coordinator)
+
+
+async def _poke_upset_pending(
+    tmp_path: Path, bundled_texts_path: Path, affection: int
+) -> tuple[EventCoordinator, AffectionService, PendingEvent]:
+    service = _service(tmp_path)
+    coordinator = _coordinator(service, Config(), bundled_texts_path, rng=FixedRng(0.0))
+    await _give_affection(service, affection)
+
+    async def fake_send(message) -> None:
+        return None
+
+    started = await coordinator.start_poke_event(
+        group_id=GROUP_ID,
+        user_id=TRIGGER_ID,
+        nickname="桃友",
+        send=fake_send,
+        chance=1.0,
+        affection=999,
+    )
+    assert started is not None
+    pending = coordinator.pending[GROUP_ID]
+    assert pending.event.upset is True
+    assert pending.penalty_scale == 2
+    return coordinator, service, pending
+
+
+async def test_poke_upset_trap_option_doubles_to_six(
+    tmp_path: Path, bundled_texts_path: Path
+) -> None:
+    coordinator, service, pending = await _poke_upset_pending(
+        tmp_path, bundled_texts_path, 30
+    )
+    index = next(
+        position
+        for position, option in enumerate(pending.options)
+        if option.scale is None
+    )
+    assert coordinator.answer(GROUP_ID, TRIGGER_ID, "桃友", str(index + 1)) is True
+
+    sent = await _settle(coordinator)
+
+    assert _lines(sent[0])[0].endswith("馒头别过脸去，好感度 -6，当前 24")
+    assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == 24
+
+
+@pytest.mark.parametrize(
+    ("scale", "expected_line"),
+    [
+        (2.0, "馒头一下子被哄好了，好感度翻倍，当前 62！"),
+        (0.5, "馒头听完更委屈了，好感度减半，当前 15…"),
+    ],
+)
+async def test_poke_upset_scale_options_ignore_penalty_scale(
+    tmp_path: Path, bundled_texts_path: Path, scale: float, expected_line: str
+) -> None:
+    coordinator, service, pending = await _poke_upset_pending(
+        tmp_path, bundled_texts_path, 31
+    )
+    index = next(
+        position
+        for position, option in enumerate(pending.options)
+        if option.scale == scale
+    )
+    assert coordinator.answer(GROUP_ID, TRIGGER_ID, "桃友", str(index + 1)) is True
+
+    sent = await _settle(coordinator)
+
+    assert _lines(sent[0])[0].endswith(expected_line)
+    assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == (
+        62 if scale > 1 else 15
+    )
+
+
+@pytest.mark.parametrize(
+    ("affection", "expected"),
+    [(40, 20), (41, 20), (0, 0), (1, 0)],
+)
+async def test_upset_timeout_halves_affection(
+    tmp_path: Path, bundled_texts_path: Path, affection: int, expected: int
+) -> None:
+    coordinator, service, _pending = await _poke_upset_pending(
+        tmp_path, bundled_texts_path, affection
+    )
+    sent = await _settle(coordinator)
+
+    assert _at_ids(sent[0]) == [TRIGGER_ID]
+    assert _lines(sent[0])[0].endswith(
+        f"馒头等不到你的回答，心凉了半截，好感度减半，当前 {expected}"
+    )
+    assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == expected
+
+
+async def test_upset_timeout_on_ambient_path_ignores_timeout_penalty(
+    tmp_path: Path, bundled_texts_path: Path
+) -> None:
+    service = _service(tmp_path)
+    coordinator = _coordinator(service, Config(), bundled_texts_path, rng=FixedRng(0.0))
+    await _give_affection(service, 40)
+    pending = coordinator.start(GROUP_ID, TRIGGER_ID, "桃友", affection=999)
+    assert pending is not None and pending.event.upset is True
+    assert pending.penalty_scale == 1
+
+    sent = await _settle(coordinator)
+
+    assert _lines(sent[0])[0].endswith("好感度减半，当前 20")
+    assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == 20
+
+
+async def test_normal_event_timeout_keeps_fixed_penalty(
+    tmp_path: Path, bundled_texts_path: Path
+) -> None:
+    service = _service(tmp_path)
+    coordinator = _coordinator(service, Config(), bundled_texts_path, rng=FixedRng(0.99))
+    await _give_affection(service, 40)
+    pending = coordinator.start(GROUP_ID, TRIGGER_ID, "桃友", affection=0)
+    assert pending is not None and pending.event.upset is False
+
+    sent = await _settle(coordinator)
+
+    assert _lines(sent[0])[0].endswith("失望地走开了，好感度 -5，当前 35")
+    assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == 35

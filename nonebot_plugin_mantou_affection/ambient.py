@@ -10,18 +10,27 @@ from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message, MessageSegme
 from .commands import GROUP_ONLY
 from .config import Config
 from .events import Event, EventLibrary, EventOption
+from .logic import UPSET_EVENT_RATIOS, snapshot_for
+from .models import Profile
 from .service import AffectionService
 
 ANSWERS = {"1": 0, "2": 1, "3": 2}
 EVENT_MESSAGE = (
-    "⚡ 触发随机事件！\n"
+    "{prefix}\n"
     "{scene}\n"
     "1. {first}\n"
     "2. {second}\n"
     "3. {third}\n"
-    "请在 {timeout} 秒内作答，直接发送 1、2、3 即可（答题不用@），超时好感度 -{penalty}！"
+    "大家都可以回答，直接发送 1、2、3 即可（答题不用@），"
+    "请在 {timeout} 秒内作答，超时好感度 -{penalty}！"
 )
+EVENT_PREFIX = "⚡ 触发随机事件！"
+UPSET_PREFIX = "💢 馒头闹别扭了！"
 TIMEOUT_REPLY = "{bot}等不到你的回答，失望地走开了，好感度 -{penalty}"
+UPSET_DOUBLE_REPLY = "{bot}一下子被哄好了，好感度翻倍，当前 {affection}！"
+UPSET_HALVE_REPLY = "{bot}听完更委屈了，好感度减半，当前 {affection}…"
+UPSET_DELTA_REPLY = "{bot}别过脸去，好感度 {delta:+d}，当前 {affection}"
+UPSET_TIMEOUT_REPLY = "{bot}等不到你的回答，心凉了半截，好感度减半，当前 {affection}"
 
 
 class PendingAnswer:
@@ -75,11 +84,13 @@ class EventCoordinator:
         config: Config,
         library: EventLibrary | None = None,
         *,
+        upset_library: EventLibrary | None = None,
         rng: random.Random | None = None,
     ):
         self.service = service
         self.config = config
         self.library = library
+        self.upset_library = upset_library
         self.rng = rng or random.Random()
         self.pending: dict[str, PendingEvent] = {}
 
@@ -94,18 +105,42 @@ class EventCoordinator:
         user_id: str,
         nickname: str,
         penalty_scale: int = 1,
+        affection: int = 0,
     ) -> PendingEvent | None:
-        """抽一个事件并登记待作答状态；本群已有未结束事件或事件库为空时返回 None。"""
+        """抽一个事件并登记待作答状态；本群已有未结束事件或事件库为空时返回 None。
 
+        好感阶段越高越可能抽到闹别扭题（UPSET_EVENT_RATIOS），抽不到就退回普通题。
+        """
+
+        return self._start(
+            self._roll_library(affection), group_id, user_id, nickname, penalty_scale
+        )
+
+    def _roll_library(self, affection: int) -> EventLibrary | None:
+        ratio = UPSET_EVENT_RATIOS.get(snapshot_for(affection).band, 0.0)
+        if self.upset_library is not None and self.rng.random() < ratio:
+            return self.upset_library
+        return self.library
+
+    def _start(
+        self,
+        library: EventLibrary | None,
+        group_id: str,
+        user_id: str,
+        nickname: str,
+        penalty_scale: int,
+    ) -> PendingEvent | None:
         key = str(group_id)
-        if key in self.pending or self.library is None:
+        if key in self.pending:
             return None
-        event = self.library.pick()
+        event = library.pick() if library is not None else None
+        if event is None and library is not self.library and self.library is not None:
+            event = self.library.pick()
         if event is None:
             return None
         pending = PendingEvent(
             event,
-            self.library.shuffled_options(event),
+            EventLibrary.shuffled_options(event),
             trigger_id=str(user_id),
             trigger_name=nickname,
             penalty_scale=penalty_scale,
@@ -130,6 +165,7 @@ class EventCoordinator:
     def event_message(self, pending: PendingEvent) -> str:
         options = pending.options
         return EVENT_MESSAGE.format(
+            prefix=UPSET_PREFIX if pending.event.upset else EVENT_PREFIX,
             scene=pending.event.text,
             first=options[0].text,
             second=options[1].text,
@@ -162,28 +198,70 @@ class EventCoordinator:
 
         for answer in pending.answers.values():
             option = pending.options[answer.index]
-            delta = pending.scaled_delta(option.delta)
-            _, profile = await self.service.adjust(
-                str(group_id), answer.user_id, answer.nickname, delta
-            )
             add_line(
                 answer.user_id,
-                f"{self._option_reply(option, delta)}，当前 {profile.affection}",
+                await self._settle_answer(group_id, pending, answer, option),
             )
 
         if pending.trigger_id not in pending.answers:
-            penalty = (
-                self.config.mantou_affection_event_timeout_penalty * pending.penalty_scale
-            )
-            _, profile = await self.service.adjust(
-                str(group_id), pending.trigger_id, pending.trigger_name, -penalty
-            )
-            reply = TIMEOUT_REPLY.format(
-                bot=self.config.mantou_affection_bot_name, penalty=penalty
-            )
-            add_line(pending.trigger_id, f"{reply}，当前 {profile.affection}")
+            add_line(pending.trigger_id, await self._settle_timeout(group_id, pending))
 
         return Message(segments)
+
+    async def _settle_timeout(self, group_id: str, pending: PendingEvent) -> str:
+        """结算触发者超时，返回这一行的完整文案。"""
+
+        bot_name = self.config.mantou_affection_bot_name
+        if pending.event.upset:
+            profile = await self._scale_affection(
+                group_id, pending.trigger_id, pending.trigger_name, 0.5
+            )
+            return UPSET_TIMEOUT_REPLY.format(bot=bot_name, affection=profile.affection)
+
+        penalty = self.config.mantou_affection_event_timeout_penalty * pending.penalty_scale
+        _, profile = await self.service.adjust(
+            group_id, pending.trigger_id, pending.trigger_name, -penalty
+        )
+        reply = TIMEOUT_REPLY.format(bot=bot_name, penalty=penalty)
+        return f"{reply}，当前 {profile.affection}"
+
+    async def _scale_affection(
+        self, group_id: str, user_id: str, nickname: str, scale: float
+    ) -> Profile:
+        """按倍率改写好感度（向下取整），返回结算后的档案。"""
+
+        current = (await self.service.profile(group_id, user_id)).affection
+        target = min(self.config.mantou_affection_max, int(current * scale))
+        _, profile = await self.service.adjust(group_id, user_id, nickname, target - current)
+        return profile
+
+    async def _settle_answer(
+        self,
+        group_id: str,
+        pending: PendingEvent,
+        answer: PendingAnswer,
+        option: EventOption,
+    ) -> str:
+        """结算一位答题者，返回这一行的完整文案。"""
+
+        bot_name = self.config.mantou_affection_bot_name
+        if option.scale is not None:
+            scale = option.scale
+            profile = await self._scale_affection(
+                group_id, answer.user_id, answer.nickname, scale
+            )
+            template = UPSET_DOUBLE_REPLY if scale > 1 else UPSET_HALVE_REPLY
+            return template.format(bot=bot_name, affection=profile.affection)
+
+        delta = pending.scaled_delta(option.delta)
+        _, profile = await self.service.adjust(
+            group_id, answer.user_id, answer.nickname, delta
+        )
+        if pending.event.upset and option.delta < 0:
+            return UPSET_DELTA_REPLY.format(
+                bot=bot_name, delta=delta, affection=profile.affection
+            )
+        return f"{self._option_reply(option, delta)}，当前 {profile.affection}"
 
     def _option_reply(self, option: EventOption, delta: int) -> str:
         if option.delta >= 2:
@@ -205,16 +283,21 @@ class EventCoordinator:
         nickname: str,
         send: Callable[[Message | str], Awaitable[object]] | None,
         chance: float,
+        affection: int = 0,
     ) -> str | None:
         """戳一戳时按概率发起随机事件，成功返回事件消息文本；否则返回 None。
 
-        戳出来的事件是「扣分翻倍」版：负向选项与超时扣分都按 2 倍结算。
+        抽题和普通小动作一样看触发者好感阶段（UPSET_EVENT_RATIOS），戳出来的事件按
+        penalty_scale=2 结算：普通题的负向选项与超时扣 2 倍，闹别扭题的 -3 选项也翻倍，
+        但 scale 选项（×2 / ×0.5）与闹别扭题的超时减半都不受它影响。
         事件消息由调用方发送（作为 poke 返回的 text），send 只用于结算消息。
         """
 
         if send is None or self.rng.random() >= chance:
             return None
-        pending = self.start(str(group_id), str(user_id), nickname, penalty_scale=2)
+        pending = self.start(
+            str(group_id), str(user_id), nickname, penalty_scale=2, affection=affection
+        )
         if pending is None:
             return None
         message = self.event_message(pending)
@@ -288,11 +371,16 @@ def register_ambient(
         if not text:
             return
 
-        pending = (
-            coordinator.start(group_id, user_id, _sender_name(event))
-            if coordinator.triggered()
-            else None
-        )
+        pending = None
+        if coordinator.triggered():
+            try:
+                affection = (await service.snapshot(group_id, user_id)).affection
+            except Exception:
+                logger.exception("[mantou-affection] 读取好感度失败")
+                affection = 0
+            pending = coordinator.start(
+                group_id, user_id, _sender_name(event), affection=affection
+            )
         if pending is not None:
             try:
                 await ambient.send(

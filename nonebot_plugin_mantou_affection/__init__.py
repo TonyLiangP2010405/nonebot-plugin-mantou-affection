@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
-from nonebot import get_plugin_config, require
+from nonebot import get_plugin_config, logger, require
 from nonebot.plugin import PluginMetadata
 
 from .config import Config
@@ -43,8 +43,13 @@ text_library = AffectionTextLibrary(
     plugin_config.mantou_affection_text_path,
 )
 event_library = EventLibrary(Path(__file__).parent / "resources" / "affection_events.json")
+upset_event_library = EventLibrary(
+    Path(__file__).parent / "resources" / "affection_events_upset.json"
+)
 service = AffectionService(store, plugin_config, text_library=text_library)
-event_coordinator = EventCoordinator(service, plugin_config, event_library)
+event_coordinator = EventCoordinator(
+    service, plugin_config, event_library, upset_library=upset_event_library
+)
 matchers = register_commands(service, plugin_config)
 ambient_matcher, answer_matcher = register_ambient(service, plugin_config, event_coordinator)
 plugin_linkage = register_plugin_linkage(service, plugin_config)
@@ -105,12 +110,21 @@ async def poke(
     """
 
     result = await service.poke(str(group_id), str(user_id), nickname)
+    if send is None:
+        return result
+
+    try:
+        affection = (await service.snapshot(str(group_id), str(user_id))).affection
+    except Exception:
+        logger.exception("[mantou-affection] 读取好感度失败")
+        affection = 0
     event_text = await event_coordinator.start_poke_event(
         group_id=str(group_id),
         user_id=str(user_id),
         nickname=nickname,
         send=send,
         chance=plugin_config.mantou_affection_poke_event_chance,
+        affection=affection,
     )
     if event_text is None:
         return result
