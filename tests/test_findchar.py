@@ -484,8 +484,8 @@ def test_message_mentions_grid_and_rules(tmp_path: Path) -> None:
     assert "行从上到下、列从左到右" in text
     assert "大家都可以回答（答题不用@）" in text
     assert "请在 30 秒内作答" in text
-    assert "答对好感度 +5" in text
-    assert "答错好感度 -3" in text
+    assert "答对好感度 +2" in text
+    assert "答错好感度 -5" in text
     assert "被点名的群友超时未答好感度 -2！" in text
 
 
@@ -513,8 +513,8 @@ def test_trio_message_names_all_three_characters(tmp_path: Path) -> None:
     assert "3行5列" in text and "第3行第5列" in text
     assert "大家都可以回答（答题不用@）" in text
     assert "请在 30 秒内作答" in text
-    assert "答对好感度 +5" in text
-    assert "答错好感度 -3" in text
+    assert "答对好感度 +2" in text
+    assert "答错好感度 -5" in text
     assert "被点名的群友超时未答好感度 -2！" in text
 
 
@@ -617,13 +617,13 @@ async def test_settle_scores_answers_and_trigger_timeout(tmp_path: Path) -> None
     assert len(sent) == 1
     assert _at_ids(sent[0]) == [OTHER_ID, THIRD_ID, TRIGGER_ID]
     lines = _lines(sent[0])
-    assert "好感度 +5，当前 15" in lines[0]
+    assert "好感度 +2，当前 12" in lines[0]
     assert pending.puzzle.target in lines[0]
-    assert "好感度 -3，当前 7" in lines[1]
+    assert "好感度 -5，当前 5" in lines[1]
     assert "超时未答" in lines[2]
     assert "好感度 -2，当前 18" in lines[2]
-    assert (await service.profile(GROUP_ID, OTHER_ID)).affection == 15
-    assert (await service.profile(GROUP_ID, THIRD_ID)).affection == 7
+    assert (await service.profile(GROUP_ID, OTHER_ID)).affection == 12
+    assert (await service.profile(GROUP_ID, THIRD_ID)).affection == 5
     assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == 18
     assert find_char.pending == {}
 
@@ -649,9 +649,9 @@ async def test_settle_counts_wrong_answer_as_answered(tmp_path: Path) -> None:
 
     lines = _lines(sent[0])
     assert len(lines) == 1
-    assert "好感度 -3，当前 17" in lines[0]
+    assert "好感度 -5，当前 15" in lines[0]
     assert "超时未答" not in lines[0]
-    assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == 17
+    assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == 15
 
 
 async def test_find_char_and_event_share_the_group_slot(
@@ -841,9 +841,9 @@ async def test_plugin_wiring_runs_find_char_end_to_end(monkeypatch) -> None:
 
     assert len(sent) == 2
     assert _at_ids(sent[1]) == [answer_id, trigger_id]
-    assert "好感度 +5" in _lines(sent[1])[0]
+    assert "好感度 +2" in _lines(sent[1])[0]
     assert "超时未答" in _lines(sent[1])[1]
-    assert await get_affection(group_id, answer_id) == 8
+    assert await get_affection(group_id, answer_id) == 5
     assert await get_affection(group_id, trigger_id) == 1
 
 
@@ -929,8 +929,8 @@ async def test_ambient_handler_starts_find_char_game(
     task = find_char.schedule(pending, group_id=GROUP_ID, send=fake_send, timeout=0.01)
     await asyncio.wait_for(task, 2)
 
-    assert "好感度 +5，当前 5" in _lines(settled[0])[0]
-    assert (await service.profile(GROUP_ID, OTHER_ID)).affection == 5
+    assert "好感度 +2，当前 2" in _lines(settled[0])[0]
+    assert (await service.profile(GROUP_ID, OTHER_ID)).affection == 2
 
 
 async def test_ambient_handler_skips_small_action_when_find_char_hits(
