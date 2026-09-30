@@ -10,6 +10,7 @@ from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message, MessageSegme
 from .commands import GROUP_ONLY
 from .config import Config
 from .events import Event, EventLibrary, EventOption
+from .findchar import FindCharCoordinator
 from .logic import (
     UPSET_EVENT_RATIOS,
     UPSET_TRAP_RATE,
@@ -93,13 +94,29 @@ class EventCoordinator:
         *,
         upset_library: EventLibrary | None = None,
         rng: random.Random | None = None,
+        findchar: FindCharCoordinator | None = None,
     ):
         self.service = service
         self.config = config
         self.library = library
         self.upset_library = upset_library
         self.rng = rng or random.Random()
+        self.findchar = findchar
         self.pending: dict[str, PendingEvent] = {}
+
+    def attach_find_char(self, findchar: FindCharCoordinator) -> None:
+        """接入找字小游戏，让两种活动共用同一个群的席位。"""
+
+        self.findchar = findchar
+
+    def busy(self, group_id: str) -> bool:
+        """本群是否已经有待结算的活动：随机事件或找字小游戏。"""
+
+        key = str(group_id)
+        if key in self.pending:
+            return True
+        findchar = self.findchar
+        return findchar is not None and key in findchar.pending
 
     def triggered(self) -> bool:
         """小动作命中后再掷一次骰子，决定是否升级为随机事件。"""
@@ -138,7 +155,7 @@ class EventCoordinator:
         penalty_scale: int,
     ) -> PendingEvent | None:
         key = str(group_id)
-        if key in self.pending:
+        if self.busy(key):
             return None
         event = library.pick() if library is not None else None
         if event is None and library is not self.library and self.library is not None:
@@ -380,29 +397,66 @@ def register_ambient(
     service: AffectionService,
     config: Config,
     events: EventCoordinator | None = None,
+    findchar: FindCharCoordinator | None = None,
 ) -> tuple:
-    """群友发言时按概率让馒头冒个小动作，偶尔升级为群里多人可答的随机事件。"""
+    """群友发言时按概率让馒头冒个小动作，偶尔升级为群里多人可答的随机事件。
+
+    好感度 > 0 的群友发言时先按找字小游戏的概率掷一次：命中了就只发找字方阵，
+    没命中才继续走原来的 0.1% 小动作流程，两者互斥，不会在同一条消息上同时触发。
+    """
 
     coordinator = events or EventCoordinator(service, config)
+    find_char = findchar or FindCharCoordinator(
+        service, config, events=coordinator, rng=coordinator.rng
+    )
+    coordinator.attach_find_char(find_char)
     ambient = on_message(rule=GROUP_ONLY, priority=90, block=False)
     answer = on_message(rule=GROUP_ONLY, priority=5, block=False)
 
     @answer.handle()
     async def handle_answer(event: GroupMessageEvent) -> None:
         try:
-            coordinator.answer(
-                str(event.group_id),
-                str(event.user_id),
-                _sender_name(event),
-                event.message.extract_plain_text(),
-            )
+            group_id = str(event.group_id)
+            user_id = str(event.user_id)
+            name = _sender_name(event)
+            text = event.message.extract_plain_text()
+            if find_char.answer(group_id, user_id, name, text):
+                return
+            coordinator.answer(group_id, user_id, name, text)
         except Exception:
-            logger.exception("[mantou-affection] 处理随机事件作答失败")
+            logger.exception("[mantou-affection] 处理作答失败")
 
     @ambient.handle()
     async def handle_ambient(event: GroupMessageEvent) -> None:
         group_id = str(event.group_id)
         user_id = str(event.user_id)
+        nickname = _sender_name(event)
+
+        try:
+            find_char_ready = await service.find_char_triggered(group_id, user_id)
+        except Exception:
+            logger.exception("[mantou-affection] 判定找字小游戏失败")
+            find_char_ready = False
+        if find_char_ready:
+            pending = find_char.start(group_id, user_id, nickname)
+            if pending is not None:
+                try:
+                    await ambient.send(
+                        MessageSegment.at(event.user_id)
+                        + MessageSegment.text(f" {find_char.message(pending)}")
+                    )
+                except Exception:
+                    logger.exception("[mantou-affection] 发送找字小游戏失败")
+                    find_char.discard(group_id)
+                else:
+                    find_char.schedule(
+                        pending,
+                        group_id=group_id,
+                        send=ambient.send,
+                        timeout=config.mantou_affection_find_char_timeout,
+                    )
+                    return
+
         try:
             text = await service.ambient_reaction(group_id, user_id)
         except Exception:
@@ -418,9 +472,7 @@ def register_ambient(
             except Exception:
                 logger.exception("[mantou-affection] 读取好感度失败")
                 affection = 0
-            pending = coordinator.start(
-                group_id, user_id, _sender_name(event), affection=affection
-            )
+            pending = coordinator.start(group_id, user_id, nickname, affection=affection)
         if pending is not None:
             try:
                 await ambient.send(

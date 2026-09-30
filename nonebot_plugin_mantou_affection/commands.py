@@ -9,7 +9,12 @@ from nonebot.rule import Rule
 
 from .config import Config
 from .logic import level_for, progress_text
-from .parsing import parse_adjustment, parse_probability
+from .parsing import (
+    FIND_CHAR_CHANCE_USAGE,
+    parse_adjustment,
+    parse_find_char_chances,
+    parse_probability,
+)
 from .service import AffectionService, normalize_nickname
 
 
@@ -93,6 +98,13 @@ def register_commands(service: AffectionService, config: Config) -> tuple:
         priority=10,
         block=True,
     )
+    find_char_cmd = on_command(
+        "馒头找字概率",
+        aliases={"馒头找字触发概率"},
+        permission=SUPERUSER,
+        priority=10,
+        block=True,
+    )
 
     @profile_cmd.handle()
     async def handle_profile(event: GroupMessageEvent) -> None:
@@ -167,7 +179,8 @@ def register_commands(service: AffectionService, config: Config) -> tuple:
             "/馒头好感 —— 查看自己的好感档案\n"
             "/馒头好感榜 —— 查看本群排行榜\n"
             "/馒头好感调整 @群友 +10 —— SUPERUSER 调整好感\n"
-            "/馒头好感重置 确认 —— SUPERUSER 清空所有好感数据"
+            "/馒头好感重置 确认 —— SUPERUSER 清空所有好感数据\n"
+            "/馒头找字概率 5% —— SUPERUSER 查看或调整找字小游戏概率"
         )
 
     @adjust_cmd.handle()
@@ -235,4 +248,48 @@ def register_commands(service: AffectionService, config: Config) -> tuple:
             f"馒头小动作概率已调整为 {_format_probability(value)}"
         )
 
-    return profile_cmd, interact_cmd, ranking_cmd, help_cmd, adjust_cmd, reset_cmd, probability_cmd
+    @find_char_cmd.handle()
+    async def handle_find_char_chance(args: Message = CommandArg()) -> None:
+        raw = args.extract_plain_text().strip()
+        if not raw:
+            try:
+                group_chance, poke_chance = await service.find_char_chances()
+            except Exception:
+                logger.exception("[mantou-affection] 读取找字概率失败")
+                await find_char_cmd.finish("读取失败，请检查数据目录权限后重试。")
+                return
+            await find_char_cmd.finish(
+                "当前找字小游戏概率——\n"
+                f"群消息：{_format_probability(group_chance)}\n"
+                f"戳一戳：{_format_probability(poke_chance)}\n"
+                f"用法：{FIND_CHAR_CHANCE_USAGE}"
+            )
+            return
+        try:
+            wanted = parse_find_char_chances(raw)
+        except ValueError as error:
+            await find_char_cmd.finish(str(error))
+            return
+        try:
+            await service.set_find_char_chances(group=wanted.group, poke=wanted.poke)
+        except Exception:
+            logger.exception("[mantou-affection] 保存找字概率失败")
+            await find_char_cmd.finish("保存失败，请检查数据目录权限后重试。")
+            return
+        lines = ["馒头找字概率已调整——"]
+        if wanted.group is not None:
+            lines.append(f"群消息：{_format_probability(wanted.group)}")
+        if wanted.poke is not None:
+            lines.append(f"戳一戳：{_format_probability(wanted.poke)}")
+        await find_char_cmd.finish("\n".join(lines))
+
+    return (
+        profile_cmd,
+        interact_cmd,
+        ranking_cmd,
+        help_cmd,
+        adjust_cmd,
+        reset_cmd,
+        probability_cmd,
+        find_char_cmd,
+    )

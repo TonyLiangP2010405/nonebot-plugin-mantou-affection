@@ -26,6 +26,8 @@ from .models import (
 from .storage import AffectionStore
 
 AMBIENT_PROBABILITY_SETTING = "ambient_probability"
+FIND_CHAR_GROUP_CHANCE_SETTING = "find_char_group_chance"
+FIND_CHAR_POKE_CHANCE_SETTING = "find_char_poke_chance"
 AMBIENT_SCENE = "mantou.ambient"
 
 
@@ -123,13 +125,64 @@ class AffectionService:
         return await self.store.update_profile(group_id, user_id, nickname, update)
 
     async def ambient_probability(self) -> float:
-        stored: Any = await self.store.get_setting(AMBIENT_PROBABILITY_SETTING, None)
-        if isinstance(stored, bool) or not isinstance(stored, (int, float)):
-            return self.config.mantou_affection_ambient_probability
-        return min(1.0, max(0.0, float(stored)))
+        return await self._stored_probability(
+            AMBIENT_PROBABILITY_SETTING,
+            self.config.mantou_affection_ambient_probability,
+        )
 
     async def set_ambient_probability(self, value: float) -> None:
         await self.store.set_setting(AMBIENT_PROBABILITY_SETTING, float(value))
+
+    async def find_char_group_chance(self) -> float:
+        """群消息路径的找字小游戏概率，运行时用 /馒头找字概率 覆盖过就优先用它。"""
+
+        return await self._stored_probability(
+            FIND_CHAR_GROUP_CHANCE_SETTING,
+            self.config.mantou_affection_find_char_chance,
+        )
+
+    async def find_char_poke_chance(self, default: float | None = None) -> float:
+        """戳一戳路径的找字小游戏概率，default 由调用方传入当前配置里的默认值。"""
+
+        fallback = (
+            self.config.mantou_affection_poke_find_char_chance if default is None else default
+        )
+        return await self._stored_probability(FIND_CHAR_POKE_CHANCE_SETTING, fallback)
+
+    async def find_char_chances(self) -> tuple[float, float]:
+        """返回 (群消息概率, 戳一戳概率)。"""
+
+        return await self.find_char_group_chance(), await self.find_char_poke_chance()
+
+    async def set_find_char_chances(
+        self,
+        *,
+        group: float | None = None,
+        poke: float | None = None,
+    ) -> None:
+        """只写入传进来的那一项，另一项保持原值。"""
+
+        if group is not None:
+            await self.store.set_setting(FIND_CHAR_GROUP_CHANCE_SETTING, float(group))
+        if poke is not None:
+            await self.store.set_setting(FIND_CHAR_POKE_CHANCE_SETTING, float(poke))
+
+    async def find_char_triggered(self, group_id: str, user_id: str) -> bool:
+        """群消息路径的找字判定：好感度 > 0 且掷中概率才返回 True。"""
+
+        profile = await self.store.get_profile(group_id, user_id)
+        if profile.affection <= 0:
+            return False
+        chance = await self.find_char_group_chance()
+        return self.rng.random() < chance
+
+    async def _stored_probability(self, key: str, default: float) -> float:
+        """读取运行时覆盖的概率，缺省或数据损坏时退回配置默认值。"""
+
+        stored: Any = await self.store.get_setting(key, None)
+        if isinstance(stored, bool) or not isinstance(stored, (int, float)):
+            return default
+        return min(1.0, max(0.0, float(stored)))
 
     async def ambient_reaction(self, group_id: str, user_id: str) -> str | None:
         if not self.config.mantou_affection_ambient_enabled or self.text_library is None:

@@ -13,7 +13,8 @@ __plugin_meta__ = PluginMetadata(
     description="为群聊机器人馒头提供互动、关系阶段和跨插件共享好感状态",
     usage=(
         "/馒头互动｜/馒头好感｜/馒头好感榜｜/馒头好感帮助\n"
-        "SUPERUSER：/馒头好感调整 @群友 +10｜/馒头好感重置 确认｜/馒头反应概率 5%"
+        "SUPERUSER：/馒头好感调整 @群友 +10｜/馒头好感重置 确认｜"
+        "/馒头反应概率 5%｜/馒头找字概率 5%"
     ),
     type="application",
     homepage="https://github.com/TonyLiangP2010405/nonebot-plugin-mantou-affection",
@@ -30,6 +31,7 @@ from .ambient import EventCoordinator, register_ambient
 from .commands import register_commands
 from .copywriting import AffectionTextLibrary
 from .events import EventLibrary
+from .findchar import FindCharCoordinator
 from .integration import register_plugin_linkage
 from .models import AffectionResponse, AffectionSnapshot, PokeResult
 from .service import AffectionService
@@ -50,8 +52,12 @@ service = AffectionService(store, plugin_config, text_library=text_library)
 event_coordinator = EventCoordinator(
     service, plugin_config, event_library, upset_library=upset_event_library
 )
+find_char_coordinator = FindCharCoordinator(service, plugin_config, events=event_coordinator)
+event_coordinator.attach_find_char(find_char_coordinator)
 matchers = register_commands(service, plugin_config)
-ambient_matcher, answer_matcher = register_ambient(service, plugin_config, event_coordinator)
+ambient_matcher, answer_matcher = register_ambient(
+    service, plugin_config, event_coordinator, find_char_coordinator
+)
 plugin_linkage = register_plugin_linkage(service, plugin_config)
 
 
@@ -104,7 +110,7 @@ async def poke(
     nickname: str = "",
     send: Callable[[Message | str], Awaitable[object]] | None = None,
 ) -> PokeResult:
-    """戳一戳馒头：好感 +1；有概率戳出一次随机事件，此时 text 为事件消息。
+    """戳一戳馒头：好感 +1；有概率戳出一次随机事件或一局找字小游戏，此时 text 为事件消息。
 
     send 是可选的异步发送函数，用于把事件消息与答题结算发到群里；不传则只会正常 +1。
     """
@@ -126,6 +132,16 @@ async def poke(
         chance=plugin_config.mantou_affection_poke_event_chance,
         affection=affection,
     )
+    if event_text is None:
+        event_text = await find_char_coordinator.start_poke_find_char(
+            group_id=str(group_id),
+            user_id=str(user_id),
+            nickname=nickname,
+            send=send,
+            chance=await service.find_char_poke_chance(
+                plugin_config.mantou_affection_poke_find_char_chance
+            ),
+        )
     if event_text is None:
         return result
     return PokeResult(delta=result.delta, text=event_text)
