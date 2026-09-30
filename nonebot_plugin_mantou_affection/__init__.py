@@ -31,7 +31,7 @@ from .ambient import EventCoordinator, register_ambient
 from .commands import register_commands
 from .copywriting import AffectionTextLibrary
 from .events import EventLibrary
-from .findchar import FindCharCoordinator
+from .findchar import BUNDLED_PUZZLES_PATH, FindCharCoordinator, FindCharLibrary
 from .integration import register_plugin_linkage
 from .models import AffectionResponse, AffectionSnapshot, PokeResult
 from .service import AffectionService
@@ -52,7 +52,10 @@ service = AffectionService(store, plugin_config, text_library=text_library)
 event_coordinator = EventCoordinator(
     service, plugin_config, event_library, upset_library=upset_event_library
 )
-find_char_coordinator = FindCharCoordinator(service, plugin_config, events=event_coordinator)
+find_char_library = FindCharLibrary(BUNDLED_PUZZLES_PATH)
+find_char_coordinator = FindCharCoordinator(
+    service, plugin_config, find_char_library, events=event_coordinator
+)
 event_coordinator.attach_find_char(find_char_coordinator)
 matchers = register_commands(service, plugin_config)
 ambient_matcher, answer_matcher = register_ambient(

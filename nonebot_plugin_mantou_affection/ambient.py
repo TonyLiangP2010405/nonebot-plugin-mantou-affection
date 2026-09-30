@@ -10,7 +10,7 @@ from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message, MessageSegme
 from .commands import GROUP_ONLY
 from .config import Config
 from .events import Event, EventLibrary, EventOption
-from .findchar import FindCharCoordinator
+from .findchar import BUNDLED_PUZZLES_PATH, FindCharCoordinator, FindCharLibrary
 from .logic import (
     UPSET_EVENT_RATIOS,
     UPSET_TRAP_RATE,
@@ -407,7 +407,11 @@ def register_ambient(
 
     coordinator = events or EventCoordinator(service, config)
     find_char = findchar or FindCharCoordinator(
-        service, config, events=coordinator, rng=coordinator.rng
+        service,
+        config,
+        FindCharLibrary(BUNDLED_PUZZLES_PATH),
+        events=coordinator,
+        rng=coordinator.rng,
     )
     coordinator.attach_find_char(find_char)
     ambient = on_message(rule=GROUP_ONLY, priority=90, block=False)

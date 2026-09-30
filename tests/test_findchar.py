@@ -1,4 +1,5 @@
 import asyncio
+import json
 import random
 from contextlib import suppress
 from pathlib import Path
@@ -14,16 +15,18 @@ from nonebot_plugin_mantou_affection.config import Config
 from nonebot_plugin_mantou_affection.copywriting import AffectionTextLibrary
 from nonebot_plugin_mantou_affection.events import EventLibrary
 from nonebot_plugin_mantou_affection.findchar import (
-    CONFUSABLE_PAIRS,
+    BUNDLED_PUZZLES_PATH,
     FIND_CHAR_MAX_COLS,
     FIND_CHAR_MAX_ROWS,
     FIND_CHAR_MIN_COLS,
     FIND_CHAR_MIN_ROWS,
     FIND_CHAR_PREFIX,
     OPENING_LINES,
+    PAIR_MODE,
+    TRIO_MODE,
     FindCharCoordinator,
+    FindCharLibrary,
     FindCharPuzzle,
-    generate_puzzle,
     grid_text,
     is_han,
     judge,
@@ -40,8 +43,41 @@ OTHER_ID = "90003"
 THIRD_ID = "90004"
 POKE_GROUP = "90071"
 PUZZLE = FindCharPuzzle(
-    rows=6, cols=8, base_char="己", target_char="已", target_row=3, target_col=5
+    mode=PAIR_MODE,
+    decoys=("己",),
+    target="已",
+    rows=8,
+    cols=10,
+    row=3,
+    col=5,
 )
+TRIO_PUZZLE = FindCharPuzzle(
+    mode=TRIO_MODE,
+    decoys=("己", "已"),
+    target="巳",
+    rows=8,
+    cols=10,
+    row=3,
+    col=5,
+)
+PAIR_ENTRY = {
+    "mode": "pair",
+    "decoys": ["己"],
+    "target": "已",
+    "rows": 8,
+    "cols": 10,
+    "row": 3,
+    "col": 5,
+}
+TRIO_ENTRY = {
+    "mode": "trio",
+    "decoys": ["己", "已"],
+    "target": "巳",
+    "rows": 9,
+    "cols": 12,
+    "row": 4,
+    "col": 6,
+}
 
 
 class FixedRng(random.Random):
@@ -128,23 +164,161 @@ def _lines(message: Message) -> list[str]:
     return [line.strip() for line in body.split("\n") if line.strip()]
 
 
-# ------------------------------------------------------------ 方阵与判题
+def _library(tmp_path: Path, entries: list[dict]) -> FindCharLibrary:
+    path = tmp_path / "findchar_puzzles.json"
+    path.write_text(json.dumps(entries, ensure_ascii=False), encoding="utf-8")
+    return FindCharLibrary(path)
 
 
-def test_confusable_pairs_are_plausible() -> None:
-    assert len(CONFUSABLE_PAIRS) >= 40
-    for first, second in CONFUSABLE_PAIRS:
-        assert len(first) == 1
-        assert len(second) == 1
-        assert first != second
-        assert is_han(first)
-        assert is_han(second)
+def _find_char(
+    tmp_path: Path,
+    config: Config | None = None,
+    entries: list[dict] | None = None,
+    rng: random.Random | None = None,
+) -> FindCharCoordinator:
+    """建一个带小题库的协调器：默认一题 pair、一题 trio，方便按题型各测一遍。"""
+
+    if entries is None:
+        entries = [PAIR_ENTRY, TRIO_ENTRY]
+    config = config or Config()
+    return FindCharCoordinator(
+        _service(tmp_path, config),
+        config,
+        _library(tmp_path, entries),
+        rng=rng or random.Random(0),
+    )
 
 
-def test_opening_lines_are_plentiful_and_unique() -> None:
-    assert 20 <= len(OPENING_LINES) <= 30
-    assert len(set(OPENING_LINES)) == len(OPENING_LINES)
-    assert all(line.strip() for line in OPENING_LINES)
+def _entry_puzzle(tmp_path: Path, entry: dict) -> FindCharPuzzle:
+    """按题库条目渲染出一块方阵，用来验证加载结果和渲染的一致性。"""
+
+    library = _library(tmp_path, [entry])
+    puzzle = library.pick()
+    assert puzzle is not None
+    cells = [line.split(" ") for line in grid_text(puzzle).split("\n")]
+    assert cells[entry["row"] - 1][entry["col"] - 1] == entry["target"]
+    assert "".join("".join(row) for row in cells).count(entry["target"]) == 1
+    return puzzle
+
+
+@pytest.mark.parametrize("entry", [PAIR_ENTRY, TRIO_ENTRY])
+def test_library_entry_keeps_recorded_fields(tmp_path: Path, entry: dict) -> None:
+    puzzle = _entry_puzzle(tmp_path, entry)
+
+    assert puzzle.mode == entry["mode"]
+    assert puzzle.rows == entry["rows"]
+    assert puzzle.cols == entry["cols"]
+    assert puzzle.row == entry["row"]
+    assert puzzle.col == entry["col"]
+    assert puzzle.target == entry["target"]
+    assert set(puzzle.decoys) == set(entry["decoys"])
+
+
+# ------------------------------------------------------------ 题库加载
+
+
+def test_bundled_puzzle_bank_is_valid() -> None:
+    """整份题库都要通过加载校验：坏题会被 FindCharLibrary 跳过，这里确认一道都没被跳过。"""
+
+    raw = json.loads(BUNDLED_PUZZLES_PATH.read_text(encoding="utf-8"))
+    library = FindCharLibrary(BUNDLED_PUZZLES_PATH)
+    puzzles = library.puzzles
+
+    assert isinstance(raw, list)
+    assert puzzles
+    assert len(puzzles) == len(raw)
+    assert {puzzle.mode for puzzle in puzzles} == {PAIR_MODE, TRIO_MODE}
+    for puzzle in puzzles:
+        assert FIND_CHAR_MIN_ROWS <= puzzle.rows <= FIND_CHAR_MAX_ROWS
+        assert FIND_CHAR_MIN_COLS <= puzzle.cols <= FIND_CHAR_MAX_COLS
+        assert 1 <= puzzle.row <= puzzle.rows
+        assert 1 <= puzzle.col <= puzzle.cols
+        assert is_han(puzzle.target)
+        assert all(is_han(decoy) for decoy in puzzle.decoys)
+        assert puzzle.target not in puzzle.decoys
+        assert len(puzzle.decoys) == (1 if puzzle.mode == PAIR_MODE else 2)
+
+
+def test_bundled_puzzle_bank_renders_exactly_one_target() -> None:
+    library = FindCharLibrary(BUNDLED_PUZZLES_PATH)
+    assert library.puzzles
+
+    for puzzle in library.puzzles:
+        lines = grid_text(puzzle).split("\n")
+        assert len(lines) == puzzle.rows
+        cells = [line.split(" ") for line in lines]
+        assert all(len(row) == puzzle.cols for row in cells)
+        body = "".join("".join(row) for row in cells)
+        assert body.count(puzzle.target) == 1
+        assert cells[puzzle.row - 1][puzzle.col - 1] == puzzle.target
+        assert set(body) - {puzzle.target} <= set(puzzle.decoys)
+
+
+def test_library_skips_invalid_entries(tmp_path: Path) -> None:
+    library = _library(
+        tmp_path,
+        [
+            PAIR_ENTRY,
+            "不是对象",
+            {"mode": "other", "decoys": ["己"], "target": "已", "rows": 8, "cols": 10,
+             "row": 1, "col": 1},
+            {"mode": "pair", "decoys": ["己", "已"], "target": "巳", "rows": 8, "cols": 10,
+             "row": 1, "col": 1},
+            {"mode": "trio", "decoys": ["己"], "target": "巳", "rows": 8, "cols": 10,
+             "row": 1, "col": 1},
+            {"mode": "pair", "decoys": ["己"], "target": "己", "rows": 8, "cols": 10,
+             "row": 1, "col": 1},
+            {"mode": "pair", "decoys": ["己"], "target": "a", "rows": 8, "cols": 10,
+             "row": 1, "col": 1},
+            {"mode": "pair", "decoys": ["己"], "target": "已", "rows": 2, "cols": 10,
+             "row": 1, "col": 1},
+            {"mode": "pair", "decoys": ["己"], "target": "已", "rows": 8, "cols": 40,
+             "row": 1, "col": 1},
+            {"mode": "pair", "decoys": ["己"], "target": "已", "rows": 8, "cols": 10,
+             "row": 9, "col": 1},
+            {"mode": "trio", "decoys": ["己", "已"], "target": "巳", "rows": 9, "cols": 12,
+             "row": 4, "col": 13},
+            {"mode": "pair", "decoys": ["己"], "target": "已", "rows": "8", "cols": 10,
+             "row": 1, "col": 1},
+        ],
+    )
+
+    assert [puzzle.mode for puzzle in library.puzzles] == [PAIR_MODE]
+
+
+def test_library_accepts_object_root_and_empty_list(tmp_path: Path) -> None:
+    path = tmp_path / "wrapped.json"
+    path.write_text(json.dumps({"puzzles": [TRIO_ENTRY]}, ensure_ascii=False), encoding="utf-8")
+    assert [puzzle.mode for puzzle in FindCharLibrary(path).puzzles] == [TRIO_MODE]
+
+    path.write_text("[]", encoding="utf-8")
+    library = FindCharLibrary(path)
+    assert library.puzzles == ()
+    assert library.pick() is None
+
+
+def test_library_rejects_broken_root_and_missing_file(tmp_path: Path) -> None:
+    path = tmp_path / "broken.json"
+    path.write_text('{"puzzles": "不是数组"}', encoding="utf-8")
+    assert FindCharLibrary(path).puzzles == ()
+
+    path.write_text("{", encoding="utf-8")
+    assert FindCharLibrary(path).puzzles == ()
+
+    assert FindCharLibrary(tmp_path / "missing.json").puzzles == ()
+
+
+def test_library_keeps_puzzle_seed_as_bank_index(tmp_path: Path) -> None:
+    library = _library(tmp_path, [PAIR_ENTRY, TRIO_ENTRY])
+    assert [puzzle.seed for puzzle in library.puzzles] == [0, 1]
+
+
+@pytest.mark.parametrize("mode", [PAIR_MODE, TRIO_MODE])
+def test_opening_lines_are_plentiful_and_unique(mode: str) -> None:
+    lines = OPENING_LINES[mode]
+    assert 20 <= len(lines) <= 30
+    assert len(set(lines)) == len(lines)
+    assert all(line.strip() for line in lines)
 
 
 def test_find_char_defaults() -> None:
@@ -154,31 +328,66 @@ def test_find_char_defaults() -> None:
     assert config.mantou_affection_find_char_timeout == 30
 
 
-@pytest.mark.parametrize("seed", range(20))
-def test_generate_puzzle_stays_in_range_and_hides_one_char(seed: int) -> None:
-    puzzle = generate_puzzle(random.Random(seed))
-
-    assert FIND_CHAR_MIN_ROWS <= puzzle.rows <= FIND_CHAR_MAX_ROWS
-    assert FIND_CHAR_MIN_COLS <= puzzle.cols <= FIND_CHAR_MAX_COLS
-    assert puzzle.base_char != puzzle.target_char
-    assert is_han(puzzle.base_char) and is_han(puzzle.target_char)
-    assert 1 <= puzzle.target_row <= puzzle.rows
-    assert 1 <= puzzle.target_col <= puzzle.cols
-
+def test_grid_text_fills_pair_with_one_decoy() -> None:
+    puzzle = FindCharPuzzle(
+        mode=PAIR_MODE, decoys=("己",), target="已", rows=6, cols=9, row=2, col=4
+    )
     lines = grid_text(puzzle).split("\n")
-    assert len(lines) == puzzle.rows
-    assert all(len(line.split(" ")) == puzzle.cols for line in lines)
-    body = "".join(lines)
-    assert body.count(puzzle.target_char) == 1
-    assert body.count(puzzle.base_char) == puzzle.rows * puzzle.cols - 1
+
+    assert len(lines) == 6
+    assert all(len(line.split(" ")) == 9 for line in lines)
+    assert lines[1].split(" ")[3] == "已"
+    assert "".join("".join(line.split(" ")) for line in lines).count("已") == 1
+    assert lines[0].split(" ")[0] == "己"
 
 
-def test_grid_text_marks_only_the_target_cell() -> None:
-    lines = grid_text(PUZZLE).split("\n")
+def test_grid_text_mixes_both_trio_decoys_deterministically() -> None:
+    puzzle = FindCharPuzzle(
+        mode=TRIO_MODE, decoys=("己", "已"), target="巳", rows=8, cols=10, row=3, col=5
+    )
+    first = grid_text(puzzle)
+    second = grid_text(puzzle)
 
-    assert lines[2].split(" ")[4] == PUZZLE.target_char
-    assert lines[2].split(" ")[3] == PUZZLE.base_char
-    assert lines[0].split(" ")[0] == PUZZLE.base_char
+    assert first == second
+    cells = [line.split(" ") for line in first.split("\n")]
+    assert cells[2][4] == "巳"
+    body = "".join("".join(row) for row in cells)
+    assert body.count("巳") == 1
+    assert body.count("己") + body.count("已") == puzzle.rows * puzzle.cols - 1
+    assert body.count("己") > 0
+    assert body.count("已") > 0
+
+
+def test_grid_text_mix_depends_on_puzzle_seed() -> None:
+    def build(seed: int) -> str:
+        return grid_text(
+            FindCharPuzzle(
+                mode=TRIO_MODE,
+                decoys=("己", "已"),
+                target="巳",
+                rows=8,
+                cols=10,
+                row=1,
+                col=1,
+                seed=seed,
+            )
+        )
+
+    assert build(1) != build(2)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("巳", True),
+        ("己", False),
+        ("已", False),
+        ("1", None),
+        ("晚上好呀", None),
+    ],
+)
+def test_judge_trio_answers(text: str, expected: bool | None) -> None:
+    assert judge(text, TRIO_PUZZLE) is expected
 
 
 @pytest.mark.parametrize(
@@ -259,14 +468,17 @@ def test_parse_position_handles_both_orders_and_chinese_numerals(
 
 def test_message_mentions_grid_and_rules(tmp_path: Path) -> None:
     config = Config(mantou_affection_find_char_timeout=30)
-    find_char = FindCharCoordinator(_service(tmp_path, config), config, rng=random.Random(7))
+    find_char = _find_char(tmp_path, config, [PAIR_ENTRY], rng=random.Random(7))
     pending = find_char.start(GROUP_ID, TRIGGER_ID, "桃友")
     assert pending is not None
+    assert pending.puzzle.mode == PAIR_MODE
     text = find_char.message(pending)
 
     assert text.startswith(FIND_CHAR_PREFIX)
     assert grid_text(pending.puzzle) in text
-    assert any(line.replace("{bot}", "馒头") == pending.opening for line in OPENING_LINES)
+    assert any(
+        line.replace("{bot}", "馒头") == pending.opening for line in OPENING_LINES[PAIR_MODE]
+    )
     assert "方阵里有一个字和大家不一样" in text
     assert "3行5列" in text and "第3行第5列" in text
     assert "行从上到下、列从左到右" in text
@@ -277,12 +489,48 @@ def test_message_mentions_grid_and_rules(tmp_path: Path) -> None:
     assert "被点名的群友超时未答好感度 -2！" in text
 
 
+def test_trio_message_names_all_three_characters(tmp_path: Path) -> None:
+    config = Config(mantou_affection_find_char_timeout=30)
+    find_char = _find_char(tmp_path, config, [TRIO_ENTRY], rng=random.Random(7))
+    pending = find_char.start(GROUP_ID, TRIGGER_ID, "桃友")
+    assert pending is not None
+    assert pending.puzzle.trio is True
+    puzzle = pending.puzzle
+    text = find_char.message(pending)
+
+    assert text.startswith(FIND_CHAR_PREFIX)
+    assert grid_text(puzzle) in text
+    assert any(
+        line.replace("{bot}", "馒头") == pending.opening for line in OPENING_LINES[TRIO_MODE]
+    )
+    assert (
+        f"方阵里混着「{puzzle.decoys[0]}」「{puzzle.decoys[1]}」「{puzzle.target}」三个形近字"
+        in text
+    )
+    assert f"「{puzzle.decoys[0]}」和「{puzzle.decoys[1]}」有很多个" in text
+    assert f"「{puzzle.target}」只藏了 1 个" in text
+    assert f"找出「{puzzle.target}」" in text
+    assert "3行5列" in text and "第3行第5列" in text
+    assert "大家都可以回答（答题不用@）" in text
+    assert "请在 30 秒内作答" in text
+    assert "答对好感度 +5" in text
+    assert "答错好感度 -3" in text
+    assert "被点名的群友超时未答好感度 -2！" in text
+
+
+def test_message_falls_back_to_seeded_opening(tmp_path: Path) -> None:
+    find_char = _find_char(tmp_path, rng=random.Random(3))
+    pending = find_char.start(GROUP_ID, TRIGGER_ID, "桃友")
+    assert pending is not None
+    lines = OPENING_LINES[pending.puzzle.mode]
+    assert pending.opening in {line.replace("{bot}", "馒头") for line in lines}
+
+
 # ------------------------------------------------------------ 一局游戏
 
 
 async def test_start_blocks_second_game_in_same_group(tmp_path: Path) -> None:
-    config = Config()
-    find_char = FindCharCoordinator(_service(tmp_path, config), config, rng=random.Random(1))
+    find_char = _find_char(tmp_path, rng=random.Random(1))
 
     first = find_char.start(GROUP_ID, TRIGGER_ID, "桃友")
     assert first is not None
@@ -294,17 +542,52 @@ async def test_start_blocks_second_game_in_same_group(tmp_path: Path) -> None:
     assert find_char.busy(GROUP_ID) is False
 
 
-async def test_answer_keeps_first_guess_only(tmp_path: Path) -> None:
+async def test_start_needs_a_usable_library(tmp_path: Path) -> None:
     config = Config()
-    find_char = FindCharCoordinator(_service(tmp_path, config), config, rng=random.Random(2))
+    service = _service(tmp_path, config)
+    without_library = FindCharCoordinator(service, config, rng=random.Random(0))
+    assert without_library.start(GROUP_ID, TRIGGER_ID, "桃友") is None
+
+    empty = FindCharCoordinator(
+        service, config, _library(tmp_path, []), rng=random.Random(0)
+    )
+    assert empty.library is not None and empty.library.pick() is None
+    assert empty.start(GROUP_ID, TRIGGER_ID, "桃友") is None
+
+    broken = FindCharCoordinator(
+        service, config, FindCharLibrary(tmp_path / "missing.json"), rng=random.Random(0)
+    )
+    assert broken.start(GROUP_ID, TRIGGER_ID, "桃友") is None
+
+
+async def test_answer_keeps_first_guess_only(tmp_path: Path) -> None:
+    find_char = _find_char(tmp_path, rng=random.Random(2))
     pending = find_char.start(GROUP_ID, TRIGGER_ID, "桃友")
     assert pending is not None
+    puzzle = pending.puzzle
 
-    assert find_char.answer(GROUP_ID, OTHER_ID, "路人", pending.puzzle.base_char) is True
-    assert find_char.answer(GROUP_ID, OTHER_ID, "路人", pending.puzzle.target_char) is False
+    assert find_char.answer(GROUP_ID, OTHER_ID, "路人", puzzle.decoys[0]) is True
+    assert find_char.answer(GROUP_ID, OTHER_ID, "路人", puzzle.target) is False
     assert find_char.answer(GROUP_ID, OTHER_ID, "路人", "随便聊聊") is False
     assert list(pending.answers) == [OTHER_ID]
     assert pending.answers[OTHER_ID].correct is False
+
+
+@pytest.mark.parametrize("mode", [PAIR_MODE, TRIO_MODE])
+async def test_trio_and_pair_answers_are_judged_by_target(tmp_path: Path, mode: str) -> None:
+    entry = TRIO_ENTRY if mode == TRIO_MODE else PAIR_ENTRY
+    find_char = _find_char(tmp_path, entries=[entry], rng=random.Random(5))
+    pending = find_char.start(GROUP_ID, TRIGGER_ID, "桃友")
+    assert pending is not None
+    puzzle = pending.puzzle
+    assert puzzle.mode == mode
+
+    assert find_char.answer(GROUP_ID, OTHER_ID, "路人", puzzle.target) is True
+    assert find_char.answer(GROUP_ID, THIRD_ID, "路人乙", puzzle.decoys[-1]) is True
+    assert pending.answers[OTHER_ID].correct is True
+    assert pending.answers[THIRD_ID].correct is False
+    assert find_char.answer(GROUP_ID, TRIGGER_ID, "桃友", f"{puzzle.row}行{puzzle.col}列") is True
+    assert pending.answers[TRIGGER_ID].correct is True
 
 
 async def test_settle_scores_answers_and_trigger_timeout(tmp_path: Path) -> None:
@@ -313,11 +596,13 @@ async def test_settle_scores_answers_and_trigger_timeout(tmp_path: Path) -> None
     await _give_affection(service, 20, TRIGGER_ID)
     await _give_affection(service, 10, OTHER_ID)
     await _give_affection(service, 10, THIRD_ID)
-    find_char = FindCharCoordinator(service, config, rng=random.Random(3))
+    find_char = FindCharCoordinator(
+        service, config, _library(tmp_path, [PAIR_ENTRY]), rng=random.Random(3)
+    )
     pending = find_char.start(GROUP_ID, TRIGGER_ID, "桃友")
     assert pending is not None
 
-    assert find_char.answer(GROUP_ID, OTHER_ID, "路人", pending.puzzle.target_char) is True
+    assert find_char.answer(GROUP_ID, OTHER_ID, "路人", pending.puzzle.target) is True
     assert find_char.answer(GROUP_ID, THIRD_ID, "路人乙", "1行1列") is True
     assert pending.answers[THIRD_ID].correct is False
     assert find_char.answer(GROUP_ID, THIRD_ID, "路人乙", "2行2列") is False
@@ -333,7 +618,7 @@ async def test_settle_scores_answers_and_trigger_timeout(tmp_path: Path) -> None
     assert _at_ids(sent[0]) == [OTHER_ID, THIRD_ID, TRIGGER_ID]
     lines = _lines(sent[0])
     assert "好感度 +5，当前 15" in lines[0]
-    assert pending.puzzle.target_char in lines[0]
+    assert pending.puzzle.target in lines[0]
     assert "好感度 -3，当前 7" in lines[1]
     assert "超时未答" in lines[2]
     assert "好感度 -2，当前 18" in lines[2]
@@ -347,11 +632,13 @@ async def test_settle_counts_wrong_answer_as_answered(tmp_path: Path) -> None:
     config = Config()
     service = _service(tmp_path, config)
     await _give_affection(service, 20, TRIGGER_ID)
-    find_char = FindCharCoordinator(service, config, rng=random.Random(4))
+    find_char = FindCharCoordinator(
+        service, config, _library(tmp_path, [TRIO_ENTRY]), rng=random.Random(4)
+    )
     pending = find_char.start(GROUP_ID, TRIGGER_ID, "桃友")
     assert pending is not None
 
-    assert find_char.answer(GROUP_ID, TRIGGER_ID, "桃友", pending.puzzle.base_char) is True
+    assert find_char.answer(GROUP_ID, TRIGGER_ID, "桃友", pending.puzzle.decoys[0]) is True
     sent: list[Message] = []
 
     async def fake_send(message: Message) -> None:
@@ -374,7 +661,9 @@ async def test_find_char_and_event_share_the_group_slot(
     service = _service(tmp_path, config)
     events = EventLibrary(bundled_texts_path.with_name("affection_events.json"))
     coordinator = EventCoordinator(service, config, events, rng=random.Random(0))
-    find_char = FindCharCoordinator(service, config, events=coordinator, rng=random.Random(0))
+    find_char = FindCharCoordinator(
+        service, config, _library(tmp_path, [PAIR_ENTRY]), events=coordinator, rng=random.Random(0)
+    )
     coordinator.attach_find_char(find_char)
 
     running = coordinator.start(GROUP_ID, TRIGGER_ID, "桃友")
@@ -396,7 +685,7 @@ async def test_find_char_and_event_share_the_group_slot(
 
 async def test_poke_find_char_requires_send(tmp_path: Path) -> None:
     config = Config()
-    find_char = FindCharCoordinator(_service(tmp_path, config), config, rng=FixedRng(0.0))
+    find_char = _find_char(tmp_path, config, [PAIR_ENTRY], rng=FixedRng(0.0))
 
     started = await find_char.start_poke_find_char(
         group_id=GROUP_ID, user_id=TRIGGER_ID, nickname="桃友", send=None, chance=1.0
@@ -408,7 +697,7 @@ async def test_poke_find_char_requires_send(tmp_path: Path) -> None:
 
 async def test_poke_find_char_respects_chance(tmp_path: Path) -> None:
     config = Config()
-    find_char = FindCharCoordinator(_service(tmp_path, config), config, rng=FixedRng(0.9))
+    find_char = _find_char(tmp_path, config, [PAIR_ENTRY], rng=FixedRng(0.9))
 
     started = await find_char.start_poke_find_char(
         group_id=GROUP_ID,
@@ -428,7 +717,9 @@ async def test_poke_find_char_returns_message_and_keeps_settlement_for_send(
     config = Config(mantou_affection_find_char_timeout=3)
     service = _service(tmp_path, config)
     await _give_affection(service, 10, TRIGGER_ID)
-    find_char = FindCharCoordinator(service, config, rng=FixedRng(0.0))
+    find_char = FindCharCoordinator(
+        service, config, _library(tmp_path, [PAIR_ENTRY]), rng=FixedRng(0.0)
+    )
     sent: list[Message] = []
 
     async def fake_send(message: Message) -> None:
@@ -454,7 +745,9 @@ async def test_public_poke_returns_find_char_message(
 
     config = Config(mantou_affection_find_char_timeout=3)
     service = _service(tmp_path, config)
-    find_char = FindCharCoordinator(service, config, rng=FixedRng(0.0))
+    find_char = FindCharCoordinator(
+        service, config, _library(tmp_path, [PAIR_ENTRY]), rng=FixedRng(0.0)
+    )
     coordinator = EventCoordinator(service, config, None, rng=FixedRng(0.9))
     coordinator.attach_find_char(find_char)
     monkeypatch.setattr("nonebot_plugin_mantou_affection.find_char_coordinator", find_char)
@@ -487,7 +780,9 @@ async def test_public_poke_stays_plain_when_find_char_chance_is_zero(
         mantou_affection_poke_find_char_chance=0.0,
     )
     service = _service(tmp_path, config)
-    find_char = FindCharCoordinator(service, config, rng=FixedRng(0.0))
+    find_char = FindCharCoordinator(
+        service, config, _library(tmp_path, [PAIR_ENTRY]), rng=FixedRng(0.0)
+    )
     coordinator = EventCoordinator(service, config, None, rng=FixedRng(0.0))
     coordinator.attach_find_char(find_char)
     monkeypatch.setattr("nonebot_plugin_mantou_affection.find_char_coordinator", find_char)
@@ -540,9 +835,7 @@ async def test_plugin_wiring_runs_find_char_end_to_end(monkeypatch) -> None:
     assert pending.task is not None
 
     await answer_matcher.handlers[0].call(
-        _event(
-            pending.puzzle.target_char, user_id=int(answer_id), group_id=int(group_id)
-        )
+        _event(pending.puzzle.target, user_id=int(answer_id), group_id=int(group_id))
     )
     await asyncio.wait_for(pending.task, 2)
 
@@ -582,7 +875,13 @@ async def _ambient_setup(
         EventLibrary(bundled_texts_path.with_name("affection_events.json")),
         rng=random.Random(0),
     )
-    find_char = FindCharCoordinator(service, config, events=coordinator, rng=random.Random(5))
+    find_char = FindCharCoordinator(
+        service,
+        config,
+        _library(tmp_path, [PAIR_ENTRY, TRIO_ENTRY]),
+        events=coordinator,
+        rng=random.Random(5),
+    )
     ambient, answer = register_ambient(service, config, coordinator, find_char)
     sent = _capture_send(ambient, monkeypatch)
     return service, coordinator, find_char, ambient, answer, sent
@@ -616,7 +915,7 @@ async def test_ambient_handler_starts_find_char_game(
     assert coordinator.pending == {}
 
     await answer.handlers[0].call(
-        _event(pending.puzzle.target_char, user_id=90003, nickname="路人")
+        _event(pending.puzzle.target, user_id=90003, nickname="路人")
     )
     assert list(pending.answers) == [OTHER_ID]
     assert pending.answers[OTHER_ID].correct is True
