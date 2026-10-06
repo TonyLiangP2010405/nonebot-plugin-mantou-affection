@@ -20,17 +20,21 @@ from nonebot_plugin_mantou_affection.findchar import (
     FIND_CHAR_MAX_ROWS,
     FIND_CHAR_MIN_COLS,
     FIND_CHAR_MIN_ROWS,
+    FIND_CHAR_PAIR_MESSAGE,
     FIND_CHAR_PREFIX,
+    FIND_CHAR_TRIO_MESSAGE,
     OPENING_LINES,
     PAIR_MODE,
     TRIO_MODE,
     FindCharCoordinator,
     FindCharLibrary,
     FindCharPuzzle,
+    PendingFindChar,
     grid_text,
     is_han,
     judge,
     parse_position,
+    pick_opening,
 )
 from nonebot_plugin_mantou_affection.logic import POKE_POSITIVE_FALLBACK
 from nonebot_plugin_mantou_affection.models import Profile
@@ -466,20 +470,21 @@ def test_parse_position_handles_both_orders_and_chinese_numerals(
     assert parse_position(text) == expected
 
 
-def test_message_mentions_grid_and_rules(tmp_path: Path) -> None:
+def test_pair_message_mentions_decoy_and_hides_target(tmp_path: Path) -> None:
     config = Config(mantou_affection_find_char_timeout=30)
     find_char = _find_char(tmp_path, config, [PAIR_ENTRY], rng=random.Random(7))
     pending = find_char.start(GROUP_ID, TRIGGER_ID, "桃友")
     assert pending is not None
     assert pending.puzzle.mode == PAIR_MODE
+    puzzle = pending.puzzle
     text = find_char.message(pending)
 
     assert text.startswith(FIND_CHAR_PREFIX)
-    assert grid_text(pending.puzzle) in text
+    assert grid_text(puzzle) in text
     assert any(
         line.replace("{bot}", "馒头") == pending.opening for line in OPENING_LINES[PAIR_MODE]
     )
-    assert "方阵里有一个字和大家不一样" in text
+    assert f"方阵里全是「{puzzle.decoys[0]}」，但还藏着 1 个和它长得很像的字" in text
     assert "3行5列" in text and "第3行第5列" in text
     assert "行从上到下、列从左到右" in text
     assert "大家都可以回答（答题不用@）" in text
@@ -487,9 +492,11 @@ def test_message_mentions_grid_and_rules(tmp_path: Path) -> None:
     assert "答对好感度 +2" in text
     assert "答错好感度 -5" in text
     assert "被点名的群友超时未答好感度 -2！" in text
+    # 开局消息不能剧透:整个消息里答案字只应该出现在方阵里那 1 次
+    assert text.count(puzzle.target) == 1
 
 
-def test_trio_message_names_all_three_characters(tmp_path: Path) -> None:
+def test_trio_message_names_decoys_and_hides_target(tmp_path: Path) -> None:
     config = Config(mantou_affection_find_char_timeout=30)
     find_char = _find_char(tmp_path, config, [TRIO_ENTRY], rng=random.Random(7))
     pending = find_char.start(GROUP_ID, TRIGGER_ID, "桃友")
@@ -504,18 +511,62 @@ def test_trio_message_names_all_three_characters(tmp_path: Path) -> None:
         line.replace("{bot}", "馒头") == pending.opening for line in OPENING_LINES[TRIO_MODE]
     )
     assert (
-        f"方阵里混着「{puzzle.decoys[0]}」「{puzzle.decoys[1]}」「{puzzle.target}」三个形近字"
-        in text
+        f"方阵里混着大量的「{puzzle.decoys[0]}」和「{puzzle.decoys[1]}」，"
+        "但还藏着另外一个和它们长得很像的字，全场只有 1 个" in text
     )
-    assert f"「{puzzle.decoys[0]}」和「{puzzle.decoys[1]}」有很多个" in text
-    assert f"「{puzzle.target}」只藏了 1 个" in text
-    assert f"找出「{puzzle.target}」" in text
     assert "3行5列" in text and "第3行第5列" in text
     assert "大家都可以回答（答题不用@）" in text
     assert "请在 30 秒内作答" in text
     assert "答对好感度 +2" in text
     assert "答错好感度 -5" in text
     assert "被点名的群友超时未答好感度 -2！" in text
+    # 开局消息不能剧透:整个消息里答案字只应该出现在方阵里那 1 次
+    assert text.count(puzzle.target) == 1
+
+
+@pytest.mark.parametrize("mode", [PAIR_MODE, TRIO_MODE])
+def test_message_templates_never_name_the_target(mode: str) -> None:
+    template = FIND_CHAR_TRIO_MESSAGE if mode == TRIO_MODE else FIND_CHAR_PAIR_MESSAGE
+    assert "{target}" not in template
+
+
+def test_bundled_bank_opening_lines_never_leak_the_target() -> None:
+    """引导语会带上题库里的常用字,连机器人名字也可能是答案字,开局前都要过滤掉。"""
+
+    library = FindCharLibrary(BUNDLED_PUZZLES_PATH)
+    assert library.puzzles
+    substituted = {
+        mode: {line.replace("{bot}", "馒头") for line in lines}
+        for mode, lines in OPENING_LINES.items()
+    }
+    skipped: list[int] = []
+
+    for puzzle in library.puzzles:
+        opening = pick_opening(puzzle, random.Random(puzzle.seed), "馒头")
+        assert puzzle.target not in opening
+        if opening:
+            assert opening in substituted[puzzle.mode]
+        else:
+            skipped.append(puzzle.seed)
+    # 只有机器人名字「馒头」本身带上答案字的那几道题才会整句省掉引导语
+    assert skipped == [puzzle.seed for puzzle in library.puzzles if puzzle.target in "馒头"]
+
+
+def test_bundled_bank_messages_never_point_at_the_target(tmp_path: Path) -> None:
+    """遍历整份题库:开局消息不会用「」点名答案字,答案只藏在方阵那一格里。"""
+
+    config = Config()
+    library = FindCharLibrary(BUNDLED_PUZZLES_PATH)
+    find_char = FindCharCoordinator(
+        _service(tmp_path, config), config, library, rng=random.Random(11)
+    )
+
+    for puzzle in library.puzzles:
+        opening = pick_opening(puzzle, random.Random(puzzle.seed), "馒头")
+        message = find_char.message(PendingFindChar(puzzle, opening, "1", "桃友"))
+        assert f"「{puzzle.target}」" not in message
+        assert puzzle.target not in opening
+        assert grid_text(puzzle) in message
 
 
 def test_message_falls_back_to_seeded_opening(tmp_path: Path) -> None:
@@ -524,6 +575,30 @@ def test_message_falls_back_to_seeded_opening(tmp_path: Path) -> None:
     assert pending is not None
     lines = OPENING_LINES[pending.puzzle.mode]
     assert pending.opening in {line.replace("{bot}", "馒头") for line in lines}
+    assert pending.puzzle.target not in pending.opening
+
+
+async def test_settlement_reveals_answer_and_position(tmp_path: Path) -> None:
+    config = Config()
+    service = _service(tmp_path, config)
+    find_char = FindCharCoordinator(
+        service, config, _library(tmp_path, [TRIO_ENTRY]), rng=random.Random(6)
+    )
+    pending = find_char.start(GROUP_ID, TRIGGER_ID, "桃友")
+    assert pending is not None
+    puzzle = pending.puzzle
+    assert find_char.answer(GROUP_ID, OTHER_ID, "路人", puzzle.target) is True
+    sent: list[Message] = []
+
+    async def fake_send(message: Message) -> None:
+        sent.append(message)
+
+    task = find_char.schedule(pending, group_id=GROUP_ID, send=fake_send, timeout=0.01)
+    await asyncio.wait_for(task, 2)
+
+    lines = _lines(sent[0])
+    assert lines[-1] == f"答案是「{puzzle.target}」，在第 {puzzle.row} 行第 {puzzle.col} 列。"
+    assert _at_ids(sent[0]) == [OTHER_ID, TRIGGER_ID]
 
 
 # ------------------------------------------------------------ 一局游戏
@@ -648,9 +723,10 @@ async def test_settle_counts_wrong_answer_as_answered(tmp_path: Path) -> None:
     await asyncio.wait_for(task, 2)
 
     lines = _lines(sent[0])
-    assert len(lines) == 1
+    assert len(lines) == 2
     assert "好感度 -5，当前 15" in lines[0]
     assert "超时未答" not in lines[0]
+    assert lines[1].startswith("答案是「")
     assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == 15
 
 

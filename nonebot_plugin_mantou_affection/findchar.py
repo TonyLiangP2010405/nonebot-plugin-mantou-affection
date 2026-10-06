@@ -38,24 +38,23 @@ _MESSAGE_TAIL = (
     "答对好感度 {reward}，答错好感度 {penalty}，被点名的群友超时未答好感度 {timeout_penalty}！"
 )
 _MESSAGE_POSITION = (
-    "直接发送那个字，或者发送它的位置（例如「3行5列」「第3行第5列」，"
+    "找出它——直接发送那个字，或者发送它的位置（例如「3行5列」「第3行第5列」，"
     "行从上到下、列从左到右，都从 1 开始数）；\n"
 )
 FIND_CHAR_PAIR_MESSAGE = (
     "{prefix}\n"
-    "{opening}\n"
+    "{opening}"
     "{grid}\n"
-    "方阵里有一个字和大家不一样，把它找出来；\n"
+    "方阵里全是「{decoy_a}」，但还藏着 1 个和它长得很像的字；\n"
     f"{_MESSAGE_POSITION}"
     f"{_MESSAGE_TAIL}"
 )
 FIND_CHAR_TRIO_MESSAGE = (
     "{prefix}\n"
-    "{opening}\n"
+    "{opening}"
     "{grid}\n"
-    "方阵里混着「{decoy_a}」「{decoy_b}」「{target}」三个形近字，"
-    "「{decoy_a}」和「{decoy_b}」有很多个，「{target}」只藏了 1 个；\n"
-    "找出「{target}」——"
+    "方阵里混着大量的「{decoy_a}」和「{decoy_b}」，"
+    "但还藏着另外一个和它们长得很像的字，全场只有 1 个；\n"
     f"{_MESSAGE_POSITION}"
     f"{_MESSAGE_TAIL}"
 )
@@ -66,6 +65,7 @@ FIND_CHAR_WRONG_REPLY = "猜错啦，那个字还躲在方阵里，好感度 {de
 FIND_CHAR_TIMEOUT_REPLY = (
     "{bot}把方阵收起来了也没等到你，好感度 {delta:+d}，当前 {affection}（超时未答）"
 )
+FIND_CHAR_ANSWER_REPLY = "答案是「{target}」，在第 {row} 行第 {col} 列。"
 
 OPENING_LINES: dict[str, tuple[str, ...]] = {
     PAIR_MODE: (
@@ -372,6 +372,23 @@ def _is_single_han(value: Any) -> bool:
     return isinstance(value, str) and len(value) == 1 and is_han(value)
 
 
+def pick_opening(puzzle: FindCharPuzzle, rng: random.Random, bot_name: str) -> str:
+    """挑一句开场引导语，只挑不含答案字的，避免文案先把答案说出来。
+
+    引导语里偶尔会带上题库里某个答案字，机器人名字（默认「馒头」）也可能正好是答案字，
+    所以按替换后的整句过滤一遍；万一所有引导语都带答案字，就整句省掉，只留方阵和规则。
+    """
+
+    candidates = [
+        line.replace("{bot}", bot_name)
+        for line in OPENING_LINES[puzzle.mode]
+        if puzzle.target not in line.replace("{bot}", bot_name)
+    ]
+    if not candidates:
+        return ""
+    return rng.choice(candidates)
+
+
 class FindCharCoordinator:
     """管理找字小游戏的触发、作答收集与结算，同一个群同时只有一个活动。"""
 
@@ -404,7 +421,7 @@ class FindCharCoordinator:
         """从题库抽一道题开局并登记待作答状态。
 
         本群已有未结束的活动、没有传题库或题库为空时返回 None，调用方退回普通
-        小动作或普通戳一戳文案。
+        小动作或普通戳一戳文案。开场引导语会避开答案字，避免文案先把答案说出来。
         """
 
         key = str(group_id)
@@ -413,9 +430,7 @@ class FindCharCoordinator:
         puzzle = self.library.pick() if self.library is not None else None
         if puzzle is None:
             return None
-        opening = self.rng.choice(OPENING_LINES[puzzle.mode]).replace(
-            "{bot}", self.config.mantou_affection_bot_name
-        )
+        opening = pick_opening(puzzle, self.rng, self.config.mantou_affection_bot_name)
         pending = PendingFindChar(puzzle, opening, str(user_id), nickname)
         self.pending[key] = pending
         return pending
@@ -435,12 +450,15 @@ class FindCharCoordinator:
         return pending.record(str(user_id), nickname, correct)
 
     def message(self, pending: PendingFindChar) -> str:
+        """开局消息：只点名干扰字，绝不出现答案字（答案留到结算时揭示）。"""
+
         puzzle = pending.puzzle
         template = FIND_CHAR_TRIO_MESSAGE if puzzle.trio else FIND_CHAR_PAIR_MESSAGE
         decoys = puzzle.decoys
+        opening = f"{pending.opening}\n" if pending.opening else ""
         return template.format(
             prefix=FIND_CHAR_PREFIX,
-            opening=pending.opening,
+            opening=opening,
             grid=grid_text(puzzle),
             timeout=self.config.mantou_affection_find_char_timeout,
             reward=f"{FIND_CHAR_CORRECT_DELTA:+d}",
@@ -448,7 +466,6 @@ class FindCharCoordinator:
             timeout_penalty=f"{FIND_CHAR_TIMEOUT_DELTA:+d}",
             decoy_a=decoys[0],
             decoy_b=decoys[-1],
-            target=puzzle.target,
         )
 
     async def settle(
@@ -504,6 +521,18 @@ class FindCharCoordinator:
                     affection=profile.affection,
                 ),
             )
+
+        if segments:
+            segments.append(MessageSegment.text("\n"))
+        segments.append(
+            MessageSegment.text(
+                FIND_CHAR_ANSWER_REPLY.format(
+                    target=pending.puzzle.target,
+                    row=pending.puzzle.row,
+                    col=pending.puzzle.col,
+                )
+            )
+        )
 
         return Message(segments)
 
