@@ -106,6 +106,7 @@ def test_registered_matchers_include_probability_command() -> None:
         _reset_cmd,
         probability_cmd,
         find_char_cmd,
+        bet_cmd,
     ) = matchers
     assert probability_cmd.priority == 10
     assert probability_cmd.block is True
@@ -116,6 +117,11 @@ def test_registered_matchers_include_probability_command() -> None:
     assert find_char_cmd.block is True
     assert [handler.call.__name__ for handler in find_char_cmd.handlers] == [
         "handle_find_char_chance"
+    ]
+    assert bet_cmd.priority == 10
+    assert bet_cmd.block is True
+    assert [handler.call.__name__ for handler in bet_cmd.handlers] == [
+        "handle_bet_probability"
     ]
 
 

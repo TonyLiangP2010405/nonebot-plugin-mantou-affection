@@ -17,6 +17,10 @@ from .parsing import (
 )
 from .service import AffectionService, normalize_nickname
 
+BET_CHANCE_USAGE = (
+    "请输入 0~1 的小数（如 0.005）或百分数（如 0.5%），0 即关闭馒头博弈"
+)
+
 
 async def _group_only(event: Event) -> bool:
     return isinstance(event, GroupMessageEvent)
@@ -47,7 +51,6 @@ def _format_wait(seconds: int) -> str:
 def _format_probability(value: float) -> str:
     percent = f"{value * 100:.6f}".rstrip("0").rstrip(".")
     return f"{percent or '0'}%"
-
 
 def register_commands(service: AffectionService, config: Config) -> tuple:
     profile_cmd = on_command(
@@ -101,6 +104,13 @@ def register_commands(service: AffectionService, config: Config) -> tuple:
     find_char_cmd = on_command(
         "馒头找字概率",
         aliases={"馒头找字触发概率"},
+        permission=SUPERUSER,
+        priority=10,
+        block=True,
+    )
+    bet_cmd = on_command(
+        "馒头博弈概率",
+        aliases={"馒头博弈触发概率"},
         permission=SUPERUSER,
         priority=10,
         block=True,
@@ -180,7 +190,8 @@ def register_commands(service: AffectionService, config: Config) -> tuple:
             "/馒头好感榜 —— 查看本群排行榜\n"
             "/馒头好感调整 @群友 +10 —— SUPERUSER 调整好感\n"
             "/馒头好感重置 确认 —— SUPERUSER 清空所有好感数据\n"
-            "/馒头找字概率 5% —— SUPERUSER 查看或调整找字小游戏概率"
+            "/馒头找字概率 5% —— SUPERUSER 查看或调整找字小游戏概率\n"
+            "/馒头博弈概率 0.5% —— SUPERUSER 查看或调整馒头博弈概率"
         )
 
     @adjust_cmd.handle()
@@ -283,6 +294,38 @@ def register_commands(service: AffectionService, config: Config) -> tuple:
             lines.append(f"戳一戳：{_format_probability(wanted.poke)}")
         await find_char_cmd.finish("\n".join(lines))
 
+    @bet_cmd.handle()
+    async def handle_bet_probability(args: Message = CommandArg()) -> None:
+        raw = args.extract_plain_text().strip()
+        if not raw:
+            try:
+                current = await service.bet_probability()
+                override = await service.bet_probability_override()
+            except Exception:
+                logger.exception("[mantou-affection] 读取博弈概率失败")
+                await bet_cmd.finish("读取失败，请检查数据目录权限后重试。")
+                return
+            default = config.mantou_affection_bet_chance
+            source = "运行时覆盖" if override is not None else "配置默认"
+            await bet_cmd.finish(
+                f"当前馒头博弈概率：{_format_probability(current)}（{source}，"
+                f"配置默认 {_format_probability(default)}）\n"
+                f"用法：{BET_CHANCE_USAGE}"
+            )
+            return
+        try:
+            value = parse_probability(raw)
+        except ValueError as error:
+            await bet_cmd.finish(f"{error}。{BET_CHANCE_USAGE}")
+            return
+        try:
+            await service.set_bet_probability(value)
+        except Exception:
+            logger.exception("[mantou-affection] 保存博弈概率失败")
+            await bet_cmd.finish("保存失败，请检查数据目录权限后重试。")
+            return
+        await bet_cmd.finish(f"馒头博弈概率已调整为 {_format_probability(value)}")
+
     return (
         profile_cmd,
         interact_cmd,
@@ -292,4 +335,5 @@ def register_commands(service: AffectionService, config: Config) -> tuple:
         reset_cmd,
         probability_cmd,
         find_char_cmd,
+        bet_cmd,
     )

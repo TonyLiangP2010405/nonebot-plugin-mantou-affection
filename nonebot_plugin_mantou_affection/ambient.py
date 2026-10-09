@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable
 from nonebot import logger, on_message
 from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message, MessageSegment
 
+from .bet import BUNDLED_ROUNDS_PATH, BetCoordinator, BetLibrary
 from .commands import GROUP_ONLY
 from .config import Config
 from .events import Event, EventLibrary, EventOption
@@ -95,6 +96,7 @@ class EventCoordinator:
         upset_library: EventLibrary | None = None,
         rng: random.Random | None = None,
         findchar: FindCharCoordinator | None = None,
+        bet: BetCoordinator | None = None,
     ):
         self.service = service
         self.config = config
@@ -102,6 +104,7 @@ class EventCoordinator:
         self.upset_library = upset_library
         self.rng = rng or random.Random()
         self.findchar = findchar
+        self.bet = bet
         self.pending: dict[str, PendingEvent] = {}
 
     def attach_find_char(self, findchar: FindCharCoordinator) -> None:
@@ -109,14 +112,20 @@ class EventCoordinator:
 
         self.findchar = findchar
 
+    def attach_bet(self, bet: BetCoordinator) -> None:
+        """接入馒头博弈，让三种活动共用同一个群的席位。"""
+
+        self.bet = bet
+
     def busy(self, group_id: str) -> bool:
-        """本群是否已经有待结算的活动：随机事件或找字小游戏。"""
+        """本群是否已经有待结算的活动：随机事件、找字小游戏或馒头博弈。"""
 
         key = str(group_id)
         if key in self.pending:
             return True
-        findchar = self.findchar
-        return findchar is not None and key in findchar.pending
+        return any(
+            peer is not None and key in peer.pending for peer in (self.findchar, self.bet)
+        )
 
     def triggered(self) -> bool:
         """小动作命中后再掷一次骰子，决定是否升级为随机事件。"""
@@ -398,11 +407,13 @@ def register_ambient(
     config: Config,
     events: EventCoordinator | None = None,
     findchar: FindCharCoordinator | None = None,
+    bet: BetCoordinator | None = None,
 ) -> tuple:
     """群友发言时按概率让馒头冒个小动作，偶尔升级为群里多人可答的随机事件。
 
     好感度 > 0 的群友发言时先按找字小游戏的概率掷一次：命中了就只发找字方阵，
     没命中才继续走原来的 0.1% 小动作流程，两者互斥，不会在同一条消息上同时触发。
+    馒头博弈不参与群消息触发，只由对外 API 启动，但作答同样走这里的答案路由。
     """
 
     coordinator = events or EventCoordinator(service, config)
@@ -413,7 +424,15 @@ def register_ambient(
         events=coordinator,
         rng=coordinator.rng,
     )
+    bet_coordinator = bet or BetCoordinator(
+        service,
+        config,
+        BetLibrary(BUNDLED_ROUNDS_PATH),
+        events=coordinator,
+        rng=coordinator.rng,
+    )
     coordinator.attach_find_char(find_char)
+    coordinator.attach_bet(bet_coordinator)
     ambient = on_message(rule=GROUP_ONLY, priority=90, block=False)
     answer = on_message(rule=GROUP_ONLY, priority=5, block=False)
 
@@ -424,6 +443,8 @@ def register_ambient(
             user_id = str(event.user_id)
             name = _sender_name(event)
             text = event.message.extract_plain_text()
+            if await bet_coordinator.answer(group_id, user_id, name, text):
+                return
             if find_char.answer(group_id, user_id, name, text):
                 return
             coordinator.answer(group_id, user_id, name, text)

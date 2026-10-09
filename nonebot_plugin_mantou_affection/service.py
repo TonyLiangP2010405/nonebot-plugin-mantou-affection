@@ -28,6 +28,7 @@ from .storage import AffectionStore
 AMBIENT_PROBABILITY_SETTING = "ambient_probability"
 FIND_CHAR_GROUP_CHANCE_SETTING = "find_char_group_chance"
 FIND_CHAR_POKE_CHANCE_SETTING = "find_char_poke_chance"
+BET_PROBABILITY_SETTING = "bet_probability"
 AMBIENT_SCENE = "mantou.ambient"
 
 
@@ -175,6 +176,24 @@ class AffectionService:
             return False
         chance = await self.find_char_group_chance()
         return self.rng.random() < chance
+
+    async def bet_probability(self) -> float:
+        """馒头博弈的触发概率，运行时用 /馒头博弈概率 覆盖过就优先用它。"""
+
+        return await self._stored_probability(
+            BET_PROBABILITY_SETTING, self.config.mantou_affection_bet_chance
+        )
+
+    async def bet_probability_override(self) -> float | None:
+        """读取运行时覆盖的博弈概率，没覆盖过返回 None。"""
+
+        stored: Any = await self.store.get_setting(BET_PROBABILITY_SETTING, None)
+        if isinstance(stored, bool) or not isinstance(stored, (int, float)):
+            return None
+        return min(1.0, max(0.0, float(stored)))
+
+    async def set_bet_probability(self, value: float) -> None:
+        await self.store.set_setting(BET_PROBABILITY_SETTING, float(value))
 
     async def _stored_probability(self, key: str, default: float) -> float:
         """读取运行时覆盖的概率，缺省或数据损坏时退回配置默认值。"""

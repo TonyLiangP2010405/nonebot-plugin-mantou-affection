@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from pathlib import Path
 
 from nonebot import get_plugin_config, logger, require
@@ -14,7 +14,7 @@ __plugin_meta__ = PluginMetadata(
     usage=(
         "/馒头互动｜/馒头好感｜/馒头好感榜｜/馒头好感帮助\n"
         "SUPERUSER：/馒头好感调整 @群友 +10｜/馒头好感重置 确认｜"
-        "/馒头反应概率 5%｜/馒头找字概率 5%"
+        "/馒头反应概率 5%｜/馒头找字概率 5%｜/馒头博弈概率 0.5%"
     ),
     type="application",
     homepage="https://github.com/TonyLiangP2010405/nonebot-plugin-mantou-affection",
@@ -28,6 +28,7 @@ from nonebot.adapters.onebot.v11 import Message
 from nonebot_plugin_localstore import get_plugin_data_dir
 
 from .ambient import EventCoordinator, register_ambient
+from .bet import BUNDLED_ROUNDS_PATH, BetCoordinator, BetLibrary
 from .commands import register_commands
 from .copywriting import AffectionTextLibrary
 from .events import EventLibrary
@@ -57,9 +58,14 @@ find_char_coordinator = FindCharCoordinator(
     service, plugin_config, find_char_library, events=event_coordinator
 )
 event_coordinator.attach_find_char(find_char_coordinator)
+bet_library = BetLibrary(BUNDLED_ROUNDS_PATH)
+bet_coordinator = BetCoordinator(
+    service, plugin_config, bet_library, events=event_coordinator
+)
+event_coordinator.attach_bet(bet_coordinator)
 matchers = register_commands(service, plugin_config)
 ambient_matcher, answer_matcher = register_ambient(
-    service, plugin_config, event_coordinator, find_char_coordinator
+    service, plugin_config, event_coordinator, find_char_coordinator, bet_coordinator
 )
 plugin_linkage = register_plugin_linkage(service, plugin_config)
 
@@ -104,6 +110,32 @@ async def get_affection(group_id: str | int, user_id: str | int) -> int:
     """读取指定群友的当前好感度；不存在记录时返回 0。"""
 
     return (await service.profile(str(group_id), str(user_id))).affection
+
+
+async def maybe_start_bet(
+    group_id: str | int,
+    user_id: str | int,
+    *,
+    nickname: str = "",
+    candidates: Iterable[tuple[str | int, str]] | None = None,
+    send: Callable[[Message | str], Awaitable[object]] | None = None,
+) -> bool:
+    """水群榜等插件发完卡片后调用：按概率开一局「馒头博弈」，开局成功返回 True。
+
+    candidates 是榜单成员 [(user_id, name), ...]，会排除触发者后随机抽两位当对手；
+    不足两人、本群已有其它活动、概率没掷中或没传 send 都会直接返回 False。
+    send 用来发开场消息与结算消息，通常直接传调用方的 matcher.send。
+    """
+
+    if send is None or candidates is None:
+        return False
+    return await bet_coordinator.maybe_start(
+        group_id=str(group_id),
+        user_id=str(user_id),
+        nickname=nickname,
+        candidates=candidates,
+        send=send,
+    )
 
 
 async def poke(
