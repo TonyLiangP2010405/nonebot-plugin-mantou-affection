@@ -186,16 +186,33 @@ def _lines(message: Message) -> list[str]:
 
 
 def _result_lines(message: Message) -> dict[str, str]:
-    """按 @ 到的人收集结算行，抽签顺序随机也能稳定断言。"""
+    """按行首 @ 到的人收集结算行，抽签顺序随机也能稳定断言。
+
+    并列获胜的行里还会 @ 出其它赢家，这里把行内 @ 记成 @qq 文本，行首 @ 才是这行的主人。
+    """
 
     lines: dict[str, str] = {}
-    current: str | None = None
+    owner: str | None = None
+    buffer: list[str] = []
+
+    def flush() -> None:
+        nonlocal owner, buffer
+        if owner is not None:
+            lines[owner] = "".join(buffer).strip()
+        owner, buffer = None, []
+
     for segment in message:
         if segment.type == "at":
-            current = str(segment.data["qq"])
-            lines.setdefault(current, "")
-        elif segment.type == "text" and current is not None:
-            lines[current] += str(segment.data["text"]).strip()
+            if owner is None:
+                owner = str(segment.data["qq"])
+            else:
+                buffer.append(f"@{segment.data['qq']}")
+            continue
+        for index, part in enumerate(str(segment.data.get("text", "")).split("\n")):
+            if index:
+                flush()
+            buffer.append(part)
+    flush()
     return lines
 
 
@@ -542,7 +559,9 @@ async def test_settlement_transfers_from_losers_to_winner(tmp_path: Path) -> Non
     assert coordinator.pending == {}
 
 
-async def test_settlement_tie_goes_to_earlier_submitter(tmp_path: Path) -> None:
+async def test_settlement_ties_make_all_top_scorers_winners(tmp_path: Path) -> None:
+    """并列最高分时两人都算赢家,奖池平分,赢家行互相 @ 出并列的人。"""
+
     coordinator, service = await _start_with_pending(tmp_path)
     await _give_affection(service, 40, TRIGGER_ID)
     await _give_affection(service, 40, RIVAL_A)
@@ -550,13 +569,74 @@ async def test_settlement_tie_goes_to_earlier_submitter(tmp_path: Path) -> None:
 
     await coordinator.answer(GROUP_ID, RIVAL_B, "乙", "3 1 5 2 4")
     await coordinator.answer(GROUP_ID, RIVAL_A, "甲", "3 1 5 2 4")
-    await coordinator.answer(GROUP_ID, TRIGGER_ID, "桃友", "1 1 1 1 1")
+    await coordinator.answer(GROUP_ID, TRIGGER_ID, "桃友", "3 1 5 4 2")
     sent = await _settle(coordinator)
 
-    assert _at_ids(sent[0])[0] == RIVAL_B
-    assert (await service.profile(GROUP_ID, RIVAL_B)).affection == 44
-    assert (await service.profile(GROUP_ID, RIVAL_A)).affection == 38
+    results = _result_lines(sent[0])
+    assert "并列获胜，分得 1 点好感度，当前 41" in results[RIVAL_A]
+    assert "并列获胜，分得 1 点好感度，当前 41" in results[RIVAL_B]
+    assert "猜中 3 个位置，被扣掉 2 点好感度，当前 38" in results[TRIGGER_ID]
+    assert set(results) == {TRIGGER_ID, RIVAL_A, RIVAL_B}
+    assert f"@{RIVAL_A}" in results[RIVAL_B]
+    assert f"@{RIVAL_B}" in results[RIVAL_A]
+    assert (await service.profile(GROUP_ID, RIVAL_A)).affection == 41
+    assert (await service.profile(GROUP_ID, RIVAL_B)).affection == 41
     assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == 38
+
+
+async def test_settlement_pool_remainder_goes_to_earliest_winner(tmp_path: Path) -> None:
+    """奖池除不尽时余数归最早提交的赢家,总额守恒。"""
+
+    coordinator, service = await _start_with_pending(tmp_path)
+    await _give_affection(service, 30, TRIGGER_ID)
+    await _give_affection(service, 40, RIVAL_A)
+    await _give_affection(service, 40, RIVAL_B)
+
+    await coordinator.answer(GROUP_ID, RIVAL_A, "甲", "3 1 5 2 4")
+    await coordinator.answer(GROUP_ID, RIVAL_B, "乙", "3 1 5 2 4")
+    await coordinator.answer(GROUP_ID, TRIGGER_ID, "桃友", "3 1 5 4 2")
+    sent = await _settle(coordinator)
+
+    results = _result_lines(sent[0])
+    assert "并列获胜，分得 1 点好感度，当前 41" in results[RIVAL_A]
+    assert "并列获胜，这次没有分到好感度，当前 40" in results[RIVAL_B]
+    assert "被扣掉 1 点好感度，当前 29" in results[TRIGGER_ID]
+    affections = [
+        (await service.profile(GROUP_ID, user_id)).affection
+        for user_id in (TRIGGER_ID, RIVAL_A, RIVAL_B)
+    ]
+    assert affections == [29, 41, 40]
+    assert sum(affections) == 110
+
+
+async def test_settlement_three_way_tie_without_losers(tmp_path: Path) -> None:
+    """三人用不同排列拿到同样的最高分:三人都是赢家,没有输家可扣。"""
+
+    coordinator, service = await _start_with_pending(tmp_path)
+    await _give_affection(service, 40, TRIGGER_ID)
+    await _give_affection(service, 40, RIVAL_A)
+    await _give_affection(service, 40, RIVAL_B)
+
+    await coordinator.answer(GROUP_ID, RIVAL_A, "甲", "3 1 5 4 2")
+    await coordinator.answer(GROUP_ID, RIVAL_B, "乙", "1 3 5 2 4")
+    await coordinator.answer(GROUP_ID, TRIGGER_ID, "桃友", "5 1 3 2 4")
+    sent = await _settle(coordinator)
+
+    results = _result_lines(sent[0])
+    for user_id, partners in (
+        (TRIGGER_ID, (RIVAL_A, RIVAL_B)),
+        (RIVAL_A, (RIVAL_B, TRIGGER_ID)),
+        (RIVAL_B, (TRIGGER_ID, RIVAL_A)),
+    ):
+        assert "猜中 3 个位置，与 " in results[user_id]
+        assert "并列获胜，其它人没有可转让的好感度，当前 40" in results[user_id]
+        for partner in partners:
+            assert f"@{partner}" in results[user_id]
+        assert (await service.profile(GROUP_ID, user_id)).affection == 40
+    # 行首 @ 之外,每个人的赢家行还会 @ 出另外两位并列的人
+    assert _at_ids(sent[0]).count(RIVAL_A) == 3
+    assert _at_ids(sent[0]).count(RIVAL_B) == 3
+    assert _at_ids(sent[0]).count(TRIGGER_ID) == 3
 
 
 async def test_settlement_handles_empty_affection_losers(tmp_path: Path) -> None:

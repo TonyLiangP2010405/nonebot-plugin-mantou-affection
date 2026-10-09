@@ -232,16 +232,17 @@ class PendingBet:
         ]
         return max(hits) if hits else None
 
-    def winner_id(self) -> str | None:
-        """命中最高者获胜，并列时更早提交的人胜出。"""
+    def winner_ids(self) -> tuple[str, ...]:
+        """达到最高命中数的被点名者都是赢家（并列时不止一人），按提交先后排序。"""
 
         best = self.best_named_hits()
         if best is None:
-            return None
-        for user_id, answer in self.answers.items():
-            if user_id in self.named_ids and answer.hits == best:
-                return user_id
-        return None
+            return ()
+        return tuple(
+            user_id
+            for user_id, answer in self.answers.items()
+            if user_id in self.named_ids and answer.hits == best
+        )
 
 
 class BetCoordinator:
@@ -434,12 +435,12 @@ class BetCoordinator:
         return await self.settlement(pending, group_id=group_id)
 
     async def settlement(self, pending: PendingBet, *, group_id: str) -> Message:
-        """按目标顺序算命中数，输家把好感度转给赢家，再评判其它群友。"""
+        """按目标顺序算命中数，输家的好感度平分给赢家，再评判其它群友。"""
 
         order = " ".join(str(digit) for digit in pending.round.target)
         head = f"{pending.round.reveal}\n{BET_REVEAL_REPLY.format(order=order)}"
-        winner_id = pending.winner_id()
-        if winner_id is None:
+        winners = pending.winner_ids()
+        if not winners:
             return Message(
                 [
                     MessageSegment.text(
@@ -449,36 +450,31 @@ class BetCoordinator:
                 ]
             )
 
-        entries: list[tuple[str, str]] = []
-        gain = 0
+        entries: list[tuple[str, list[MessageSegment]]] = []
+        pool = 0
         for user_id in pending.named_ids:
-            if user_id == winner_id:
+            if user_id in winners:
                 continue
             amount, line = await self._take_share(group_id, pending, user_id)
-            gain += amount
-            entries.append((user_id, line))
+            pool += amount
+            entries.append((user_id, [MessageSegment.text(f" {line}")]))
 
-        winner = pending.answers[winner_id]
-        _, profile = await self.service.adjust(group_id, winner_id, winner.nickname, gain)
-        if gain > 0:
-            entries.insert(
-                0,
-                (
-                    winner_id,
-                    BET_WIN_REPLY.format(
-                        hits=winner.hits, amount=gain, affection=profile.affection
-                    ),
-                ),
+        share, remainder = divmod(pool, len(winners))
+        winner_entries: list[tuple[str, list[MessageSegment]]] = []
+        for index, winner_id in enumerate(winners):
+            amount = share + (remainder if index == 0 else 0)
+            answer = pending.answers[winner_id]
+            _, profile = await self.service.adjust(
+                group_id, winner_id, answer.nickname, amount
             )
-        else:
-            entries.insert(
-                0,
+            partners = [user_id for user_id in winners if user_id != winner_id]
+            winner_entries.append(
                 (
                     winner_id,
-                    BET_WIN_EMPTY_REPLY.format(
-                        hits=winner.hits, affection=profile.affection
+                    self._winner_line(
+                        pending, winner_id, partners, amount, pool, profile.affection
                     ),
-                ),
+                )
             )
 
         best_named = pending.best_named_hits()
@@ -489,27 +485,54 @@ class BetCoordinator:
                 _, profile = await self.service.adjust(
                     group_id, user_id, answer.nickname, BET_OTHER_REWARD
                 )
-                entries.append(
-                    (
-                        user_id,
-                        BET_OTHER_REPLY.format(
-                            hits=answer.hits,
-                            amount=BET_OTHER_REWARD,
-                            affection=profile.affection,
-                        ),
-                    )
+                line = BET_OTHER_REPLY.format(
+                    hits=answer.hits,
+                    amount=BET_OTHER_REWARD,
+                    affection=profile.affection,
                 )
             else:
-                entries.append((user_id, BET_OTHER_SKIP_REPLY.format(hits=answer.hits)))
+                line = BET_OTHER_SKIP_REPLY.format(hits=answer.hits)
+            entries.append((user_id, [MessageSegment.text(f" {line}")]))
 
         segments: list[MessageSegment] = [
             MessageSegment.text(f"{head}\n{pending.round.settle}")
         ]
-        for user_id, line in entries:
+        for user_id, line_segments in winner_entries + entries:
             segments.append(MessageSegment.text("\n"))
             segments.append(MessageSegment.at(user_id))
-            segments.append(MessageSegment.text(f" {line}"))
+            segments.extend(line_segments)
         return Message(segments)
+
+    def _winner_line(
+        self,
+        pending: PendingBet,
+        winner_id: str,
+        partners: list[str],
+        amount: int,
+        pool: int,
+        affection: int,
+    ) -> list[MessageSegment]:
+        """赢家那一行；并列获胜时把其它赢家也 @ 出来。"""
+
+        answer = pending.answers[winner_id]
+        if not partners:
+            template = BET_WIN_REPLY if amount > 0 else BET_WIN_EMPTY_REPLY
+            line = template.format(hits=answer.hits, amount=amount, affection=affection)
+            return [MessageSegment.text(f" {line}")]
+
+        segments = [MessageSegment.text(f" 猜中 {answer.hits} 个位置，与 ")]
+        for index, partner in enumerate(partners):
+            if index:
+                segments.append(MessageSegment.text("、"))
+            segments.append(MessageSegment.at(partner))
+        if amount > 0:
+            tail = f" 并列获胜，分得 {amount} 点好感度，当前 {affection}"
+        elif pool > 0:
+            tail = f" 并列获胜，这次没有分到好感度，当前 {affection}"
+        else:
+            tail = f" 并列获胜，其它人没有可转让的好感度，当前 {affection}"
+        segments.append(MessageSegment.text(tail))
+        return segments
 
     async def _take_share(
         self, group_id: str, pending: PendingBet, user_id: str
