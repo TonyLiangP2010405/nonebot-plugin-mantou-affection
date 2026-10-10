@@ -12,7 +12,6 @@ from nonebot.adapters.onebot.v11.event import Sender
 from nonebot_plugin_mantou_affection.ambient import EventCoordinator, register_ambient
 from nonebot_plugin_mantou_affection.bet import (
     BET_IDENTICAL_PENALTY,
-    BET_OTHER_REWARD,
     BUNDLED_ROUNDS_PATH,
     BetCoordinator,
     BetLibrary,
@@ -36,6 +35,7 @@ TRIGGER_ID = "92002"
 RIVAL_A = "92003"
 RIVAL_B = "92004"
 OTHER_ID = "92005"
+OTHER_B = "92006"
 TARGET = (3, 1, 5, 2, 4)
 ROUND = {
     "target": [3, 1, 5, 2, 4],
@@ -135,6 +135,15 @@ async def _give_affection(
     await service.store.update_profile(group_id, user_id, "桃友", bump)
 
 
+async def _ensure_affection(
+    service: AffectionService, user_id: str, score: int = 10
+) -> None:
+    """候选人要有非 0 好感度才会被抽成对手,开局前先垫一点。"""
+
+    if (await service.profile(GROUP_ID, user_id)).affection == 0:
+        await _give_affection(service, score, user_id)
+
+
 async def _start(
     coordinator: BetCoordinator,
     *,
@@ -146,6 +155,13 @@ async def _start(
         if sent is not None:
             sent.append(message)
 
+    for candidate in CANDIDATES if candidates is None else candidates:
+        try:
+            member_id, _name = candidate
+        except (TypeError, ValueError):
+            continue
+        if str(member_id) != str(user_id):
+            await _ensure_affection(coordinator.service, str(member_id))
     return await coordinator.maybe_start(
         group_id=GROUP_ID,
         user_id=user_id,
@@ -413,7 +429,7 @@ async def test_maybe_start_sends_opening_without_leaking_target(tmp_path: Path) 
     assert "3 5 1 4 2" in body
     assert f"三人各扣 {BET_IDENTICAL_PENALTY} 好感度" in body
     assert "其它群友也可以回答（不用@）" in body
-    assert f"则 +{BET_OTHER_REWARD}" in body
+    assert "奖池平分给赢家，以及比被点名的三个人都更接近的其它群友" in body
     # 目标顺序只在结算时出现,开场消息里不能带
     assert "3 1 5 2 4" not in body
     assert ROUND["reveal"] not in body
@@ -453,6 +469,76 @@ async def _start_with_pending(
     sent: list[Message] = []
     assert await _start(coordinator, sent=sent) is True
     return coordinator, service
+
+
+async def test_maybe_start_filters_candidates_without_affection(tmp_path: Path) -> None:
+    """好感度为 0 的候选人不会被抽成对手,过滤后不足两人就不开局。"""
+
+    coordinator, service = _bet(tmp_path, Config(mantou_affection_bet_chance=1.0))
+    await _give_affection(service, 10, RIVAL_A)
+    sent: list[Message] = []
+
+    async def fake_send(message: Message) -> None:
+        sent.append(message)
+
+    async def start() -> bool:
+        return await coordinator.maybe_start(
+            group_id=GROUP_ID,
+            user_id=TRIGGER_ID,
+            nickname="桃友",
+            candidates=[
+                (int(TRIGGER_ID), "桃友"),
+                (int(RIVAL_A), "甲"),
+                (int(RIVAL_B), "乙"),
+            ],
+            send=fake_send,
+        )
+
+    assert await start() is False
+    assert sent == []
+    assert coordinator.pending == {}
+
+    await _give_affection(service, 3, RIVAL_B)
+    assert await start() is True
+    assert set(coordinator.pending[GROUP_ID].named_ids) == {TRIGGER_ID, RIVAL_A, RIVAL_B}
+    await _cancel_task(coordinator)
+
+
+async def test_maybe_start_keeps_candidates_with_negative_affection(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """负数好感度也算非 0,照样能当对手。"""
+
+    coordinator, _service = _bet(tmp_path, Config(mantou_affection_bet_chance=1.0))
+
+    async def fake_profile(group_id: str, user_id: str) -> Profile:
+        if user_id == RIVAL_A:
+            return Profile(user_id, affection=-3)
+        return Profile(user_id, affection=5 if user_id == RIVAL_B else 0)
+
+    monkeypatch.setattr(coordinator.service, "profile", fake_profile)
+    sent: list[Message] = []
+
+    async def fake_send(message: Message) -> None:
+        sent.append(message)
+
+    started = await coordinator.maybe_start(
+        group_id=GROUP_ID,
+        user_id=TRIGGER_ID,
+        nickname="桃友",
+        candidates=[
+            (int(TRIGGER_ID), "桃友"),
+            (int(RIVAL_A), "甲"),
+            (int(RIVAL_B), "乙"),
+            (int(OTHER_B), "丙"),
+        ],
+        send=fake_send,
+    )
+
+    # RIVAL_A 是负数(保留)、RIVAL_B 有 5 点、丙 是 0(过滤),正好两位对手
+    assert started is True
+    assert set(coordinator.pending[GROUP_ID].named_ids) == {TRIGGER_ID, RIVAL_A, RIVAL_B}
+    await _cancel_task(coordinator)
 
 
 async def test_answer_keeps_first_submission_only(tmp_path: Path) -> None:
@@ -641,6 +727,8 @@ async def test_settlement_three_way_tie_without_losers(tmp_path: Path) -> None:
 
 async def test_settlement_handles_empty_affection_losers(tmp_path: Path) -> None:
     coordinator, service = await _start_with_pending(tmp_path)
+    await _give_affection(service, 0, TRIGGER_ID)
+    await _give_affection(service, 0, RIVAL_B)
     await _give_affection(service, 10, RIVAL_A)
 
     await coordinator.answer(GROUP_ID, RIVAL_A, "甲", "3 1 5 2 4")
@@ -652,7 +740,9 @@ async def test_settlement_handles_empty_affection_losers(tmp_path: Path) -> None
     assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == 0
 
 
-async def test_settlement_rewards_outside_member_only_when_better(tmp_path: Path) -> None:
+async def test_settlement_outsider_without_beating_named_gets_nothing(
+    tmp_path: Path,
+) -> None:
     coordinator, service = await _start_with_pending(tmp_path)
     await _give_affection(service, 50, TRIGGER_ID)
     await _give_affection(service, 50, RIVAL_A)
@@ -669,21 +759,98 @@ async def test_settlement_rewards_outside_member_only_when_better(tmp_path: Path
     assert (await service.profile(GROUP_ID, OTHER_ID)).affection == 10
 
 
-async def test_settlement_rewards_outside_member_beating_named(tmp_path: Path) -> None:
+async def test_settlement_outsider_shares_pool_with_winners(tmp_path: Path) -> None:
+    """围观者比被点名的人更接近时,和赢家一起分奖池,余数给最早提交的人。"""
+
     coordinator, service = await _start_with_pending(tmp_path)
-    await _give_affection(service, 50, TRIGGER_ID)
-    await _give_affection(service, 50, RIVAL_A)
-    await _give_affection(service, 50, RIVAL_B)
+    await _give_affection(service, 100, TRIGGER_ID)
+    await _give_affection(service, 100, RIVAL_A)
+    await _give_affection(service, 100, RIVAL_B)
     await _give_affection(service, 10, OTHER_ID)
 
     await coordinator.answer(GROUP_ID, RIVAL_A, "甲", "3 1 5 4 2")
-    await coordinator.answer(GROUP_ID, RIVAL_B, "乙", "3 1 5 4 2")
+    await coordinator.answer(GROUP_ID, RIVAL_B, "乙", "1 3 5 2 4")
+    await coordinator.answer(GROUP_ID, TRIGGER_ID, "桃友", "1 2 3 4 5")
     await coordinator.answer(GROUP_ID, OTHER_ID, "路人", "3 1 5 2 4")
     sent = await _settle(coordinator)
 
     results = _result_lines(sent[0])
-    assert "猜中 5 个位置，比被点名的人更接近，好感度 +1，当前 11" in results[OTHER_ID]
-    assert (await service.profile(GROUP_ID, OTHER_ID)).affection == 11
+    assert "并列获胜，分得 3 点好感度，当前 103" in results[RIVAL_A]
+    assert "并列获胜，分得 1 点好感度，当前 101" in results[RIVAL_B]
+    assert "比被点名的人更接近，从奖池分得 1 点好感度，当前 11" in results[OTHER_ID]
+    assert "被扣掉 5 点好感度，当前 95" in results[TRIGGER_ID]
+    affections = [
+        (await service.profile(GROUP_ID, user_id)).affection
+        for user_id in (TRIGGER_ID, RIVAL_A, RIVAL_B, OTHER_ID)
+    ]
+    assert affections == [95, 103, 101, 11]
+    assert sum(affections) == 310
+
+
+async def test_settlement_remainder_goes_to_earliest_outsider(tmp_path: Path) -> None:
+    """最早提交的人即使是围观群友,也能拿到除不尽的余数。"""
+
+    coordinator, service = await _start_with_pending(tmp_path)
+    await _give_affection(service, 100, TRIGGER_ID)
+    await _give_affection(service, 100, RIVAL_A)
+    await _give_affection(service, 100, RIVAL_B)
+    await _give_affection(service, 10, OTHER_ID)
+
+    await coordinator.answer(GROUP_ID, OTHER_ID, "路人", "3 1 5 2 4")
+    await coordinator.answer(GROUP_ID, RIVAL_A, "甲", "3 1 5 4 2")
+    await coordinator.answer(GROUP_ID, RIVAL_B, "乙", "1 3 5 2 4")
+    await coordinator.answer(GROUP_ID, TRIGGER_ID, "桃友", "1 2 3 4 5")
+    sent = await _settle(coordinator)
+
+    results = _result_lines(sent[0])
+    assert "从奖池分得 3 点好感度，当前 13" in results[OTHER_ID]
+    assert "并列获胜，分得 1 点好感度，当前 101" in results[RIVAL_A]
+    assert "并列获胜，分得 1 点好感度，当前 101" in results[RIVAL_B]
+    assert (await service.profile(GROUP_ID, OTHER_ID)).affection == 13
+
+
+async def test_settlement_multiple_outsiders_share_pool(tmp_path: Path) -> None:
+    coordinator, service = await _start_with_pending(tmp_path)
+    await _give_affection(service, 100, TRIGGER_ID)
+    await _give_affection(service, 100, RIVAL_A)
+    await _give_affection(service, 100, RIVAL_B)
+    await _give_affection(service, 10, OTHER_ID)
+    await _give_affection(service, 10, OTHER_B)
+
+    await coordinator.answer(GROUP_ID, RIVAL_A, "甲", "3 1 5 4 2")
+    await coordinator.answer(GROUP_ID, RIVAL_B, "乙", "1 3 5 2 4")
+    await coordinator.answer(GROUP_ID, TRIGGER_ID, "桃友", "1 2 3 4 5")
+    await coordinator.answer(GROUP_ID, OTHER_ID, "路人甲", "3 1 5 2 4")
+    await coordinator.answer(GROUP_ID, OTHER_B, "路人乙", "3 1 5 2 4")
+    sent = await _settle(coordinator)
+
+    results = _result_lines(sent[0])
+    assert "并列获胜，分得 2 点好感度，当前 102" in results[RIVAL_A]
+    assert "并列获胜，分得 1 点好感度，当前 101" in results[RIVAL_B]
+    assert "从奖池分得 1 点好感度，当前 11" in results[OTHER_ID]
+    assert "从奖池分得 1 点好感度，当前 11" in results[OTHER_B]
+    affections = [
+        (await service.profile(GROUP_ID, user_id)).affection
+        for user_id in (TRIGGER_ID, RIVAL_A, RIVAL_B, OTHER_ID, OTHER_B)
+    ]
+    assert affections == [95, 102, 101, 11, 11]
+
+
+async def test_settlement_empty_pool_tells_outsider_so(tmp_path: Path) -> None:
+    coordinator, service = await _start_with_pending(tmp_path)
+    await _give_affection(service, 0, TRIGGER_ID)
+    await _give_affection(service, 100, RIVAL_A)
+    await _give_affection(service, 0, RIVAL_B)
+    await _give_affection(service, 10, OTHER_ID)
+
+    await coordinator.answer(GROUP_ID, RIVAL_A, "甲", "3 1 5 4 2")
+    await coordinator.answer(GROUP_ID, OTHER_ID, "路人", "3 1 5 2 4")
+    sent = await _settle(coordinator)
+
+    results = _result_lines(sent[0])
+    assert "猜中 3 个位置，其它人没有可转让的好感度，当前 100" in results[RIVAL_A]
+    assert "比被点名的人更接近，但奖池里没有可转让的好感度，当前 10" in results[OTHER_ID]
+    assert (await service.profile(GROUP_ID, OTHER_ID)).affection == 10
 
 
 async def test_settlement_without_any_named_answer(tmp_path: Path) -> None:
@@ -704,6 +871,7 @@ async def test_settlement_counts_silent_named_as_losers(tmp_path: Path) -> None:
     coordinator, service = await _start_with_pending(tmp_path)
     await _give_affection(service, 20, TRIGGER_ID)
     await _give_affection(service, 20, RIVAL_A)
+    await _give_affection(service, 0, RIVAL_B)
     await coordinator.answer(GROUP_ID, TRIGGER_ID, "桃友", "3 1 5 2 4")
 
     sent = await _settle(coordinator)
@@ -815,6 +983,7 @@ async def test_plugin_wiring_runs_bet_end_to_end(monkeypatch) -> None:
     monkeypatch.setattr(plugin_config, "mantou_affection_bet_window", 0.05)
     await add_affection(group_id, trigger_id, 3, source="test:bet-trigger")
     await add_affection(group_id, rival_id, 3, source="test:bet-rival")
+    await add_affection(group_id, other_id, 3, source="test:bet-other")
     sent: list[Message] = []
 
     async def fake_send(message) -> None:
@@ -885,6 +1054,8 @@ async def test_answer_router_sends_bet_answers_to_bet(tmp_path: Path) -> None:
     async def fake_send(message: Message) -> None:
         sent.append(message)
 
+    await _give_affection(service, 10, RIVAL_A)
+    await _give_affection(service, 10, RIVAL_B)
     assert await bet.maybe_start(
         group_id=GROUP_ID,
         user_id=TRIGGER_ID,

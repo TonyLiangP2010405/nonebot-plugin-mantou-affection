@@ -24,7 +24,6 @@ BET_ORDER: tuple[int, ...] = (1, 2, 3, 4, 5)
 BET_RIVALS = 2
 BET_IDENTICAL_PENALTY = 5
 BET_LOSS_RATE = 0.05
-BET_OTHER_REWARD = 1
 BET_TEXT_MIN = 2
 BET_TEXT_MAX = 100
 
@@ -38,8 +37,8 @@ BET_MESSAGE = (
     "三个人的答案不能完全一样——如果三个人发的一模一样，\n"
     "三人各扣 {identical} 好感度，游戏直接结束；\n"
     "其它群友也可以回答（不用@），答案可以重复；\n"
-    "结算：被点名的人里最接近打乱后顺序的获胜，输的人扣自己好感度的 5% 转给赢家；"
-    "其它群友如果比被点名的三个人都更接近则 +{reward}，否则不加不减。"
+    "结算：被点名的人里最接近打乱后顺序的获胜（并列都算赢），输的人扣自己好感度的 5% 汇成奖池；"
+    "奖池平分给赢家，以及比被点名的三个人都更接近的其它群友，其余群友不加不减。"
 )
 BET_REVEAL_REPLY = "馒头打乱后的顺序：{order}"
 BET_WIN_REPLY = "猜中 {hits} 个位置，赢得 {amount} 点好感度，当前 {affection}"
@@ -48,7 +47,15 @@ BET_LOSE_REPLY = "猜中 {hits} 个位置，被扣掉 {amount} 点好感度，�
 BET_LOSE_EMPTY_REPLY = "猜中 {hits} 个位置，好感度已经见底，没有可转让的，当前 {affection}"
 BET_MISS_REPLY = "没提交答案，被扣掉 {amount} 点好感度，当前 {affection}"
 BET_MISS_EMPTY_REPLY = "没提交答案，好感度已经见底，没有可转让的，当前 {affection}"
-BET_OTHER_REPLY = "猜中 {hits} 个位置，比被点名的人更接近，好感度 +{amount}，当前 {affection}"
+BET_OTHER_REPLY = (
+    "猜中 {hits} 个位置，比被点名的人更接近，从奖池分得 {amount} 点好感度，当前 {affection}"
+)
+BET_OTHER_ZERO_SHARE_REPLY = (
+    "猜中 {hits} 个位置，比被点名的人更接近，这次没有分到好感度，当前 {affection}"
+)
+BET_OTHER_POOL_EMPTY_REPLY = (
+    "猜中 {hits} 个位置，比被点名的人更接近，但奖池里没有可转让的好感度，当前 {affection}"
+)
 BET_OTHER_SKIP_REPLY = "猜中 {hits} 个位置，没有超过被点名的人，本次不加不减"
 BET_IDENTICAL_REPLY = "和另外两人发了一模一样的顺序，好感度 {delta:+d}，当前 {affection}"
 BET_NOBODY_REPLY = "{bot}看了一圈，被点名的三个人一个都没提交，这局就这么散了。"
@@ -288,7 +295,6 @@ class BetCoordinator:
                     opening=pending.round.opening,
                     window=self.config.mantou_affection_bet_window,
                     identical=BET_IDENTICAL_PENALTY,
-                    reward=BET_OTHER_REWARD,
                 )
             )
         )
@@ -311,7 +317,7 @@ class BetCoordinator:
         chance = await self.service.bet_probability()
         if self.rng.random() >= chance:
             return False
-        rivals = self._pick_rivals(candidates, str(user_id))
+        rivals = await self._pick_rivals(candidates, str(user_id), key)
         if rivals is None:
             return False
         round_ = self.library.pick() if self.library is not None else None
@@ -339,10 +345,10 @@ class BetCoordinator:
         )
         return True
 
-    def _pick_rivals(
-        self, candidates: Iterable[Any], trigger_id: str
+    async def _pick_rivals(
+        self, candidates: Iterable[Any], trigger_id: str, group_id: str
     ) -> tuple[tuple[str, str], ...] | None:
-        """从榜单里排除触发者后随机抽两位互不相同的群友。"""
+        """排除触发者和好感度为 0 的群友后，随机抽两位互不相同的对手。"""
 
         members: dict[str, str] = {}
         for candidate in candidates:
@@ -356,7 +362,14 @@ class BetCoordinator:
             members[key] = normalize_nickname(str(name), key)
         if len(members) < BET_RIVALS:
             return None
-        return tuple(self.rng.sample(list(members.items()), BET_RIVALS))
+        eligible = [
+            (user_id, name)
+            for user_id, name in members.items()
+            if (await self.service.profile(group_id, user_id)).affection != 0
+        ]
+        if len(eligible) < BET_RIVALS:
+            return None
+        return tuple(self.rng.sample(eligible, BET_RIVALS))
 
     async def answer(self, group_id: str, user_id: str, nickname: str, text: str) -> bool:
         """收到消息时调用；解析成排列就算一次作答，重复提交忽略。
@@ -435,7 +448,7 @@ class BetCoordinator:
         return await self.settlement(pending, group_id=group_id)
 
     async def settlement(self, pending: PendingBet, *, group_id: str) -> Message:
-        """按目标顺序算命中数，输家的好感度平分给赢家，再评判其它群友。"""
+        """按目标顺序算命中数：输家的好感度汇成奖池，平分给赢家和更接近的围观群友。"""
 
         order = " ".join(str(digit) for digit in pending.round.target)
         head = f"{pending.round.reveal}\n{BET_REVEAL_REPLY.format(order=order)}"
@@ -450,58 +463,69 @@ class BetCoordinator:
                 ]
             )
 
-        entries: list[tuple[str, list[MessageSegment]]] = []
+        loser_entries: list[tuple[str, list[MessageSegment]]] = []
         pool = 0
         for user_id in pending.named_ids:
             if user_id in winners:
                 continue
             amount, line = await self._take_share(group_id, pending, user_id)
             pool += amount
-            entries.append((user_id, [MessageSegment.text(f" {line}")]))
-
-        share, remainder = divmod(pool, len(winners))
-        winner_entries: list[tuple[str, list[MessageSegment]]] = []
-        for index, winner_id in enumerate(winners):
-            amount = share + (remainder if index == 0 else 0)
-            answer = pending.answers[winner_id]
-            _, profile = await self.service.adjust(
-                group_id, winner_id, answer.nickname, amount
-            )
-            partners = [user_id for user_id in winners if user_id != winner_id]
-            winner_entries.append(
-                (
-                    winner_id,
-                    self._winner_line(
-                        pending, winner_id, partners, amount, pool, profile.affection
-                    ),
-                )
-            )
+            loser_entries.append((user_id, [MessageSegment.text(f" {line}")]))
 
         best_named = pending.best_named_hits()
+        sharers: list[tuple[str, str]] = []
+        skip_entries: list[tuple[str, list[MessageSegment]]] = []
         for user_id, answer in pending.answers.items():
-            if user_id in pending.named_ids:
+            if user_id in winners:
+                sharers.append((user_id, "winner"))
+            elif user_id in pending.named_ids:
                 continue
-            if best_named is not None and answer.hits > best_named:
-                _, profile = await self.service.adjust(
-                    group_id, user_id, answer.nickname, BET_OTHER_REWARD
-                )
-                line = BET_OTHER_REPLY.format(
-                    hits=answer.hits,
-                    amount=BET_OTHER_REWARD,
-                    affection=profile.affection,
-                )
+            elif best_named is not None and answer.hits > best_named:
+                sharers.append((user_id, "other"))
             else:
                 line = BET_OTHER_SKIP_REPLY.format(hits=answer.hits)
-            entries.append((user_id, [MessageSegment.text(f" {line}")]))
+                skip_entries.append((user_id, [MessageSegment.text(f" {line}")]))
+
+        share, remainder = divmod(pool, len(sharers))
+        sharer_entries: list[tuple[str, list[MessageSegment]]] = []
+        for index, (user_id, kind) in enumerate(sharers):
+            amount = share + (remainder if index == 0 else 0)
+            answer = pending.answers[user_id]
+            _, profile = await self.service.adjust(
+                group_id, user_id, answer.nickname, amount
+            )
+            if kind == "winner":
+                partners = [winner_id for winner_id in winners if winner_id != user_id]
+                line_segments = self._winner_line(
+                    pending, user_id, partners, amount, pool, profile.affection
+                )
+            else:
+                line_segments = [
+                    MessageSegment.text(
+                        f" {self._other_line(answer.hits, amount, pool, profile.affection)}"
+                    )
+                ]
+            sharer_entries.append((user_id, line_segments))
 
         segments: list[MessageSegment] = [
             MessageSegment.text(f"{head}\n{pending.round.settle}")
         ]
-        for user_id, line_segments in winner_entries + entries:
+        for user_id, line_segments in sharer_entries + loser_entries + skip_entries:
             segments.append(MessageSegment.text("\n"))
             segments.append(MessageSegment.at(user_id))
             segments.extend(line_segments)
         return Message(segments)
+
+    @staticmethod
+    def _other_line(hits: int, amount: int, pool: int, affection: int) -> str:
+        """围观群友那一行：从奖池分账，分不到时照实说明原因。"""
+
+        if amount > 0:
+            return BET_OTHER_REPLY.format(hits=hits, amount=amount, affection=affection)
+        if pool > 0:
+            return BET_OTHER_ZERO_SHARE_REPLY.format(hits=hits, affection=affection)
+        return BET_OTHER_POOL_EMPTY_REPLY.format(hits=hits, affection=affection)
+
 
     def _winner_line(
         self,
