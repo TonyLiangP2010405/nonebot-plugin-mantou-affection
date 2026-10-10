@@ -136,11 +136,11 @@ async def _give_affection(
 
 
 async def _ensure_affection(
-    service: AffectionService, user_id: str, score: int = 10
+    service: AffectionService, user_id: str, score: int = 60
 ) -> None:
-    """候选人要有非 0 好感度才会被抽成对手,开局前先垫一点。"""
+    """候选人好感度要超过门槛才会被抽成对手,开局前先垫一点。"""
 
-    if (await service.profile(GROUP_ID, user_id)).affection == 0:
+    if (await service.profile(GROUP_ID, user_id)).affection <= 50:
         await _give_affection(service, score, user_id)
 
 
@@ -348,6 +348,7 @@ def test_bet_library_rejects_broken_root_and_missing_file(tmp_path: Path) -> Non
 def test_bet_defaults() -> None:
     config = Config()
     assert config.mantou_affection_bet_chance == 0.0005
+    assert config.mantou_affection_bet_min_affection == 50
     assert config.mantou_affection_bet_window == 60
 
 
@@ -471,11 +472,14 @@ async def _start_with_pending(
     return coordinator, service
 
 
-async def test_maybe_start_filters_candidates_without_affection(tmp_path: Path) -> None:
-    """好感度为 0 的候选人不会被抽成对手,过滤后不足两人就不开局。"""
+async def test_maybe_start_filters_candidates_at_or_below_threshold(
+    tmp_path: Path,
+) -> None:
+    """好感度必须严格超过门槛:50 不行,51 才行,过滤后不足两人就不开局。"""
 
     coordinator, service = _bet(tmp_path, Config(mantou_affection_bet_chance=1.0))
-    await _give_affection(service, 10, RIVAL_A)
+    await _give_affection(service, 51, RIVAL_A)
+    await _give_affection(service, 50, RIVAL_B)
     sent: list[Message] = []
 
     async def fake_send(message: Message) -> None:
@@ -498,23 +502,86 @@ async def test_maybe_start_filters_candidates_without_affection(tmp_path: Path) 
     assert sent == []
     assert coordinator.pending == {}
 
-    await _give_affection(service, 3, RIVAL_B)
+    await _give_affection(service, 51, RIVAL_B)
     assert await start() is True
     assert set(coordinator.pending[GROUP_ID].named_ids) == {TRIGGER_ID, RIVAL_A, RIVAL_B}
     await _cancel_task(coordinator)
 
 
-async def test_maybe_start_keeps_candidates_with_negative_affection(
+async def test_maybe_start_threshold_can_be_configured(tmp_path: Path) -> None:
+    """门槛由 MANTOU_AFFECTION_BET_MIN_AFFECTION 决定,调低后低好感度也能当对手。"""
+
+    coordinator, service = _bet(
+        tmp_path,
+        Config(mantou_affection_bet_chance=1.0, mantou_affection_bet_min_affection=10),
+    )
+    await _give_affection(service, 11, RIVAL_A)
+    await _give_affection(service, 10, RIVAL_B)
+    sent: list[Message] = []
+
+    async def fake_send(message: Message) -> None:
+        sent.append(message)
+
+    async def start() -> bool:
+        return await coordinator.maybe_start(
+            group_id=GROUP_ID,
+            user_id=TRIGGER_ID,
+            nickname="桃友",
+            candidates=[
+                (int(TRIGGER_ID), "桃友"),
+                (int(RIVAL_A), "甲"),
+                (int(RIVAL_B), "乙"),
+            ],
+            send=fake_send,
+        )
+
+    assert await start() is False
+
+    await _give_affection(service, 11, RIVAL_B)
+    assert await start() is True
+    await _cancel_task(coordinator)
+
+
+async def test_maybe_start_raises_threshold(tmp_path: Path) -> None:
+    """门槛调高后,原本够格的候选人会被过滤掉。"""
+
+    coordinator, service = _bet(
+        tmp_path,
+        Config(mantou_affection_bet_chance=1.0, mantou_affection_bet_min_affection=80),
+    )
+    await _give_affection(service, 60, RIVAL_A)
+    await _give_affection(service, 90, RIVAL_B)
+    sent: list[Message] = []
+
+    async def fake_send(message: Message) -> None:
+        sent.append(message)
+
+    assert await coordinator.maybe_start(
+        group_id=GROUP_ID,
+        user_id=TRIGGER_ID,
+        nickname="桃友",
+        candidates=[
+            (int(TRIGGER_ID), "桃友"),
+            (int(RIVAL_A), "甲"),
+            (int(RIVAL_B), "乙"),
+        ],
+        send=fake_send,
+    ) is False
+    assert coordinator.pending == {}
+    assert sent == []
+
+
+async def test_maybe_start_filters_negative_and_zero_affection(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """负数好感度也算非 0,照样能当对手。"""
+    """负数、0、刚好等于门槛的好感度都当不了对手。"""
 
     coordinator, _service = _bet(tmp_path, Config(mantou_affection_bet_chance=1.0))
 
     async def fake_profile(group_id: str, user_id: str) -> Profile:
         if user_id == RIVAL_A:
             return Profile(user_id, affection=-3)
-        return Profile(user_id, affection=5 if user_id == RIVAL_B else 0)
+        return Profile(user_id, affection=51 if user_id == RIVAL_B else 0)
 
     monkeypatch.setattr(coordinator.service, "profile", fake_profile)
     sent: list[Message] = []
@@ -535,10 +602,10 @@ async def test_maybe_start_keeps_candidates_with_negative_affection(
         send=fake_send,
     )
 
-    # RIVAL_A 是负数(保留)、RIVAL_B 有 5 点、丙 是 0(过滤),正好两位对手
-    assert started is True
-    assert set(coordinator.pending[GROUP_ID].named_ids) == {TRIGGER_ID, RIVAL_A, RIVAL_B}
-    await _cancel_task(coordinator)
+    # RIVAL_A 是负数、丙 是 0,都被过滤;只有 RIVAL_B 超过门槛,凑不齐两人
+    assert started is False
+    assert coordinator.pending == {}
+    assert sent == []
 
 
 async def test_answer_keeps_first_submission_only(tmp_path: Path) -> None:
@@ -968,11 +1035,11 @@ async def test_bet_command_can_disable(tmp_path: Path, monkeypatch) -> None:
 
 async def test_plugin_wiring_runs_bet_end_to_end(monkeypatch) -> None:
     from nonebot_plugin_mantou_affection import (
-        add_affection,
         answer_matcher,
         bet_coordinator,
         maybe_start_bet,
         plugin_config,
+        service,
     )
 
     group_id = "92091"
@@ -981,9 +1048,12 @@ async def test_plugin_wiring_runs_bet_end_to_end(monkeypatch) -> None:
     other_id = "92094"
     monkeypatch.setattr(plugin_config, "mantou_affection_bet_chance", 1.0)
     monkeypatch.setattr(plugin_config, "mantou_affection_bet_window", 0.05)
-    await add_affection(group_id, trigger_id, 3, source="test:bet-trigger")
-    await add_affection(group_id, rival_id, 3, source="test:bet-rival")
-    await add_affection(group_id, other_id, 3, source="test:bet-other")
+    # 对手要好感度超过门槛,直接写档案(公开 API 受每日获取上限约束)
+    for user_id, score in ((trigger_id, 3), (rival_id, 60), (other_id, 60)):
+        def bump(profile: Profile, score: int = score) -> None:
+            profile.affection = score
+
+        await service.store.update_profile(group_id, user_id, "桃友", bump)
     sent: list[Message] = []
 
     async def fake_send(message) -> None:
@@ -1054,8 +1124,8 @@ async def test_answer_router_sends_bet_answers_to_bet(tmp_path: Path) -> None:
     async def fake_send(message: Message) -> None:
         sent.append(message)
 
-    await _give_affection(service, 10, RIVAL_A)
-    await _give_affection(service, 10, RIVAL_B)
+    await _give_affection(service, 60, RIVAL_A)
+    await _give_affection(service, 60, RIVAL_B)
     assert await bet.maybe_start(
         group_id=GROUP_ID,
         user_id=TRIGGER_ID,

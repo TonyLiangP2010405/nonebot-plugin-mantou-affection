@@ -348,7 +348,7 @@ class BetCoordinator:
     async def _pick_rivals(
         self, candidates: Iterable[Any], trigger_id: str, group_id: str
     ) -> tuple[tuple[str, str], ...] | None:
-        """排除触发者和好感度为 0 的群友后，随机抽两位互不相同的对手。"""
+        """排除触发者和好感度没超过门槛的群友后，随机抽两位互不相同的对手。"""
 
         members: dict[str, str] = {}
         for candidate in candidates:
@@ -362,10 +362,11 @@ class BetCoordinator:
             members[key] = normalize_nickname(str(name), key)
         if len(members) < BET_RIVALS:
             return None
+        threshold = self.config.mantou_affection_bet_min_affection
         eligible = [
             (user_id, name)
             for user_id, name in members.items()
-            if (await self.service.profile(group_id, user_id)).affection != 0
+            if (await self.service.profile(group_id, user_id)).affection > threshold
         ]
         if len(eligible) < BET_RIVALS:
             return None

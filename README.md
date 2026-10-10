@@ -69,6 +69,7 @@ MANTOU_AFFECTION_FIND_CHAR_CHANCE=0.0005
 MANTOU_AFFECTION_POKE_FIND_CHAR_CHANCE=0.0005
 MANTOU_AFFECTION_FIND_CHAR_TIMEOUT=30
 MANTOU_AFFECTION_BET_CHANCE=0.0005
+MANTOU_AFFECTION_BET_MIN_AFFECTION=50
 MANTOU_AFFECTION_BET_WINDOW=60
 ```
 
@@ -109,6 +110,7 @@ SUPERUSER 手动增减不受这个上限限制，`/馒头好感` 会显示当天
 `MANTOU_AFFECTION_AMBIENT_PROBABILITY` 无关；把概率设成 0 就是关掉找字。
 
 `MANTOU_AFFECTION_BET_CHANCE` 是「馒头博弈」的开局概率（默认 0.0005，即 0.05%），
+`MANTOU_AFFECTION_BET_MIN_AFFECTION` 是当对手所需的最低馒头好感度（默认 50，要**严格大于**才会被抽中），
 `MANTOU_AFFECTION_BET_WINDOW` 是博弈的作答窗口（秒，默认 60）。博弈不参与群消息与戳一戳的随机触发，只在
 水群榜等插件调用 `maybe_start_bet` 时掷一次；SUPERUSER 可以用 `/馒头博弈概率` 在运行时覆盖概率并持久化。
 
@@ -308,8 +310,10 @@ started = await maybe_start_bet(
 )
 ```
 
-- `candidates` 是榜单成员 `[(user_id, name), ...]`，插件会排除触发者、再排除**馒头好感度为 0** 的人，
-  从剩下的候选人里随机抽两位当对手（过滤后不足两人直接返回 `False`）；负数好感度算非 0，照样能当对手。
+- `candidates` 是**最近几分钟在群里说过话**的成员 `[(user_id, name), ...]`（触发者自己也在里面，插件会把它
+  排除掉）；抽对手时再要求**馒头好感度严格大于** `MANTOU_AFFECTION_BET_MIN_AFFECTION`（默认 50），从剩下的人里
+  随机抽两位当对手，过滤后不足两人直接返回 `False`。也就是说：触发者要在当日水群榜上，另外两人要最近说过话
+  且和馒头的好感度超过 50。
   `send` 传调用方的 `matcher.send`，用来发开场消息与结算消息，不传直接返回 `False`。
 - 开局前会先占同群席位（和小动作答题、找字小游戏共用，本群已有活动时返回 `False`），再按
   `MANTOU_AFFECTION_BET_CHANCE`（默认 0.05%）掷一次；命中才发消息并开窗口，成功返回 `True`。
