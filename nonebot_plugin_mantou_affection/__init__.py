@@ -14,7 +14,7 @@ __plugin_meta__ = PluginMetadata(
     usage=(
         "/馒头互动｜/馒头好感｜/馒头好感榜｜/馒头好感帮助\n"
         "SUPERUSER：/馒头好感调整 @群友 +10｜/馒头好感重置 确认｜"
-        "/馒头反应概率 5%｜/馒头找字概率 5%｜/馒头博弈概率 0.5%"
+        "/馒头反应概率 5%｜/馒头找字概率 5%｜/馒头博弈概率 0.05%"
     ),
     type="application",
     homepage="https://github.com/TonyLiangP2010405/nonebot-plugin-mantou-affection",

@@ -18,7 +18,7 @@ from .parsing import (
 from .service import AffectionService, normalize_nickname
 
 BET_CHANCE_USAGE = (
-    "请输入 0~1 的小数（如 0.005）或百分数（如 0.5%），0 即关闭馒头博弈"
+    "请输入 0~1 的小数（如 0.0005）或百分数（如 0.05%），0 即关闭馒头博弈"
 )
 
 
@@ -191,7 +191,7 @@ def register_commands(service: AffectionService, config: Config) -> tuple:
             "/馒头好感调整 @群友 +10 —— SUPERUSER 调整好感\n"
             "/馒头好感重置 确认 —— SUPERUSER 清空所有好感数据\n"
             "/馒头找字概率 5% —— SUPERUSER 查看或调整找字小游戏概率\n"
-            "/馒头博弈概率 0.5% —— SUPERUSER 查看或调整馒头博弈概率"
+            "/馒头博弈概率 0.05% —— SUPERUSER 查看或调整馒头博弈概率"
         )
 
     @adjust_cmd.handle()
@@ -306,10 +306,12 @@ def register_commands(service: AffectionService, config: Config) -> tuple:
                 await bet_cmd.finish("读取失败，请检查数据目录权限后重试。")
                 return
             default = config.mantou_affection_bet_chance
-            source = "运行时覆盖" if override is not None else "配置默认"
+            if override is None:
+                source = f"配置默认 {_format_probability(default)}"
+            else:
+                source = f"运行时覆盖，配置默认 {_format_probability(default)}"
             await bet_cmd.finish(
-                f"当前馒头博弈概率：{_format_probability(current)}（{source}，"
-                f"配置默认 {_format_probability(default)}）\n"
+                f"当前馒头博弈概率：{_format_probability(current)}（{source}）\n"
                 f"用法：{BET_CHANCE_USAGE}"
             )
             return

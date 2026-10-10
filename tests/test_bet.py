@@ -347,7 +347,7 @@ def test_bet_library_rejects_broken_root_and_missing_file(tmp_path: Path) -> Non
 
 def test_bet_defaults() -> None:
     config = Config()
-    assert config.mantou_affection_bet_chance == 0.005
+    assert config.mantou_affection_bet_chance == 0.0005
     assert config.mantou_affection_bet_window == 60
 
 
@@ -369,7 +369,7 @@ async def test_maybe_start_needs_send_and_candidates(tmp_path: Path) -> None:
 
 async def test_maybe_start_respects_chance(tmp_path: Path) -> None:
     coordinator, _service = _bet(
-        tmp_path, Config(mantou_affection_bet_chance=0.005), rng=FixedRng(0.9)
+        tmp_path, Config(mantou_affection_bet_chance=0.0005), rng=FixedRng(0.9)
     )
 
     assert await _start(coordinator) is False
@@ -889,7 +889,7 @@ async def test_settlement_counts_silent_named_as_losers(tmp_path: Path) -> None:
 
 async def test_bet_probability_prefers_stored_override(tmp_path: Path) -> None:
     service = _service(tmp_path)
-    assert await service.bet_probability() == pytest.approx(0.005)
+    assert await service.bet_probability() == pytest.approx(0.0005)
     assert await service.bet_probability_override() is None
 
     await service.set_bet_probability(0.02)
@@ -927,7 +927,7 @@ async def test_bet_command_reports_default(tmp_path: Path, monkeypatch) -> None:
 
     await command.handlers[0].call(Message(""))
 
-    assert "当前馒头博弈概率：0.5%" in sent[0]
+    assert "当前馒头博弈概率：0.05%" in sent[0]
     assert "配置默认" in sent[0]
     assert "0 即关闭" in sent[0]
 

@@ -31,7 +31,7 @@ def test_interaction_cooldown_accepts_two_hours() -> None:
 def test_ambient_defaults_are_enabled_at_one_percent() -> None:
     config = Config()
     assert config.mantou_affection_ambient_enabled is True
-    assert config.mantou_affection_ambient_probability == 0.001
+    assert config.mantou_affection_ambient_probability == 0.0005
 
 
 def test_daily_gain_default_is_three_points() -> None:
@@ -53,7 +53,7 @@ def test_link_notify_default_is_on() -> None:
 
 
 def test_poke_event_chance_default() -> None:
-    assert Config().mantou_affection_poke_event_chance == 0.01
+    assert Config().mantou_affection_poke_event_chance == 0.0005
     assert Config(mantou_affection_poke_event_chance=0.5).mantou_affection_poke_event_chance == 0.5
 
 

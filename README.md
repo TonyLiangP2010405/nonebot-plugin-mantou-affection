@@ -11,9 +11,9 @@
 - 每插件独立冷却、每日联动奖励上限，避免刷分
 - 互动与联动共享每日好感获取总上限，最快约一年满级；额度用满后互动不会再扣好感
 - SUPERUSER 手动增减群友好感度
-- 群友发言时馒头按概率冒泡的小动作（好感度 >0 才触发，默认 0.1%），其中约 1/3 会升级为限时随机事件
-- 群友发言时另有 1% 概率开一局「找字小游戏」：从题库抽一道二字型或三字型找字题，30 秒内抢答
-- 戳一戳稳定 +1（受每日获取总上限约束），1% 概率戳出一次扣分翻倍的答题事件、1% 概率戳出一局找字小游戏
+- 群友发言时馒头按概率冒泡的小动作（好感度 >0 才触发，默认 0.05%），其中约 1/3 会升级为限时随机事件
+- 群友发言时另有 0.05% 概率开一局「找字小游戏」：从题库抽一道二字型或三字型找字题，30 秒内抢答
+- 戳一戳稳定 +1（受每日获取总上限约束），0.05% 概率戳出一次扣分翻倍的答题事件、0.05% 概率戳出一局找字小游戏
 - 「馒头博弈」数字顺序竞猜：由水群榜等插件通过 `maybe_start_bet` API 开局，三人各猜一个 1~5 的顺序，
   输家的好感度汇成奖池，平分给赢家和更接近的围观群友
 - 为其他插件提供好感上报与状态读取 API
@@ -59,16 +59,16 @@ MANTOU_AFFECTION_LINK_NOTIFY=true
 MANTOU_AFFECTION_LINK_DAILY_LIMIT=10
 MANTOU_AFFECTION_LINK_COOLDOWN=300
 MANTOU_AFFECTION_AMBIENT_ENABLED=true
-MANTOU_AFFECTION_AMBIENT_PROBABILITY=0.001
+MANTOU_AFFECTION_AMBIENT_PROBABILITY=0.0005
 MANTOU_AFFECTION_AMBIENT_EVENT_RATIO=0.333
 MANTOU_AFFECTION_EVENT_TIMEOUT=20
 MANTOU_AFFECTION_UPSET_EVENT_TIMEOUT=60
 MANTOU_AFFECTION_EVENT_TIMEOUT_PENALTY=5
-MANTOU_AFFECTION_POKE_EVENT_CHANCE=0.01
-MANTOU_AFFECTION_FIND_CHAR_CHANCE=0.01
-MANTOU_AFFECTION_POKE_FIND_CHAR_CHANCE=0.01
+MANTOU_AFFECTION_POKE_EVENT_CHANCE=0.0005
+MANTOU_AFFECTION_FIND_CHAR_CHANCE=0.0005
+MANTOU_AFFECTION_POKE_FIND_CHAR_CHANCE=0.0005
 MANTOU_AFFECTION_FIND_CHAR_TIMEOUT=30
-MANTOU_AFFECTION_BET_CHANCE=0.005
+MANTOU_AFFECTION_BET_CHANCE=0.0005
 MANTOU_AFFECTION_BET_WINDOW=60
 ```
 
@@ -97,18 +97,18 @@ SUPERUSER 手动增减不受这个上限限制，`/馒头好感` 会显示当天
 0）则直接用互动池里配对的那句旁白，不套用阶段文案，避免暗示加了好感。
 
 `MANTOU_AFFECTION_AMBIENT_ENABLED` 控制群友发言时馒头是否可能冒泡，`MANTOU_AFFECTION_AMBIENT_PROBABILITY`
-是单次触发的概率（0～1，默认 0.1%）。SUPERUSER 也可以用 `/馒头反应概率` 在运行时查看或覆盖，覆盖值写进
+是单次触发的概率（0～1，默认 0.05%）。SUPERUSER 也可以用 `/馒头反应概率` 在运行时查看或覆盖，覆盖值写进
 数据文件，重启后依然生效。群友发言时，只要他对馒头的好感度大于 0，馒头就有这个概率 @他冒出一句小动作
 旁白；旁白不引用发言内容，已被命令接管的发言也不会触发，不会影响正常对话。
 
-`MANTOU_AFFECTION_FIND_CHAR_CHANCE` 是群消息路径的找字小游戏概率（默认 0.01，即 1%），
-`MANTOU_AFFECTION_POKE_FIND_CHAR_CHANCE` 是戳一戳路径的找字概率（默认 0.01），
+`MANTOU_AFFECTION_FIND_CHAR_CHANCE` 是群消息路径的找字小游戏概率（默认 0.0005，即 0.05%），
+`MANTOU_AFFECTION_POKE_FIND_CHAR_CHANCE` 是戳一戳路径的找字概率（默认 0.0005），
 `MANTOU_AFFECTION_FIND_CHAR_TIMEOUT` 是找字的作答时限（秒，默认 30）。找字只看自己的概率：好感度大于 0
-的群友发言时先掷找字，没命中的那条消息才继续走 0.1% 小动作流程，所以两者互斥，不会在同一条消息上同时
+的群友发言时先掷找字，没命中的那条消息才继续走 0.05% 小动作流程，所以两者互斥，不会在同一条消息上同时
 出现。找字的两个概率可以用 `/馒头找字概率` 在运行时覆盖并持久化，和 `MANTOU_AFFECTION_AMBIENT_ENABLED`、
 `MANTOU_AFFECTION_AMBIENT_PROBABILITY` 无关；把概率设成 0 就是关掉找字。
 
-`MANTOU_AFFECTION_BET_CHANCE` 是「馒头博弈」的开局概率（默认 0.005，即 0.5%），
+`MANTOU_AFFECTION_BET_CHANCE` 是「馒头博弈」的开局概率（默认 0.0005，即 0.05%），
 `MANTOU_AFFECTION_BET_WINDOW` 是博弈的作答窗口（秒，默认 60）。博弈不参与群消息与戳一戳的随机触发，只在
 水群榜等插件调用 `maybe_start_bet` 时掷一次；SUPERUSER 可以用 `/馒头博弈概率` 在运行时覆盖概率并持久化。
 
@@ -117,7 +117,7 @@ SUPERUSER 手动增减不受这个上限限制，`/馒头好感` 会显示当天
 是闹别扭答题时限（秒，默认 60，闹别扭题要慢慢哄），`MANTOU_AFFECTION_EVENT_TIMEOUT_PENALTY`
 是普通题超时扣除的好感度点数（默认 5）；闹别扭题超时按好感比例扣，不受这个配置影响。
 
-`MANTOU_AFFECTION_POKE_EVENT_CHANCE` 是戳一戳戳出随机事件的概率（默认 0.01，即 1%）。戳出来的事件是
+`MANTOU_AFFECTION_POKE_EVENT_CHANCE` 是戳一戳戳出随机事件的概率（默认 0.0005，即 0.05%）。戳出来的事件是
 「扣分翻倍」版：普通题的负向选项与超时按 2 倍结算，闹别扭题按好感比例算出的扣分（普通错误 5%、陷阱与超时
 10%，各有保底）也再翻一倍，正向奖励（普通题 +1 / +2，闹别扭题 +2 / +5 / +10）不变。
 
@@ -210,8 +210,8 @@ SUPERUSER 手动增减不受这个上限限制，`/馒头好感` 会显示当天
 
 ### 找字小游戏
 
-好感度大于 0 的群友发言时，馒头会先按 `MANTOU_AFFECTION_FIND_CHAR_CHANCE`（默认 1%）掷一次找字小游戏；
-戳一戳也有 `MANTOU_AFFECTION_POKE_FIND_CHAR_CHANCE`（默认 1%）的概率戳出一局。两种来源开局时都会 @触发者
+好感度大于 0 的群友发言时，馒头会先按 `MANTOU_AFFECTION_FIND_CHAR_CHANCE`（默认 0.05%）掷一次找字小游戏；
+戳一戳也有 `MANTOU_AFFECTION_POKE_FIND_CHAR_CHANCE`（默认 0.05%）的概率戳出一局。两种来源开局时都会 @触发者
 （戳一戳路径和随机事件一样把事件消息交给调用方发送，不额外 @任何人），然后从题库抽一道题贴出方阵。
 
 题目分两种题型，都从 `nonebot_plugin_mantou_affection/resources/findchar_puzzles.json` 里抽：
@@ -312,7 +312,7 @@ started = await maybe_start_bet(
   从剩下的候选人里随机抽两位当对手（过滤后不足两人直接返回 `False`）；负数好感度算非 0，照样能当对手。
   `send` 传调用方的 `matcher.send`，用来发开场消息与结算消息，不传直接返回 `False`。
 - 开局前会先占同群席位（和小动作答题、找字小游戏共用，本群已有活动时返回 `False`），再按
-  `MANTOU_AFFECTION_BET_CHANCE`（默认 0.5%）掷一次；命中才发消息并开窗口，成功返回 `True`。
+  `MANTOU_AFFECTION_BET_CHANCE`（默认 0.05%）掷一次；命中才发消息并开窗口，成功返回 `True`。
 - 窗口长度是 `MANTOU_AFFECTION_BET_WINDOW`（默认 60 秒），`/馒头博弈概率` 可以在运行时改概率。
 
 开局消息 @ 触发者和两位对手，只说明规则、**不透露打乱后的顺序**：
@@ -463,7 +463,7 @@ MANTOU_AFFECTION_LINK_REWARDS={"nonebot_plugin_taozi":2,"nonebot_plugin_daily_at
 | `/馒头好感重置 确认` | SUPERUSER | 群聊/私聊 | 清空所有群所有群友的好感度（需二次确认） |
 | `/馒头反应概率 5%` | SUPERUSER | 群聊/私聊 | 查看或调整小动作触发概率（持久保存） |
 | `/馒头找字概率 5%` | SUPERUSER | 群聊/私聊 | 查看或调整找字小游戏概率；只写一个值会同时设置群消息和戳一戳，分开设置写成 `/馒头找字概率 群消息 5% 戳一戳 2%`（持久保存） |
-| `/馒头博弈概率 0.5%` | SUPERUSER | 群聊/私聊 | 查看或调整馒头博弈的开局概率（默认 0.5%，`0` 即关闭；持久保存） |
+| `/馒头博弈概率 0.05%` | SUPERUSER | 群聊/私聊 | 查看或调整馒头博弈的开局概率（默认 0.05%，`0` 即关闭；持久保存） |
 
 ## 插件联动
 
@@ -556,13 +556,13 @@ await matcher.finish(result.text)
 1. 每次戳稳定 **+1**，不会扣好感；这个 +1 受每日获取总上限约束，额度用完时 `delta=0`，文案会补一行
    「今天的好感已经拿满啦，明天再来吧。」
 2. `text` 在 `delta != 0` 时末尾会追加一行「好感度 +1，当前 12」这样的提示；`delta=0` 时只有文案本身。
-3. 有 `MANTOU_AFFECTION_POKE_EVENT_CHANCE`（默认 1%）的概率戳出一次随机事件：这时 `text` 就是事件消息
+3. 有 `MANTOU_AFFECTION_POKE_EVENT_CHANCE`（默认 0.05%）的概率戳出一次随机事件：这时 `text` 就是事件消息
    本体（不带戳一戳文案，也不 @任何人），事件消息发到群里后任何人发 `1`/`2`/`3` 作答，窗口结束统一结算。
    抽题和普通小动作一样看触发者的好感阶段，所以亲密关系下也可能戳出**闹别扭题**（消息前缀是
    「💢 馒头闹别扭了！」）。结算的翻倍规则：普通题的负向选项 -4、超时 -10；闹别扭题的比例扣分算完后再翻倍
    （好感 200 时陷阱 -20 → -40、超时 -20 → -40），正向 +1 / +2 / +2 / +5 / +10 不变。
 4. 本群已经有未结束的事件、事件库为空，或调用时没有传 `send`，都会退化成普通戳一戳文案（+1 照常入账）。
-5. 随机事件没触发时，还会再按 `MANTOU_AFFECTION_POKE_FIND_CHAR_CHANCE`（默认 1%）掷一次找字小游戏：命中时
+5. 随机事件没触发时，还会再按 `MANTOU_AFFECTION_POKE_FIND_CHAR_CHANCE`（默认 0.05%）掷一次找字小游戏：命中时
    `text` 是找字方阵本体（同样不 @任何人，结算走 `send`），方阵和作答规则见上面的「找字小游戏」。
 6. 文案统一做 `{bot}` → 配置机器人名替换；文案库缺失或场景为空时回退为「馒头朝你笑了笑。」。
 

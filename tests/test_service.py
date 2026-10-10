@@ -173,7 +173,7 @@ async def test_ambient_reaction_without_library_returns_none(tmp_path: Path) -> 
 
 async def test_ambient_probability_prefers_stored_override(tmp_path: Path) -> None:
     service = _service(tmp_path)
-    assert await service.ambient_probability() == 0.001
+    assert await service.ambient_probability() == 0.0005
 
     await service.set_ambient_probability(0.05)
     assert await service.ambient_probability() == 0.05

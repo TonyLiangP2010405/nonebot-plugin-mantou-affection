@@ -327,8 +327,8 @@ def test_opening_lines_are_plentiful_and_unique(mode: str) -> None:
 
 def test_find_char_defaults() -> None:
     config = Config()
-    assert config.mantou_affection_find_char_chance == 0.01
-    assert config.mantou_affection_poke_find_char_chance == 0.01
+    assert config.mantou_affection_find_char_chance == 0.0005
+    assert config.mantou_affection_poke_find_char_chance == 0.0005
     assert config.mantou_affection_find_char_timeout == 30
 
 
@@ -1090,10 +1090,10 @@ async def test_find_char_triggered_respects_chance(tmp_path: Path) -> None:
 
 async def test_find_char_chances_prefer_stored_override(tmp_path: Path) -> None:
     service = _service(tmp_path)
-    assert await service.find_char_chances() == pytest.approx((0.01, 0.01))
+    assert await service.find_char_chances() == pytest.approx((0.0005, 0.0005))
 
     await service.set_find_char_chances(group=0.5)
-    assert await service.find_char_chances() == pytest.approx((0.5, 0.01))
+    assert await service.find_char_chances() == pytest.approx((0.5, 0.0005))
     await service.set_find_char_chances(poke=0.25)
     assert await service.find_char_chances() == pytest.approx((0.5, 0.25))
 
@@ -1117,7 +1117,7 @@ async def test_find_char_chances_ignore_broken_setting(tmp_path: Path) -> None:
     service = _service(tmp_path)
     await service.store.set_setting("find_char_group_chance", "not a number")
 
-    assert await service.find_char_group_chance() == pytest.approx(0.01)
+    assert await service.find_char_group_chance() == pytest.approx(0.0005)
 
 
 # ------------------------------------------------------------ 概率命令
@@ -1140,8 +1140,8 @@ async def test_find_char_command_reports_both_chances(tmp_path: Path, monkeypatc
 
     await command.handlers[0].call(Message(""))
 
-    assert "群消息：1%" in sent[0]
-    assert "戳一戳：1%" in sent[0]
+    assert "群消息：0.05%" in sent[0]
+    assert "戳一戳：0.05%" in sent[0]
     assert "/馒头找字概率 群消息 5% 戳一戳 2%" in sent[0]
 
 
@@ -1162,7 +1162,7 @@ async def test_find_char_command_sets_single_chance(tmp_path: Path, monkeypatch)
 
     assert "群消息：20%" in sent[0]
     assert "戳一戳" not in sent[0]
-    assert await service.find_char_chances() == pytest.approx((0.2, 0.01))
+    assert await service.find_char_chances() == pytest.approx((0.2, 0.0005))
 
 
 async def test_find_char_command_rejects_bad_input(tmp_path: Path, monkeypatch) -> None:
@@ -1171,4 +1171,4 @@ async def test_find_char_command_rejects_bad_input(tmp_path: Path, monkeypatch) 
     await command.handlers[0].call(Message("群消息 abc"))
 
     assert "馒头找字概率" in sent[0]
-    assert await service.find_char_chances() == pytest.approx((0.01, 0.01))
+    assert await service.find_char_chances() == pytest.approx((0.0005, 0.0005))
