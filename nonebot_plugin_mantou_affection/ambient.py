@@ -33,13 +33,24 @@ EVENT_PREFIX = "⚡ 触发随机事件！"
 UPSET_PREFIX = "💢 馒头闹别扭了！"
 TIMEOUT_REPLY = "{bot}等不到你的回答，失望地走开了，好感度 -{penalty}"
 UPSET_BEST_REPLY = "{bot}一下子被哄好了，好感度 {delta:+d}，当前 {affection}！"
+UPSET_GOOD_REPLY = "{bot}的脸色缓和了些，好感度 {delta:+d}，当前 {affection}"
+UPSET_OK_REPLY = "{bot}勉强收下了这个台阶，好感度 {delta:+d}，当前 {affection}"
 UPSET_MILD_REPLY = "{bot}别过脸去，好感度 {delta:+d}，当前 {affection}"
 UPSET_WORST_REPLY = "{bot}听完更委屈了，好感度 {delta:+d}，当前 {affection}…"
 UPSET_TIMEOUT_REPLY = "{bot}等不到你的回答，心凉了半截，好感度 {delta:+d}，当前 {affection}"
 UPSET_BEST_DELTA = 10
+UPSET_GOOD_DELTA = 5
+UPSET_OK_DELTA = 2
 UPSET_WRONG_DELTA = -5
 UPSET_WORST_DELTA = -10
 UPSET_TIMEOUT_HINT = "按比例大扣"
+UPSET_REPLIES: dict[int, str] = {
+    UPSET_BEST_DELTA: UPSET_BEST_REPLY,
+    UPSET_GOOD_DELTA: UPSET_GOOD_REPLY,
+    UPSET_OK_DELTA: UPSET_OK_REPLY,
+    UPSET_WRONG_DELTA: UPSET_MILD_REPLY,
+    UPSET_WORST_DELTA: UPSET_WORST_REPLY,
+}
 
 
 class PendingAnswer:
@@ -132,6 +143,13 @@ class EventCoordinator:
 
         return self.rng.random() < self.config.mantou_affection_ambient_event_ratio
 
+    def timeout_for(self, pending: PendingEvent) -> int:
+        """闹别扭题用更长的作答窗口，普通题仍用原来的窗口。"""
+
+        if pending.event.upset:
+            return self.config.mantou_affection_upset_event_timeout
+        return self.config.mantou_affection_event_timeout
+
     def start(
         self,
         group_id: str,
@@ -214,7 +232,7 @@ class EventCoordinator:
             scene=pending.event.text,
             options=option_lines,
             answer_hint=answer_hint,
-            timeout=self.config.mantou_affection_event_timeout,
+            timeout=self.timeout_for(pending),
             penalty=penalty_hint,
         )
 
@@ -320,12 +338,7 @@ class EventCoordinator:
             group_id, answer.user_id, answer.nickname, delta
         )
         if pending.event.upset:
-            if option.delta == UPSET_BEST_DELTA:
-                template = UPSET_BEST_REPLY
-            elif option.delta == UPSET_WORST_DELTA:
-                template = UPSET_WORST_REPLY
-            else:
-                template = UPSET_MILD_REPLY
+            template = UPSET_REPLIES.get(option.delta, UPSET_MILD_REPLY)
             return template.format(bot=bot_name, delta=delta, affection=profile.affection)
         return f"{self._option_reply(option, delta)}，当前 {profile.affection}"
 
@@ -371,7 +384,7 @@ class EventCoordinator:
             pending,
             group_id=str(group_id),
             send=send,
-            timeout=self.config.mantou_affection_event_timeout,
+            timeout=self.timeout_for(pending),
         )
         return message
 
@@ -512,7 +525,7 @@ def register_ambient(
                     pending,
                     group_id=group_id,
                     send=ambient.send,
-                    timeout=config.mantou_affection_event_timeout,
+                    timeout=coordinator.timeout_for(pending),
                 )
                 return
 

@@ -20,6 +20,7 @@ class Config(BaseModel):
     mantou_affection_ambient_probability: float = Field(default=0.001, ge=0.0, le=1.0)
     mantou_affection_ambient_event_ratio: float = Field(default=0.333, ge=0.0, le=1.0)
     mantou_affection_event_timeout: int = Field(default=20, ge=3, le=120)
+    mantou_affection_upset_event_timeout: int = Field(default=60, ge=3, le=600)
     mantou_affection_event_timeout_penalty: int = Field(default=5, ge=1, le=100)
     mantou_affection_poke_event_chance: float = Field(default=0.01, ge=0.0, le=1.0)
     mantou_affection_find_char_chance: float = Field(default=0.01, ge=0.0, le=1.0)

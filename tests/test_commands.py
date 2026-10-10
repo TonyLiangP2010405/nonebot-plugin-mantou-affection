@@ -44,6 +44,7 @@ def test_random_event_defaults() -> None:
     assert config.mantou_affection_ambient_event_ratio == 0.333
     assert config.mantou_affection_event_timeout == 20
     assert config.mantou_affection_event_timeout_penalty == 5
+    assert config.mantou_affection_upset_event_timeout == 60
 
 
 def test_link_notify_default_is_on() -> None:

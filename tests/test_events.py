@@ -26,12 +26,12 @@ def _upset_event(index: int) -> dict:
     return {
         "text": f"闹别扭 {index}",
         "options": [
-            {"text": f"正确哄法 {index}", "delta": 10},
+            {"text": f"最佳哄法 {index}", "delta": 10},
+            {"text": f"次佳哄法 {index}", "delta": 5},
+            {"text": f"勉强哄法 {index}", "delta": 2},
             {"text": f"普通错误甲 {index}", "delta": -5},
             {"text": f"普通错误乙 {index}", "delta": -5},
-            {"text": f"普通错误丙 {index}", "delta": -5},
-            {"text": f"倍减陷阱甲 {index}", "delta": -10},
-            {"text": f"倍减陷阱乙 {index}", "delta": -10},
+            {"text": f"倍减陷阱 {index}", "delta": -10},
         ],
     }
 
@@ -159,7 +159,7 @@ def test_bundled_upset_library_is_valid(bundled_texts_path: Path) -> None:
         assert event.text
         assert event.upset is True
         assert len(event.options) == 6
-        assert sorted(option.delta for option in event.options) == [-10, -10, -5, -5, -5, 10]
+        assert sorted(option.delta for option in event.options) == [-10, -5, -5, 2, 5, 10]
 
 
 def test_normal_event_is_not_upset(tmp_path: Path) -> None:
@@ -180,9 +180,9 @@ def test_upset_event_keeps_values_after_shuffle(tmp_path: Path) -> None:
     for _ in range(10):
         options = EventLibrary.shuffled_options(event)
         assert event.upset is True
-        assert sorted(option.delta for option in options) == [-10, -10, -5, -5, -5, 10]
+        assert sorted(option.delta for option in options) == [-10, -5, -5, 2, 5, 10]
         texts = [option.text for option in options]
-        assert texts.count("正确哄法 1") == 1
+        assert texts.count("最佳哄法 1") == 1
         assert len(set(texts)) == 6
 
 
@@ -193,8 +193,8 @@ def test_upset_event_keeps_values_after_shuffle(tmp_path: Path) -> None:
             "text": "只有 5 个选项",
             "options": [
                 {"text": "甲", "delta": 10},
-                {"text": "乙", "delta": -5},
-                {"text": "丙", "delta": -5},
+                {"text": "乙", "delta": 5},
+                {"text": "丙", "delta": 2},
                 {"text": "丁", "delta": -5},
                 {"text": "戊", "delta": -10},
             ],
@@ -203,33 +203,44 @@ def test_upset_event_keeps_values_after_shuffle(tmp_path: Path) -> None:
             "text": "只有 7 个选项",
             "options": [
                 {"text": "甲", "delta": 10},
-                {"text": "乙", "delta": -5},
-                {"text": "丙", "delta": -5},
+                {"text": "乙", "delta": 5},
+                {"text": "丙", "delta": 2},
                 {"text": "丁", "delta": -5},
-                {"text": "戊", "delta": -10},
+                {"text": "戊", "delta": -5},
                 {"text": "己", "delta": -10},
                 {"text": "庚", "delta": -10},
             ],
         },
         {
-            "text": "少了两个普通错",
+            "text": "旧结构的 1 对 5 错",
             "options": [
                 {"text": "甲", "delta": 10},
                 {"text": "乙", "delta": -5},
                 {"text": "丙", "delta": -5},
-                {"text": "丁", "delta": -2},
+                {"text": "丁", "delta": -5},
                 {"text": "戊", "delta": -10},
                 {"text": "己", "delta": -10},
             ],
         },
         {
-            "text": "多了两个正解",
+            "text": "少了一档加分",
+            "options": [
+                {"text": "甲", "delta": 10},
+                {"text": "乙", "delta": 5},
+                {"text": "丙", "delta": -5},
+                {"text": "丁", "delta": -5},
+                {"text": "戊", "delta": -10},
+                {"text": "己", "delta": -10},
+            ],
+        },
+        {
+            "text": "两档加分重复",
             "options": [
                 {"text": "甲", "delta": 10},
                 {"text": "乙", "delta": 10},
-                {"text": "丙", "delta": 10},
+                {"text": "丙", "delta": 5},
                 {"text": "丁", "delta": -5},
-                {"text": "戊", "delta": -10},
+                {"text": "戊", "delta": -5},
                 {"text": "己", "delta": -10},
             ],
         },
@@ -237,8 +248,8 @@ def test_upset_event_keeps_values_after_shuffle(tmp_path: Path) -> None:
             "text": "三个倍减陷阱",
             "options": [
                 {"text": "甲", "delta": 10},
-                {"text": "乙", "delta": -5},
-                {"text": "丙", "delta": -5},
+                {"text": "乙", "delta": 5},
+                {"text": "丙", "delta": 2},
                 {"text": "丁", "delta": -10},
                 {"text": "戊", "delta": -10},
                 {"text": "己", "delta": -10},
@@ -267,8 +278,8 @@ def test_upset_event_keeps_values_after_shuffle(tmp_path: Path) -> None:
             "text": "选项缺少 delta",
             "options": [
                 {"text": "甲", "delta": 10},
-                {"text": "乙", "delta": -5},
-                {"text": "丙", "delta": -5},
+                {"text": "乙", "delta": 5},
+                {"text": "丙", "delta": 2},
                 {"text": "丁", "delta": -5},
                 {"text": "戊", "delta": -10},
                 {"text": "己"},

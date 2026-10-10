@@ -87,12 +87,12 @@ def _upset_events(count: int = 3) -> list[dict]:
         {
             "text": f"闹别扭场景 {index}",
             "options": [
-                {"text": f"正解 {index}", "delta": 10},
+                {"text": f"最佳哄法 {index}", "delta": 10},
+                {"text": f"次佳哄法 {index}", "delta": 5},
+                {"text": f"勉强哄法 {index}", "delta": 2},
                 {"text": f"普通错甲 {index}", "delta": -5},
                 {"text": f"普通错乙 {index}", "delta": -5},
-                {"text": f"普通错丙 {index}", "delta": -5},
-                {"text": f"陷阱甲 {index}", "delta": -10},
-                {"text": f"陷阱乙 {index}", "delta": -10},
+                {"text": f"陷阱 {index}", "delta": -10},
             ],
         }
         for index in range(1, count + 1)
@@ -582,7 +582,9 @@ def test_upset_correct_option_position_varies(
 def test_upset_event_message_uses_upset_prefix(
     tmp_path: Path, bundled_texts_path: Path
 ) -> None:
-    config = Config(mantou_affection_event_timeout=20)
+    config = Config(
+        mantou_affection_event_timeout=20, mantou_affection_upset_event_timeout=60
+    )
     service = _service(tmp_path, config=config)
     coordinator = _coordinator(service, config, bundled_texts_path, rng=FixedRng(0.0))
     pending = coordinator.start(GROUP_ID, TRIGGER_ID, "桃友", affection=999)
@@ -593,7 +595,7 @@ def test_upset_event_message_uses_upset_prefix(
     assert message.startswith("💢 馒头闹别扭了！")
     assert pending.event.text in message
     assert "大家都可以回答，直接发送 1、2、3、4、5、6 即可（答题不用@）" in message
-    assert "请在 20 秒内作答，被点名的群友超时未答好感度按比例大扣！" in message
+    assert "请在 60 秒内作答，被点名的群友超时未答好感度按比例大扣！" in message
     assert all(option.text in message for option in pending.options)
     for position, option in enumerate(pending.options, start=1):
         assert f"{position}. {option.text}" in message
@@ -602,7 +604,9 @@ def test_upset_event_message_uses_upset_prefix(
 def test_normal_event_message_uses_plain_prefix(
     tmp_path: Path, bundled_texts_path: Path
 ) -> None:
-    config = Config()
+    config = Config(
+        mantou_affection_event_timeout=20, mantou_affection_upset_event_timeout=60
+    )
     service = _service(tmp_path, config=config)
     coordinator = _coordinator(service, config, bundled_texts_path, rng=FixedRng(0.99))
     pending = coordinator.start(GROUP_ID, TRIGGER_ID, "桃友", affection=0)
@@ -613,6 +617,8 @@ def test_normal_event_message_uses_plain_prefix(
     assert message.startswith("⚡ 触发随机事件！")
     assert "大家都可以回答，直接发送 1、2、3 即可（答题不用@）" in message
     assert message.count("💢") == 0
+    assert "请在 20 秒内作答" in message
+    assert coordinator.timeout_for(pending) == 20
 
 
 async def _answer_upset(
@@ -666,6 +672,10 @@ async def test_upset_best_option_works_from_zero_affection(
         (999, -5, "馒头别过脸去，好感度 -49，当前 950", 950),
         (999, -10, "馒头听完更委屈了，好感度 -99，当前 900…", 900),
         (500, 10, "馒头一下子被哄好了，好感度 +10，当前 510！", 510),
+        (500, 5, "馒头的脸色缓和了些，好感度 +5，当前 505", 505),
+        (500, 2, "馒头勉强收下了这个台阶，好感度 +2，当前 502", 502),
+        (0, 5, "馒头的脸色缓和了些，好感度 +5，当前 5", 5),
+        (0, 2, "馒头勉强收下了这个台阶，好感度 +2，当前 2", 2),
     ],
 )
 async def test_upset_penalties_scale_with_affection(
@@ -886,6 +896,8 @@ async def _poke_upset_pending(
     ("delta", "expected_line", "expected_affection"),
     [
         (10, "馒头一下子被哄好了，好感度 +10，当前 40！", 40),
+        (5, "馒头的脸色缓和了些，好感度 +5，当前 35", 35),
+        (2, "馒头勉强收下了这个台阶，好感度 +2，当前 32", 32),
         (-5, "馒头别过脸去，好感度 -10，当前 20", 20),
         (-10, "馒头听完更委屈了，好感度 -20，当前 10…", 10),
     ],
@@ -960,6 +972,83 @@ async def test_upset_timeout_stops_at_zero_affection(
     assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == 0
 
 
+@pytest.mark.parametrize(
+    ("affection", "expected_timeout", "upset"),
+    [(999, 60, True), (0, 20, False)],
+)
+async def test_poke_event_window_depends_on_upset(
+    tmp_path: Path,
+    bundled_texts_path: Path,
+    monkeypatch,
+    affection: int,
+    expected_timeout: int,
+    upset: bool,
+) -> None:
+    """闹别扭题用更长的窗口,普通题仍用原窗口,戳一戳路径也一样。"""
+
+    service = _service(tmp_path)
+    config = Config(
+        mantou_affection_event_timeout=20, mantou_affection_upset_event_timeout=60
+    )
+    coordinator = _coordinator(service, config, bundled_texts_path, rng=FixedRng(0.0))
+    await _give_affection(service, affection)
+    seen: list[float] = []
+
+    def fake_schedule(pending, *, group_id, send, timeout):
+        seen.append(timeout)
+        return None
+
+    monkeypatch.setattr(coordinator, "schedule", fake_schedule)
+
+    async def fake_send(message) -> None:
+        return None
+
+    started = await coordinator.start_poke_event(
+        group_id=GROUP_ID,
+        user_id=TRIGGER_ID,
+        nickname="桃友",
+        send=fake_send,
+        chance=1.0,
+        affection=affection,
+    )
+
+    assert started is not None
+    assert seen == [expected_timeout]
+    pending = coordinator.pending[GROUP_ID]
+    assert pending.event.upset is upset
+    assert coordinator.timeout_for(pending) == expected_timeout
+    coordinator.discard(GROUP_ID)
+
+
+async def test_ambient_event_window_depends_on_upset(
+    tmp_path: Path, bundled_texts_path: Path, monkeypatch
+) -> None:
+    coordinator, sent, ambient, _answer = _setup(
+        bundled_texts_path,
+        tmp_path,
+        monkeypatch,
+        coordinator_rng=FixedRng(0.0),
+        mantou_affection_ambient_event_ratio=1.0,
+        mantou_affection_event_timeout=20,
+        mantou_affection_upset_event_timeout=60,
+    )
+    await _give_affection(coordinator.service, 999)
+    seen: list[float] = []
+
+    def fake_schedule(pending, *, group_id, send, timeout):
+        seen.append(timeout)
+        return None
+
+    monkeypatch.setattr(coordinator, "schedule", fake_schedule)
+
+    await ambient.handlers[0].call(_event())
+
+    assert seen == [60]
+    assert coordinator.pending[GROUP_ID].event.upset is True
+    assert "请在 60 秒内作答" in sent[0].extract_plain_text()
+    coordinator.discard(GROUP_ID)
+
+
 async def test_normal_event_timeout_keeps_fixed_penalty(
     tmp_path: Path, bundled_texts_path: Path
 ) -> None:
@@ -1011,16 +1100,18 @@ async def test_upset_answers_four_to_six_settle(
     assert _at_ids(sent[0]) == ["91003", "91004", "91005", TRIGGER_ID]
     assert len(lines) == 4
     assert "等不到你的回答" not in str(sent[0])
+    expected = {
+        10: "好感度 +10，当前 110！",
+        5: "好感度 +5，当前 105",
+        2: "好感度 +2，当前 102",
+        -5: "好感度 -5，当前 95",
+        -10: "好感度 -10，当前 90…",
+    }
     for line, index in zip(lines[:3], (3, 4, 5)):
         option = pending.options[index - 1]
-        if option.delta >= 0:
-            assert line.endswith("好感度 +10，当前 110！")
-        elif option.delta == -5:
-            assert line.endswith("好感度 -5，当前 95")
-        else:
-            assert line.endswith("好感度 -10，当前 90…")
+        assert line.endswith(expected[option.delta])
     for user_id in ("91003", "91004", "91005"):
-        assert (await service.profile(GROUP_ID, user_id)).affection in (90, 95, 110)
+        assert (await service.profile(GROUP_ID, user_id)).affection in {90, 95, 102, 105, 110}
 
 
 async def test_upset_answer_seven_is_ignored(
