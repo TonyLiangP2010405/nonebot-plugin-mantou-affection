@@ -177,6 +177,15 @@ class AffectionService:
         chance = await self.find_char_group_chance()
         return self.rng.random() < chance
 
+    async def bet_triggered(self, group_id: str, user_id: str) -> bool:
+        """群消息路径的博弈判定：好感度超过门槛且掷中概率才返回 True。"""
+
+        profile = await self.store.get_profile(group_id, user_id)
+        if profile.affection <= self.config.mantou_affection_bet_min_affection:
+            return False
+        chance = await self.bet_probability()
+        return self.rng.random() < chance
+
     async def bet_probability(self) -> float:
         """馒头博弈的触发概率，运行时用 /馒头博弈概率 覆盖过就优先用它。"""
 

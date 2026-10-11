@@ -120,11 +120,11 @@ async def maybe_start_bet(
     candidates: Iterable[tuple[str | int, str]] | None = None,
     send: Callable[[Message | str], Awaitable[object]] | None = None,
 ) -> bool:
-    """水群榜等插件发完卡片后调用：按概率开一局「馒头博弈」，开局成功返回 True。
+    """按概率开一局「馒头博弈」，开局成功返回 True；插件内部的群消息触发也走这条路。
 
-    candidates 是榜单成员 [(user_id, name), ...]，会排除触发者后随机抽两位当对手；
-    不足两人、本群已有其它活动、概率没掷中或没传 send 都会直接返回 False。
-    send 用来发开场消息与结算消息，通常直接传调用方的 matcher.send。
+    candidates 是最近说过话的成员 [(user_id, name), ...]，会排除触发者和馒头好感度
+    没过门槛的人，再随机抽两位当对手；不足两人、本群已有其它活动、概率没掷中或没传
+    send 都会直接返回 False。send 用来发开场消息与结算消息，通常直接传 matcher.send。
     """
 
     if send is None or candidates is None:

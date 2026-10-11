@@ -14,8 +14,8 @@
 - 群友发言时馒头按概率冒泡的小动作（好感度 >0 才触发，默认 0.05%），其中约 1/3 会升级为限时随机事件
 - 群友发言时另有 0.05% 概率开一局「找字小游戏」：从题库抽一道二字型或三字型找字题，30 秒内抢答
 - 戳一戳稳定 +1（受每日获取总上限约束），0.05% 概率戳出一次扣分翻倍的答题事件、0.05% 概率戳出一局找字小游戏
-- 「馒头博弈」数字顺序竞猜：由水群榜等插件通过 `maybe_start_bet` API 开局，三人各猜一个 1~5 的顺序，
-  输家的好感度汇成奖池，平分给赢家和更接近的围观群友
+- 「馒头博弈」数字顺序竞猜：好感度 > 50 的群友发言时按概率开局（也可由其它插件调 `maybe_start_bet`），
+  三人各猜一个 1~5 的顺序，输家的好感度汇成奖池，平分给赢家和更接近的围观群友
 - 为其他插件提供好感上报与状态读取 API
 - 使用 `nonebot-plugin-localstore` 和原子写入持久化数据
 
@@ -70,6 +70,7 @@ MANTOU_AFFECTION_POKE_FIND_CHAR_CHANCE=0.0005
 MANTOU_AFFECTION_FIND_CHAR_TIMEOUT=30
 MANTOU_AFFECTION_BET_CHANCE=0.0005
 MANTOU_AFFECTION_BET_MIN_AFFECTION=50
+MANTOU_AFFECTION_BET_RECENT_MINUTES=5
 MANTOU_AFFECTION_BET_WINDOW=60
 ```
 
@@ -110,9 +111,11 @@ SUPERUSER 手动增减不受这个上限限制，`/馒头好感` 会显示当天
 `MANTOU_AFFECTION_AMBIENT_PROBABILITY` 无关；把概率设成 0 就是关掉找字。
 
 `MANTOU_AFFECTION_BET_CHANCE` 是「馒头博弈」的开局概率（默认 0.0005，即 0.05%），
-`MANTOU_AFFECTION_BET_MIN_AFFECTION` 是当对手所需的最低馒头好感度（默认 50，要**严格大于**才会被抽中），
-`MANTOU_AFFECTION_BET_WINDOW` 是博弈的作答窗口（秒，默认 60）。博弈不参与群消息与戳一戳的随机触发，只在
-水群榜等插件调用 `maybe_start_bet` 时掷一次；SUPERUSER 可以用 `/馒头博弈概率` 在运行时覆盖概率并持久化。
+`MANTOU_AFFECTION_BET_MIN_AFFECTION` 是触发博弈与当对手所需的最低馒头好感度（默认 50，要**严格大于**），
+`MANTOU_AFFECTION_BET_RECENT_MINUTES` 是「最近说过话」的统计窗口（分钟，默认 5），
+`MANTOU_AFFECTION_BET_WINDOW` 是博弈的作答窗口（秒，默认 60）。好感度超过门槛的群友发言时按
+`MANTOU_AFFECTION_BET_CHANCE` 掷一次，命中就开局（戳一戳不参与）；其它插件也可以调用 `maybe_start_bet`
+主动开局，SUPERUSER 可以用 `/馒头博弈概率` 在运行时覆盖概率并持久化。
 
 `MANTOU_AFFECTION_AMBIENT_EVENT_RATIO` 是小动作命中后升级为随机事件的比例（默认 0.333，也就是约 1/3）。
 `MANTOU_AFFECTION_EVENT_TIMEOUT` 是普通答题时限（秒，默认 20），`MANTOU_AFFECTION_UPSET_EVENT_TIMEOUT`
@@ -296,7 +299,11 @@ SUPERUSER 手动增减不受这个上限限制，`/馒头好感` 会显示当天
 ### 馒头博弈
 
 「馒头博弈」是一局数字顺序竞猜：馒头摆出 `1 2 3 4 5`，一分钟后把顺序打乱并公布，谁猜得最接近谁赢，
-输家要把好感度转给赢家。它**不参与群消息和戳一戳的随机触发**，只由水群榜这类插件在合适的时候调用 API 开局。
+输家要把好感度转给赢家。**好感度严格大于** `MANTOU_AFFECTION_BET_MIN_AFFECTION`（默认 50）的群友发言时，
+按 `MANTOU_AFFECTION_BET_CHANCE`（默认 0.05%）掷一次，命中就 @ 他和另外两位群友开局；戳一戳不参与。
+插件自己维护一份「最近发言表」（每条群消息都会记，连被命令接管的发言也算），抽对手时用它。
+
+其它插件也可以主动开局，走同一个入口：
 
 ```python
 from nonebot_plugin_mantou_affection import maybe_start_bet
@@ -305,18 +312,18 @@ started = await maybe_start_bet(
     event.group_id,
     event.user_id,
     nickname=event.sender.card or event.sender.nickname,
-    candidates=[(member.user_id, member.name) for member in ranking],
+    candidates=[(member.user_id, member.name) for member in recent_speakers],
     send=matcher.send,
 )
 ```
 
 - `candidates` 是**最近几分钟在群里说过话**的成员 `[(user_id, name), ...]`（触发者自己也在里面，插件会把它
   排除掉）；抽对手时再要求**馒头好感度严格大于** `MANTOU_AFFECTION_BET_MIN_AFFECTION`（默认 50），从剩下的人里
-  随机抽两位当对手，过滤后不足两人直接返回 `False`。也就是说：触发者要在当日水群榜上，另外两人要最近说过话
-  且和馒头的好感度超过 50。
+  随机抽两位当对手，过滤后不足两人直接返回 `False`。也就是说：触发者自己要好感度 > 50，另外两人要最近
+  `MANTOU_AFFECTION_BET_RECENT_MINUTES` 分钟内说过话且好感度 > 50。
   `send` 传调用方的 `matcher.send`，用来发开场消息与结算消息，不传直接返回 `False`。
-- 开局前会先占同群席位（和小动作答题、找字小游戏共用，本群已有活动时返回 `False`），再按
-  `MANTOU_AFFECTION_BET_CHANCE`（默认 0.05%）掷一次；命中才发消息并开窗口，成功返回 `True`。
+- 开局前会先占同群席位（和小动作答题、找字小游戏共用，本群已有活动时返回 `False`）；群消息触发时，
+  找字小游戏优先于博弈、博弈优先于小动作，三者不会在同一条消息上同时出现。
 - 窗口长度是 `MANTOU_AFFECTION_BET_WINDOW`（默认 60 秒），`/馒头博弈概率` 可以在运行时改概率。
 
 开局消息 @ 触发者和两位对手，只说明规则、**不透露打乱后的顺序**：

@@ -3,8 +3,9 @@ import json
 import random
 from contextlib import suppress
 from pathlib import Path
-from time import time
+from time import monotonic, time
 
+import nonebot.message as message_module
 import pytest
 from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message
 from nonebot.adapters.onebot.v11.event import Sender
@@ -12,6 +13,8 @@ from nonebot.adapters.onebot.v11.event import Sender
 from nonebot_plugin_mantou_affection.ambient import EventCoordinator, register_ambient
 from nonebot_plugin_mantou_affection.bet import (
     BET_IDENTICAL_PENALTY,
+    BET_RECENT_KEEP_MINUTES,
+    BET_RECENT_MAX_ENTRIES,
     BUNDLED_ROUNDS_PATH,
     BetCoordinator,
     BetLibrary,
@@ -58,7 +61,7 @@ class FixedRng(random.Random):
 
 
 def _event(
-    text: str, user_id: int = 92002, group_id: int = 92001, nickname: str = "桃友"
+    text: str = "晚上好", user_id: int = 92002, group_id: int = 92001, nickname: str = "桃友"
 ) -> GroupMessageEvent:
     message = Message(text)
     return GroupMessageEvent(
@@ -349,6 +352,7 @@ def test_bet_defaults() -> None:
     config = Config()
     assert config.mantou_affection_bet_chance == 0.0005
     assert config.mantou_affection_bet_min_affection == 50
+    assert config.mantou_affection_bet_recent_minutes == 5
     assert config.mantou_affection_bet_window == 60
 
 
@@ -949,6 +953,301 @@ async def test_settlement_counts_silent_named_as_losers(tmp_path: Path) -> None:
     assert "没提交答案，好感度已经见底，没有可转让的，当前 0" in results[RIVAL_B]
     assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == 21
     assert (await service.profile(GROUP_ID, RIVAL_A)).affection == 19
+
+
+# ------------------------------------------------------------ 最近发言表
+
+
+def test_recent_candidates_keep_only_the_window(tmp_path: Path) -> None:
+    coordinator, _service = _bet(tmp_path)
+    coordinator.note_message(GROUP_ID, RIVAL_A, "甲", now=1000.0)
+    coordinator.note_message(GROUP_ID, RIVAL_B, "乙", now=1300.0)
+    coordinator.note_message("99999", OTHER_ID, "路人", now=1300.0)
+
+    inside = coordinator.recent_candidates(GROUP_ID, minutes=5, now=1301.0)
+    assert inside == [(RIVAL_B, "乙")]
+
+    wider = coordinator.recent_candidates(GROUP_ID, minutes=10, now=1301.0)
+    assert [user_id for user_id, _name in wider] == [RIVAL_B, RIVAL_A]
+
+
+def test_recent_candidates_normalize_nickname(tmp_path: Path) -> None:
+    coordinator, _service = _bet(tmp_path)
+    coordinator.note_message(GROUP_ID, RIVAL_A, "  甲  ", now=10.0)
+    coordinator.note_message(GROUP_ID, RIVAL_B, "", now=11.0)
+
+    candidates = dict(coordinator.recent_candidates(GROUP_ID, minutes=5, now=12.0))
+    assert candidates[RIVAL_A] == "甲"
+    assert candidates[RIVAL_B] == RIVAL_B
+
+
+def test_recent_table_is_bounded(tmp_path: Path) -> None:
+    coordinator, _service = _bet(tmp_path)
+    for index in range(BET_RECENT_MAX_ENTRIES + 20):
+        coordinator.note_message(GROUP_ID, str(900000 + index), "甲", now=float(index))
+
+    assert len(coordinator.recent) <= BET_RECENT_MAX_ENTRIES
+    assert (GROUP_ID, "900000") not in coordinator.recent
+
+
+def test_recent_table_drops_stale_entries(tmp_path: Path) -> None:
+    coordinator, _service = _bet(tmp_path)
+    for index in range(BET_RECENT_MAX_ENTRIES):
+        coordinator.note_message(GROUP_ID, str(900000 + index), "甲", now=float(index))
+
+    later = float(BET_RECENT_KEEP_MINUTES * 60 + 1000)
+    coordinator.note_message(GROUP_ID, OTHER_ID, "路人", now=later)
+
+    assert set(coordinator.recent) == {(GROUP_ID, OTHER_ID)}
+
+
+def _recent_preprocessors() -> list:
+    return [
+        dependent
+        for dependent in message_module._event_preprocessors
+        if getattr(dependent.call, "__name__", "") == "record_recent_speaker"
+    ]
+
+
+async def test_recent_speaker_recorder_catches_every_message(
+    tmp_path: Path, bundled_texts_path: Path, monkeypatch
+) -> None:
+    """事件预处理器要把被命令接管的发言也记进最近发言表。"""
+
+    _service, _events, _find_char, bet, _ambient, _answer, _sent = await _ambient_setup(
+        tmp_path, bundled_texts_path, monkeypatch
+    )
+    recorders = _recent_preprocessors()
+    assert recorders
+
+    for dependent in recorders:
+        await dependent(
+            event=_event("馒头好感", user_id=int(RIVAL_A), nickname="甲"), state={}
+        )
+
+    assert (GROUP_ID, RIVAL_A) in bet.recent
+    assert bet.recent[(GROUP_ID, RIVAL_A)][1] == "甲"
+
+
+async def test_ambient_handler_records_recent_speaker(
+    tmp_path: Path, bundled_texts_path: Path, monkeypatch
+) -> None:
+    """走 ambient 的发言也会被记进最近发言表（昵称取群名片）。"""
+
+    _service, _events, _find_char, bet, ambient, _answer, _sent = await _ambient_setup(
+        tmp_path,
+        bundled_texts_path,
+        monkeypatch,
+        mantou_affection_bet_chance=0.0,
+        mantou_affection_find_char_chance=0.0,
+    )
+
+    await ambient.handlers[0].call(_event("晚上好", user_id=int(RIVAL_A), nickname="甲"))
+
+    assert (GROUP_ID, RIVAL_A) in bet.recent
+    assert bet.recent[(GROUP_ID, RIVAL_A)][1] == "甲"
+
+
+# ------------------------------------------------------------ 群消息触发
+
+
+async def _ambient_setup(
+    tmp_path: Path, bundled_texts_path: Path, monkeypatch, **config_kwargs
+) -> tuple:
+    config_kwargs.setdefault("mantou_affection_ambient_probability", 1.0)
+    config_kwargs.setdefault("mantou_affection_ambient_event_ratio", 0.0)
+    config = Config(**config_kwargs)
+    service = _service(
+        tmp_path,
+        config,
+        rng=random.Random(0),
+        text_library=AffectionTextLibrary(bundled_texts_path),
+    )
+    events = EventCoordinator(service, config, None, rng=random.Random(0))
+    find_char = FindCharCoordinator(
+        service,
+        config,
+        FindCharLibrary(BUNDLED_PUZZLES_PATH),
+        events=events,
+        rng=random.Random(0),
+    )
+    bet = BetCoordinator(
+        service,
+        config,
+        BetLibrary(BUNDLED_ROUNDS_PATH),
+        events=events,
+        rng=FixedRng(0.0),
+    )
+    ambient, answer = register_ambient(service, config, events, find_char, bet)
+    sent: list[Message] = []
+
+    async def fake_send(message: Message) -> None:
+        sent.append(message)
+
+    monkeypatch.setattr(ambient, "send", fake_send)
+    return service, events, find_char, bet, ambient, answer, sent
+
+
+async def _seed_recent_and_affection(
+    service: AffectionService, bet: BetCoordinator, *user_ids: str, score: int = 60
+) -> None:
+    for user_id in user_ids:
+        bet.note_message(GROUP_ID, user_id, "桃友")
+        await _give_affection(service, score, user_id)
+
+
+async def test_ambient_triggers_bet_for_high_affection(
+    tmp_path: Path, bundled_texts_path: Path, monkeypatch
+) -> None:
+    service, _events, _find_char, bet, ambient, _answer, sent = await _ambient_setup(
+        tmp_path,
+        bundled_texts_path,
+        monkeypatch,
+        mantou_affection_bet_chance=1.0,
+        mantou_affection_find_char_chance=0.0,
+    )
+    await _seed_recent_and_affection(service, bet, TRIGGER_ID, RIVAL_A, RIVAL_B)
+
+    await ambient.handlers[0].call(_event())
+
+    assert GROUP_ID in bet.pending
+    assert set(bet.pending[GROUP_ID].named_ids) == {TRIGGER_ID, RIVAL_A, RIVAL_B}
+    assert len(sent) == 1
+    assert "🎲 馒头博弈！" in sent[0].extract_plain_text()
+    await _cancel_task(bet)
+
+
+async def test_ambient_bet_requires_affection_over_threshold(
+    tmp_path: Path, bundled_texts_path: Path, monkeypatch
+) -> None:
+    service, _events, _find_char, bet, ambient, _answer, sent = await _ambient_setup(
+        tmp_path,
+        bundled_texts_path,
+        monkeypatch,
+        mantou_affection_bet_chance=1.0,
+        mantou_affection_find_char_chance=0.0,
+    )
+    await _seed_recent_and_affection(
+        service, bet, RIVAL_A, RIVAL_B, score=60
+    )
+    await _give_affection(service, 50, TRIGGER_ID)
+
+    await ambient.handlers[0].call(_event())
+
+    assert bet.pending == {}
+    assert len(sent) == 1
+    assert "🎲 馒头博弈！" not in sent[0].extract_plain_text()
+
+
+async def test_ambient_bet_candidates_come_from_recent_speakers(
+    tmp_path: Path, bundled_texts_path: Path, monkeypatch
+) -> None:
+    service, _events, _find_char, bet, ambient, _answer, sent = await _ambient_setup(
+        tmp_path,
+        bundled_texts_path,
+        monkeypatch,
+        mantou_affection_bet_chance=1.0,
+        mantou_affection_find_char_chance=0.0,
+    )
+    await _give_affection(service, 60, TRIGGER_ID)
+    await _give_affection(service, 60, RIVAL_A)
+    await _give_affection(service, 60, RIVAL_B)
+    bet.note_message(GROUP_ID, RIVAL_A, "甲")
+    # RIVAL_B 是 10 分钟前说的,已经超出 5 分钟窗口
+    bet.note_message(GROUP_ID, RIVAL_B, "乙", now=monotonic() - 10 * 60)
+
+    await ambient.handlers[0].call(_event())
+
+    assert bet.pending == {}
+    assert len(sent) == 1
+    assert "🎲 馒头博弈！" not in sent[0].extract_plain_text()
+
+
+async def test_ambient_bet_candidates_still_need_affection(
+    tmp_path: Path, bundled_texts_path: Path, monkeypatch
+) -> None:
+    service, _events, _find_char, bet, ambient, _answer, sent = await _ambient_setup(
+        tmp_path,
+        bundled_texts_path,
+        monkeypatch,
+        mantou_affection_bet_chance=1.0,
+        mantou_affection_find_char_chance=0.0,
+    )
+    await _seed_recent_and_affection(service, bet, TRIGGER_ID, RIVAL_A)
+    await _give_affection(service, 50, RIVAL_B)
+    bet.note_message(GROUP_ID, RIVAL_B, "乙")
+
+    await ambient.handlers[0].call(_event())
+
+    assert bet.pending == {}
+    assert len(sent) == 1
+    assert "🎲 馒头博弈！" not in sent[0].extract_plain_text()
+
+
+async def test_ambient_bet_respects_chance(
+    tmp_path: Path, bundled_texts_path: Path, monkeypatch
+) -> None:
+    service, _events, _find_char, bet, ambient, _answer, sent = await _ambient_setup(
+        tmp_path,
+        bundled_texts_path,
+        monkeypatch,
+        mantou_affection_bet_chance=0.0,
+        mantou_affection_find_char_chance=0.0,
+    )
+    await _seed_recent_and_affection(service, bet, TRIGGER_ID, RIVAL_A, RIVAL_B)
+
+    await ambient.handlers[0].call(_event())
+
+    # 概率没中就走原来的小动作流程
+    assert bet.pending == {}
+    assert len(sent) == 1
+    assert "🎲 馒头博弈！" not in sent[0].extract_plain_text()
+    assert _events.pending == {}
+
+
+async def test_ambient_find_char_wins_over_bet(
+    tmp_path: Path, bundled_texts_path: Path, monkeypatch
+) -> None:
+    service, _events, _find_char, bet, ambient, _answer, sent = await _ambient_setup(
+        tmp_path,
+        bundled_texts_path,
+        monkeypatch,
+        mantou_affection_bet_chance=1.0,
+        mantou_affection_find_char_chance=1.0,
+    )
+    await _seed_recent_and_affection(service, bet, TRIGGER_ID, RIVAL_A, RIVAL_B)
+
+    await ambient.handlers[0].call(_event())
+
+    assert bet.pending == {}
+    assert len(sent) == 1
+    assert "🔍 找字小游戏！" in sent[0].extract_plain_text()
+    find_char = _find_char
+    assert GROUP_ID in find_char.pending
+    await _cancel_task(bet)
+
+
+async def test_ambient_bet_blocks_small_action(
+    tmp_path: Path, bundled_texts_path: Path, monkeypatch
+) -> None:
+    """博弈开局成功后直接返回,不会再冒小动作旁白。"""
+
+    service, events, _find_char, bet, ambient, _answer, sent = await _ambient_setup(
+        tmp_path,
+        bundled_texts_path,
+        monkeypatch,
+        mantou_affection_bet_chance=1.0,
+        mantou_affection_find_char_chance=0.0,
+        mantou_affection_ambient_event_ratio=1.0,
+    )
+    await _seed_recent_and_affection(service, bet, TRIGGER_ID, RIVAL_A, RIVAL_B)
+
+    await ambient.handlers[0].call(_event())
+
+    assert len(sent) == 1
+    assert "🎲 馒头博弈！" in sent[0].extract_plain_text()
+    assert events.pending == {}
+    await _cancel_task(bet)
 
 
 # ------------------------------------------------------------ 概率读取与命令

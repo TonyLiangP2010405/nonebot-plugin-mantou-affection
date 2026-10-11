@@ -4,6 +4,7 @@ import asyncio
 import json
 import random
 import re
+import time
 from collections.abc import Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,6 +25,8 @@ BET_ORDER: tuple[int, ...] = (1, 2, 3, 4, 5)
 BET_RIVALS = 2
 BET_IDENTICAL_PENALTY = 5
 BET_LOSS_RATE = 0.05
+BET_RECENT_KEEP_MINUTES = 120
+BET_RECENT_MAX_ENTRIES = 512
 BET_TEXT_MIN = 2
 BET_TEXT_MAX = 100
 
@@ -270,6 +273,52 @@ class BetCoordinator:
         self.events = events
         self.rng = rng or random.Random()
         self.pending: dict[str, PendingBet] = {}
+        self.recent: dict[tuple[str, str], tuple[float, str]] = {}
+
+    def note_message(
+        self,
+        group_id: str,
+        user_id: str,
+        nickname: str,
+        *,
+        now: float | None = None,
+    ) -> None:
+        """记录一条群消息，抽对手时用它判断谁最近在群里说过话。"""
+
+        moment = time.monotonic() if now is None else now
+        self.recent[(str(group_id), str(user_id))] = (
+            moment,
+            normalize_nickname(nickname, str(user_id)),
+        )
+        self._prune(moment)
+
+    def recent_candidates(
+        self, group_id: str, *, minutes: int, now: float | None = None
+    ) -> list[tuple[str, str]]:
+        """返回最近 minutes 分钟内在本群说过话的成员，最近发言的排前面。"""
+
+        moment = time.monotonic() if now is None else now
+        cutoff = moment - minutes * 60
+        seen = [
+            (user_id, nickname, at)
+            for (group, user_id), (at, nickname) in self.recent.items()
+            if group == str(group_id) and at >= cutoff
+        ]
+        seen.sort(key=lambda item: item[2], reverse=True)
+        return [(user_id, nickname) for user_id, nickname, _at in seen]
+
+    def _prune(self, now: float) -> None:
+        """表大了顺手清掉过期的发言记录，避免长期运行无限增长。"""
+
+        if len(self.recent) < BET_RECENT_MAX_ENTRIES:
+            return
+        cutoff = now - BET_RECENT_KEEP_MINUTES * 60
+        for key in [key for key, (at, _name) in self.recent.items() if at < cutoff]:
+            self.recent.pop(key, None)
+        if len(self.recent) >= BET_RECENT_MAX_ENTRIES:
+            oldest = sorted(self.recent.items(), key=lambda item: item[1][0])
+            for key, _value in oldest[: len(self.recent) - BET_RECENT_MAX_ENTRIES + 1]:
+                self.recent.pop(key, None)
 
     def busy(self, group_id: str) -> bool:
         """本群是否已经有待结算的活动：博弈、随机事件或找字小游戏。"""
@@ -309,7 +358,11 @@ class BetCoordinator:
         candidates: Iterable[Any],
         send: Callable[[Message | str], Awaitable[object]],
     ) -> bool:
-        """按概率开一局博弈：本群已有活动、掷骰没中或凑不齐两人都返回 False。"""
+        """按概率开一局博弈：本群已有活动、掷骰没中或凑不齐两人都返回 False。
+
+        群消息路径由 ambient 调用（candidates 取自己的最近发言表），对外 API
+        `maybe_start_bet` 也走这条路，两边的开局、结算逻辑完全一致。
+        """
 
         key = str(group_id)
         if send is None or self.busy(key):

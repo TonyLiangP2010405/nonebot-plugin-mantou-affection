@@ -5,7 +5,10 @@ import random
 from collections.abc import Awaitable, Callable
 
 from nonebot import logger, on_message
+from nonebot.adapters import Event as AdapterEvent
 from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message, MessageSegment
+from nonebot.message import event_preprocessor
+from nonebot.typing import T_State
 
 from .bet import BUNDLED_ROUNDS_PATH, BetCoordinator, BetLibrary
 from .commands import GROUP_ONLY
@@ -424,9 +427,11 @@ def register_ambient(
 ) -> tuple:
     """群友发言时按概率让馒头冒个小动作，偶尔升级为群里多人可答的随机事件。
 
-    好感度 > 0 的群友发言时先按找字小游戏的概率掷一次：命中了就只发找字方阵，
-    没命中才继续走原来的 0.05% 小动作流程，两者互斥，不会在同一条消息上同时触发。
-    馒头博弈不参与群消息触发，只由对外 API 启动，但作答同样走这里的答案路由。
+    好感度 > 0 的群友发言时先按找字小游戏的概率掷一次：命中了就只发找字方阵；
+    没命中再看馒头博弈（好感度超过门槛且掷中概率就开局）；都没命中才继续走原来的
+    0.05% 小动作流程。三者互斥，不会在同一条消息上同时触发，作答都走这里的答案路由。
+    另外注册了一个事件预处理器，把每条群消息（含被命令接管的）记进博弈的
+    最近发言表，供抽对手时使用。
     """
 
     coordinator = events or EventCoordinator(service, config)
@@ -449,6 +454,15 @@ def register_ambient(
     ambient = on_message(rule=GROUP_ONLY, priority=90, block=False)
     answer = on_message(rule=GROUP_ONLY, priority=5, block=False)
 
+    @event_preprocessor
+    async def record_recent_speaker(event: AdapterEvent, state: T_State) -> None:
+        """事件预处理：每条群消息（含被命令接管的）都记进博弈的最近发言表。"""
+
+        if isinstance(event, GroupMessageEvent):
+            bet_coordinator.note_message(
+                str(event.group_id), str(event.user_id), _sender_name(event)
+            )
+
     @answer.handle()
     async def handle_answer(event: GroupMessageEvent) -> None:
         try:
@@ -469,6 +483,7 @@ def register_ambient(
         group_id = str(event.group_id)
         user_id = str(event.user_id)
         nickname = _sender_name(event)
+        bet_coordinator.note_message(group_id, user_id, nickname)
 
         try:
             find_char_ready = await service.find_char_triggered(group_id, user_id)
@@ -494,6 +509,29 @@ def register_ambient(
                         timeout=config.mantou_affection_find_char_timeout,
                     )
                     return
+
+        try:
+            bet_ready = await service.bet_triggered(group_id, user_id)
+        except Exception:
+            logger.exception("[mantou-affection] 判定馒头博弈失败")
+            bet_ready = False
+        if bet_ready:
+            try:
+                started = await bet_coordinator.maybe_start(
+                    group_id=group_id,
+                    user_id=user_id,
+                    nickname=nickname,
+                    candidates=bet_coordinator.recent_candidates(
+                        group_id,
+                        minutes=config.mantou_affection_bet_recent_minutes,
+                    ),
+                    send=ambient.send,
+                )
+            except Exception:
+                logger.exception("[mantou-affection] 抽取馒头博弈失败")
+                started = False
+            if started:
+                return
 
         try:
             text = await service.ambient_reaction(group_id, user_id)
