@@ -10,6 +10,7 @@ from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message
 from nonebot.adapters.onebot.v11.event import Sender
 
 from nonebot_plugin_mantou_affection.ambient import (
+    UPSET_REPLIES,
     EventCoordinator,
     PendingEvent,
     register_ambient,
@@ -87,12 +88,12 @@ def _upset_events(count: int = 3) -> list[dict]:
         {
             "text": f"闹别扭场景 {index}",
             "options": [
-                {"text": f"最佳哄法 {index}", "delta": 10},
-                {"text": f"次佳哄法 {index}", "delta": 5},
-                {"text": f"勉强哄法 {index}", "delta": 2},
-                {"text": f"普通错甲 {index}", "delta": -5},
-                {"text": f"普通错乙 {index}", "delta": -5},
-                {"text": f"陷阱 {index}", "delta": -10},
+                {"text": f"最佳哄法 {index}", "delta": 5},
+                {"text": f"次佳哄法 {index}", "delta": 2},
+                {"text": f"轻扣 {index}", "delta": -3},
+                {"text": f"中扣 {index}", "delta": -5},
+                {"text": f"重扣 {index}", "delta": -10},
+                {"text": f"最重扣 {index}", "delta": -15},
             ],
         }
         for index in range(1, count + 1)
@@ -572,11 +573,24 @@ def test_upset_correct_option_position_varies(
             next(
                 index
                 for index, option in enumerate(pending.options)
-                if option.delta == 10
+                if option.delta == 5
             )
         )
 
     assert positions == {0, 1, 2, 3, 4, 5}
+
+
+def test_upset_replies_cover_every_tier() -> None:
+    """六档结算文案各自独立，负向随扣分档位逐步加重。"""
+
+    assert sorted(UPSET_REPLIES) == [-15, -10, -5, -3, 2, 5]
+    assert len(set(UPSET_REPLIES.values())) == 6
+    assert "最想听的那句" in UPSET_REPLIES[5]
+    assert "更让它心动的回答" in UPSET_REPLIES[2]
+    assert UPSET_REPLIES[-3].startswith("差一点点")
+    assert UPSET_REPLIES[-5].startswith("没说到点子上")
+    assert UPSET_REPLIES[-10].startswith("跑偏得有点远")
+    assert UPSET_REPLIES[-15].startswith("完全踩到雷了")
 
 
 def test_upset_event_message_uses_upset_prefix(
@@ -622,7 +636,7 @@ def test_normal_event_message_uses_plain_prefix(
 
 
 async def _answer_upset(
-    coordinator: EventCoordinator, affection: int, *, delta: int = 10
+    coordinator: EventCoordinator, affection: int, *, delta: int = 5
 ) -> tuple[list[Message], PendingEvent]:
     await _give_affection(coordinator.service, affection)
     pending = coordinator.start(GROUP_ID, TRIGGER_ID, "桃友", affection=999)
@@ -637,17 +651,33 @@ async def _answer_upset(
     return await _settle(coordinator), pending
 
 
-async def test_upset_best_option_rewards_ten(
+async def test_upset_best_option_rewards_five(
     tmp_path: Path, bundled_texts_path: Path
 ) -> None:
     service = _service(tmp_path)
     coordinator = _coordinator(service, Config(), bundled_texts_path, rng=FixedRng(0.0))
 
-    sent, _pending = await _answer_upset(coordinator, 30, delta=10)
+    sent, _pending = await _answer_upset(coordinator, 30, delta=5)
 
     assert _at_ids(sent[0]) == [TRIGGER_ID]
-    assert _lines(sent[0])[0].endswith("馒头一下子被哄好了，好感度 +10，当前 40！")
-    assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == 40
+    assert _lines(sent[0])[0].endswith(
+        "馒头一下子被哄好了，这就是它最想听的那句，好感度 +5，当前 35！"
+    )
+    assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == 35
+
+
+async def test_upset_second_option_rewards_two(
+    tmp_path: Path, bundled_texts_path: Path
+) -> None:
+    service = _service(tmp_path)
+    coordinator = _coordinator(service, Config(), bundled_texts_path, rng=FixedRng(0.0))
+
+    sent, _pending = await _answer_upset(coordinator, 30, delta=2)
+
+    assert _lines(sent[0])[0].endswith(
+        "馒头勉强收下了这个台阶，其实还有更让它心动的回答，好感度 +2，当前 32"
+    )
+    assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == 32
 
 
 async def test_upset_best_option_works_from_zero_affection(
@@ -656,26 +686,33 @@ async def test_upset_best_option_works_from_zero_affection(
     service = _service(tmp_path)
     coordinator = _coordinator(service, Config(), bundled_texts_path, rng=FixedRng(0.0))
 
-    sent, _pending = await _answer_upset(coordinator, 0, delta=10)
+    sent, _pending = await _answer_upset(coordinator, 0, delta=5)
 
-    assert _lines(sent[0])[0].endswith("馒头一下子被哄好了，好感度 +10，当前 10！")
-    assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == 10
+    assert _lines(sent[0])[0].endswith(
+        "馒头一下子被哄好了，这就是它最想听的那句，好感度 +5，当前 5！"
+    )
+    assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == 5
 
 
 @pytest.mark.parametrize(
     ("affection", "option_delta", "expected_line", "expected_affection"),
     [
-        (30, -5, "馒头别过脸去，好感度 -5，当前 25", 25),
-        (30, -10, "馒头听完更委屈了，好感度 -10，当前 20…", 20),
-        (200, -5, "馒头别过脸去，好感度 -10，当前 190", 190),
-        (200, -10, "馒头听完更委屈了，好感度 -20，当前 180…", 180),
-        (999, -5, "馒头别过脸去，好感度 -49，当前 950", 950),
-        (999, -10, "馒头听完更委屈了，好感度 -99，当前 900…", 900),
-        (500, 10, "馒头一下子被哄好了，好感度 +10，当前 510！", 510),
-        (500, 5, "馒头的脸色缓和了些，好感度 +5，当前 505", 505),
-        (500, 2, "馒头勉强收下了这个台阶，好感度 +2，当前 502", 502),
-        (0, 5, "馒头的脸色缓和了些，好感度 +5，当前 5", 5),
-        (0, 2, "馒头勉强收下了这个台阶，好感度 +2，当前 2", 2),
+        (30, -3, "差一点点就说到它心坎上了，馒头别过脸去，好感度 -3，当前 27", 27),
+        (30, -5, "没说到点子上，馒头把脸埋进蒸笼里，好感度 -5，当前 25", 25),
+        (30, -10, "跑偏得有点远，馒头听完更委屈了，好感度 -10，当前 20…", 20),
+        (30, -15, "完全踩到雷了，馒头的毛都炸起来了，好感度 -15，当前 15…", 15),
+        (200, -3, "差一点点就说到它心坎上了，馒头别过脸去，好感度 -6，当前 194", 194),
+        (200, -5, "没说到点子上，馒头把脸埋进蒸笼里，好感度 -10，当前 190", 190),
+        (200, -10, "跑偏得有点远，馒头听完更委屈了，好感度 -20，当前 180…", 180),
+        (200, -15, "完全踩到雷了，馒头的毛都炸起来了，好感度 -30，当前 170…", 170),
+        (999, -3, "差一点点就说到它心坎上了，馒头别过脸去，好感度 -29，当前 970", 970),
+        (999, -5, "没说到点子上，馒头把脸埋进蒸笼里，好感度 -49，当前 950", 950),
+        (999, -10, "跑偏得有点远，馒头听完更委屈了，好感度 -99，当前 900…", 900),
+        (999, -15, "完全踩到雷了，馒头的毛都炸起来了，好感度 -149，当前 850…", 850),
+        (500, 5, "馒头一下子被哄好了，这就是它最想听的那句，好感度 +5，当前 505！", 505),
+        (500, 2, "馒头勉强收下了这个台阶，其实还有更让它心动的回答，好感度 +2，当前 502", 502),
+        (0, 5, "馒头一下子被哄好了，这就是它最想听的那句，好感度 +5，当前 5！", 5),
+        (0, 2, "馒头勉强收下了这个台阶，其实还有更让它心动的回答，好感度 +2，当前 2", 2),
     ],
 )
 async def test_upset_penalties_scale_with_affection(
@@ -716,8 +753,8 @@ async def test_upset_penalties_use_each_answerers_affection(
     sent = await _settle(coordinator)
 
     lines = _lines(sent[0])
-    assert lines[0].endswith("馒头听完更委屈了，好感度 -20，当前 180…")
-    assert lines[1].endswith("馒头别过脸去，好感度 -5，当前 45")
+    assert lines[0].endswith("跑偏得有点远，馒头听完更委屈了，好感度 -20，当前 180…")
+    assert lines[1].endswith("没说到点子上，馒头把脸埋进蒸笼里，好感度 -5，当前 45")
     assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == 180
     assert (await service.profile(GROUP_ID, OTHER_ID)).affection == 45
 
@@ -759,7 +796,9 @@ async def test_poke_upset_penalty_scales_then_doubles(
 
     sent = await _settle(coordinator)
 
-    assert _lines(sent[0])[0].endswith("馒头听完更委屈了，好感度 -40，当前 160…")
+    assert _lines(sent[0])[0].endswith(
+        "跑偏得有点远，馒头听完更委屈了，好感度 -40，当前 160…"
+    )
     assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == 160
 
 
@@ -771,7 +810,9 @@ async def test_upset_worst_option_stops_at_zero_affection(
 
     sent, _pending = await _answer_upset(coordinator, 4, delta=-10)
 
-    assert _lines(sent[0])[0].endswith("馒头听完更委屈了，好感度 -10，当前 0…")
+    assert _lines(sent[0])[0].endswith(
+        "跑偏得有点远，馒头听完更委屈了，好感度 -10，当前 0…"
+    )
     assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == 0
 
 
@@ -792,15 +833,17 @@ async def test_upset_settlement_ignores_daily_gain_limit(
     pending = coordinator.start(GROUP_ID, TRIGGER_ID, "桃友", affection=999)
     assert pending is not None
     index = next(
-        position for position, option in enumerate(pending.options) if option.delta == 10
+        position for position, option in enumerate(pending.options) if option.delta == 5
     )
     assert coordinator.answer(GROUP_ID, TRIGGER_ID, "桃友", str(index + 1)) is True
 
     sent = await _settle(coordinator)
 
-    assert _lines(sent[0])[0].endswith("好感度 +10，当前 50！")
+    assert _lines(sent[0])[0].endswith(
+        "馒头一下子被哄好了，这就是它最想听的那句，好感度 +5，当前 45！"
+    )
     profile = await service.profile(GROUP_ID, TRIGGER_ID)
-    assert profile.affection == 50
+    assert profile.affection == 45
     assert profile.gain_points == 1
 
 
@@ -895,11 +938,12 @@ async def _poke_upset_pending(
 @pytest.mark.parametrize(
     ("delta", "expected_line", "expected_affection"),
     [
-        (10, "馒头一下子被哄好了，好感度 +10，当前 40！", 40),
-        (5, "馒头的脸色缓和了些，好感度 +5，当前 35", 35),
-        (2, "馒头勉强收下了这个台阶，好感度 +2，当前 32", 32),
-        (-5, "馒头别过脸去，好感度 -10，当前 20", 20),
-        (-10, "馒头听完更委屈了，好感度 -20，当前 10…", 10),
+        (5, "馒头一下子被哄好了，这就是它最想听的那句，好感度 +5，当前 35！", 35),
+        (2, "馒头勉强收下了这个台阶，其实还有更让它心动的回答，好感度 +2，当前 32", 32),
+        (-3, "差一点点就说到它心坎上了，馒头别过脸去，好感度 -6，当前 24", 24),
+        (-5, "没说到点子上，馒头把脸埋进蒸笼里，好感度 -10，当前 20", 20),
+        (-10, "跑偏得有点远，馒头听完更委屈了，好感度 -20，当前 10…", 10),
+        (-15, "完全踩到雷了，馒头的毛都炸起来了，好感度 -30，当前 0…", 0),
     ],
 )
 async def test_poke_upset_options_scale_penalties_only(
@@ -1101,17 +1145,20 @@ async def test_upset_answers_four_to_six_settle(
     assert len(lines) == 4
     assert "等不到你的回答" not in str(sent[0])
     expected = {
-        10: "好感度 +10，当前 110！",
-        5: "好感度 +5，当前 105",
+        5: "好感度 +5，当前 105！",
         2: "好感度 +2，当前 102",
+        -3: "好感度 -3，当前 97",
         -5: "好感度 -5，当前 95",
         -10: "好感度 -10，当前 90…",
+        -15: "好感度 -15，当前 85…",
     }
     for line, index in zip(lines[:3], (3, 4, 5)):
         option = pending.options[index - 1]
         assert line.endswith(expected[option.delta])
     for user_id in ("91003", "91004", "91005"):
-        assert (await service.profile(GROUP_ID, user_id)).affection in {90, 95, 102, 105, 110}
+        assert (await service.profile(GROUP_ID, user_id)).affection in {
+            85, 90, 95, 97, 102, 105
+        }
 
 
 async def test_upset_answer_seven_is_ignored(

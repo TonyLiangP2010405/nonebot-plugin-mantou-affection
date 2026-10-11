@@ -17,8 +17,6 @@ from .events import Event, EventLibrary, EventOption
 from .findchar import BUNDLED_PUZZLES_PATH, FindCharCoordinator, FindCharLibrary
 from .logic import (
     UPSET_EVENT_RATIOS,
-    UPSET_TRAP_RATE,
-    UPSET_WRONG_RATE,
     snapshot_for,
 )
 from .service import AffectionService
@@ -35,24 +33,32 @@ ANSWER_HINT_SEPARATOR = "、"
 EVENT_PREFIX = "⚡ 触发随机事件！"
 UPSET_PREFIX = "💢 馒头闹别扭了！"
 TIMEOUT_REPLY = "{bot}等不到你的回答，失望地走开了，好感度 -{penalty}"
-UPSET_BEST_REPLY = "{bot}一下子被哄好了，好感度 {delta:+d}，当前 {affection}！"
-UPSET_GOOD_REPLY = "{bot}的脸色缓和了些，好感度 {delta:+d}，当前 {affection}"
-UPSET_OK_REPLY = "{bot}勉强收下了这个台阶，好感度 {delta:+d}，当前 {affection}"
-UPSET_MILD_REPLY = "{bot}别过脸去，好感度 {delta:+d}，当前 {affection}"
-UPSET_WORST_REPLY = "{bot}听完更委屈了，好感度 {delta:+d}，当前 {affection}…"
+UPSET_BEST_REPLY = (
+    "{bot}一下子被哄好了，这就是它最想听的那句，好感度 {delta:+d}，当前 {affection}！"
+)
+UPSET_GOOD_REPLY = (
+    "{bot}勉强收下了这个台阶，其实还有更让它心动的回答，好感度 {delta:+d}，当前 {affection}"
+)
+UPSET_SLIGHT_REPLY = "差一点点就说到它心坎上了，{bot}别过脸去，好感度 {delta:+d}，当前 {affection}"
+UPSET_MISS_REPLY = "没说到点子上，{bot}把脸埋进蒸笼里，好感度 {delta:+d}，当前 {affection}"
+UPSET_FAR_REPLY = "跑偏得有点远，{bot}听完更委屈了，好感度 {delta:+d}，当前 {affection}…"
+UPSET_TRAP_REPLY = "完全踩到雷了，{bot}的毛都炸起来了，好感度 {delta:+d}，当前 {affection}…"
 UPSET_TIMEOUT_REPLY = "{bot}等不到你的回答，心凉了半截，好感度 {delta:+d}，当前 {affection}"
-UPSET_BEST_DELTA = 10
-UPSET_GOOD_DELTA = 5
+UPSET_BEST_DELTA = 5
 UPSET_OK_DELTA = 2
-UPSET_WRONG_DELTA = -5
-UPSET_WORST_DELTA = -10
+UPSET_SLIGHT_DELTA = -3
+UPSET_MISS_DELTA = -5
+UPSET_FAR_DELTA = -10
+UPSET_TRAP_DELTA = -15
+UPSET_TIMEOUT_PERCENT = 10
 UPSET_TIMEOUT_HINT = "按比例大扣"
 UPSET_REPLIES: dict[int, str] = {
     UPSET_BEST_DELTA: UPSET_BEST_REPLY,
-    UPSET_GOOD_DELTA: UPSET_GOOD_REPLY,
-    UPSET_OK_DELTA: UPSET_OK_REPLY,
-    UPSET_WRONG_DELTA: UPSET_MILD_REPLY,
-    UPSET_WORST_DELTA: UPSET_WORST_REPLY,
+    UPSET_OK_DELTA: UPSET_GOOD_REPLY,
+    UPSET_SLIGHT_DELTA: UPSET_SLIGHT_REPLY,
+    UPSET_MISS_DELTA: UPSET_MISS_REPLY,
+    UPSET_FAR_DELTA: UPSET_FAR_REPLY,
+    UPSET_TRAP_DELTA: UPSET_TRAP_REPLY,
 }
 
 
@@ -281,8 +287,8 @@ class EventCoordinator:
             current = (
                 await self.service.profile(group_id, pending.trigger_id)
             ).affection
-            penalty = self._upset_penalty(
-                current, UPSET_TRAP_RATE, -UPSET_WORST_DELTA
+            penalty = self._percent_penalty(
+                current, UPSET_TIMEOUT_PERCENT
             ) * pending.penalty_scale
             _, profile = await self.service.adjust(
                 group_id, pending.trigger_id, pending.trigger_name, -penalty
@@ -299,10 +305,10 @@ class EventCoordinator:
         return f"{reply}，当前 {profile.affection}"
 
     @staticmethod
-    def _upset_penalty(affection: int, rate: float, minimum: int) -> int:
-        """按当前好感比例算扣分，好感低时保底固定值。"""
+    def _percent_penalty(affection: int, percent: int) -> int:
+        """按好感百分比算扣分，好感低时保底就是百分比数字本身（整数算避免浮点误差）。"""
 
-        return max(minimum, int(affection * rate))
+        return max(percent, affection * percent // 100)
 
     async def _upset_delta(
         self,
@@ -311,17 +317,13 @@ class EventCoordinator:
         answer: PendingAnswer,
         option: EventOption,
     ) -> int:
-        """闹别扭题的负向选项按答题者当前好感换算成比例扣分（正解不变）。"""
+        """闹别扭题：正向固定加分，负向按 |delta| 的百分比扣，保底就是 |delta| 本身。"""
 
         if option.delta >= 0:
             return option.delta
-        rate, minimum = (
-            (UPSET_WRONG_RATE, -UPSET_WRONG_DELTA)
-            if option.delta == UPSET_WRONG_DELTA
-            else (UPSET_TRAP_RATE, -UPSET_WORST_DELTA)
-        )
         current = (await self.service.profile(group_id, answer.user_id)).affection
-        return -self._upset_penalty(current, rate, minimum) * pending.penalty_scale
+        penalty = self._percent_penalty(current, -option.delta)
+        return -penalty * pending.penalty_scale
 
     async def _settle_answer(
         self,
@@ -341,7 +343,9 @@ class EventCoordinator:
             group_id, answer.user_id, answer.nickname, delta
         )
         if pending.event.upset:
-            template = UPSET_REPLIES.get(option.delta, UPSET_MILD_REPLY)
+            template = UPSET_REPLIES.get(option.delta)
+            if template is None:
+                template = UPSET_TRAP_REPLY if option.delta < 0 else UPSET_BEST_REPLY
             return template.format(bot=bot_name, delta=delta, affection=profile.affection)
         return f"{self._option_reply(option, delta)}，当前 {profile.affection}"
 

@@ -9,7 +9,7 @@ from typing import Any
 from nonebot import logger
 
 EVENT_DELTAS = (-2, 1, 2)
-UPSET_DELTAS = (-10, -5, -5, 2, 5, 10)
+UPSET_DELTAS = (-15, -10, -5, -3, 2, 5)
 NORMAL_OPTION_COUNT = 3
 UPSET_OPTION_COUNT = 6
 
@@ -27,7 +27,7 @@ class Event:
 
     @property
     def upset(self) -> bool:
-        """闹别扭事件：+10 / +5 / +2 三档哄法，两个普通错误 -5、一个倍减陷阱 -10。"""
+        """闹别扭事件：+5 / +2 两档哄法，另有 -3 / -5 / -10 / -15 四个按比例扣分的档位。"""
 
         return sorted(option.delta for option in self.options) == list(UPSET_DELTAS)
 
