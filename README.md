@@ -111,7 +111,8 @@ SUPERUSER 手动增减不受这个上限限制，`/馒头好感` 会显示当天
 `MANTOU_AFFECTION_AMBIENT_PROBABILITY` 无关；把概率设成 0 就是关掉找字。
 
 `MANTOU_AFFECTION_BET_CHANCE` 是「馒头博弈」的开局概率（默认 0.0005，即 0.05%），
-`MANTOU_AFFECTION_BET_MIN_AFFECTION` 是触发博弈与当对手所需的最低馒头好感度（默认 50，要**严格大于**），
+`MANTOU_AFFECTION_BET_MIN_AFFECTION` 是群消息触发博弈所需的最低好感度（默认 50，只约束触发者、要**严格大于**；
+对手不看好感度），
 `MANTOU_AFFECTION_BET_RECENT_MINUTES` 是「最近说过话」的统计窗口（分钟，默认 5），
 `MANTOU_AFFECTION_BET_WINDOW` 是博弈的作答窗口（秒，默认 60）。好感度超过门槛的群友发言时按
 `MANTOU_AFFECTION_BET_CHANCE` 掷一次，命中就开局（戳一戳不参与）；其它插件也可以调用 `maybe_start_bet`
@@ -323,9 +324,9 @@ started = await maybe_start_bet(
 ```
 
 - `candidates` 是**最近几分钟在群里说过话**的成员 `[(user_id, name), ...]`（触发者自己也在里面，插件会把它
-  排除掉）；抽对手时再要求**馒头好感度严格大于** `MANTOU_AFFECTION_BET_MIN_AFFECTION`（默认 50），从剩下的人里
-  随机抽两位当对手，过滤后不足两人直接返回 `False`。也就是说：触发者自己要好感度 > 50，另外两人要最近
-  `MANTOU_AFFECTION_BET_RECENT_MINUTES` 分钟内说过话且好感度 > 50。
+  排除掉），从剩下的人里随机抽两位当对手，凑不够两人直接返回 `False`；**对手不看好感度**，0 或负好感的群友
+  照样能被抽中。也就是说：触发者要最近 `MANTOU_AFFECTION_BET_RECENT_MINUTES` 分钟内说过话且好感度严格大于
+  `MANTOU_AFFECTION_BET_MIN_AFFECTION`（默认 50），另外两人只要是最近说过话的群友就行。
   `send` 传调用方的 `matcher.send`，用来发开场消息与结算消息，不传直接返回 `False`。
 - 开局前会先占同群席位（和小动作答题、找字小游戏共用，本群已有活动时返回 `False`）；群消息触发时，
   找字小游戏优先于博弈、博弈优先于小动作，三者不会在同一条消息上同时出现。

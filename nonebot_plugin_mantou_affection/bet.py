@@ -360,7 +360,8 @@ class BetCoordinator:
     ) -> bool:
         """按概率开一局博弈：本群已有活动、掷骰没中或凑不齐两人都返回 False。
 
-        群消息路径由 ambient 调用（candidates 取自己的最近发言表），对外 API
+        好感度门槛只约束触发者（`bet_triggered` 里判定），两位对手只要是最近说过话的
+        群友就行。群消息路径由 ambient 调用（candidates 取自己的最近发言表），对外 API
         `maybe_start_bet` 也走这条路，两边的开局、结算逻辑完全一致。
         """
 
@@ -370,7 +371,7 @@ class BetCoordinator:
         chance = await self.service.bet_probability()
         if self.rng.random() >= chance:
             return False
-        rivals = await self._pick_rivals(candidates, str(user_id), key)
+        rivals = self._pick_rivals(candidates, str(user_id))
         if rivals is None:
             return False
         round_ = self.library.pick() if self.library is not None else None
@@ -398,10 +399,10 @@ class BetCoordinator:
         )
         return True
 
-    async def _pick_rivals(
-        self, candidates: Iterable[Any], trigger_id: str, group_id: str
+    def _pick_rivals(
+        self, candidates: Iterable[Any], trigger_id: str
     ) -> tuple[tuple[str, str], ...] | None:
-        """排除触发者和好感度没超过门槛的群友后，随机抽两位互不相同的对手。"""
+        """排除触发者后随机抽两位互不相同的对手，对手不看好感度。"""
 
         members: dict[str, str] = {}
         for candidate in candidates:
@@ -415,15 +416,7 @@ class BetCoordinator:
             members[key] = normalize_nickname(str(name), key)
         if len(members) < BET_RIVALS:
             return None
-        threshold = self.config.mantou_affection_bet_min_affection
-        eligible = [
-            (user_id, name)
-            for user_id, name in members.items()
-            if (await self.service.profile(group_id, user_id)).affection > threshold
-        ]
-        if len(eligible) < BET_RIVALS:
-            return None
-        return tuple(self.rng.sample(eligible, BET_RIVALS))
+        return tuple(self.rng.sample(list(members.items()), BET_RIVALS))
 
     async def answer(self, group_id: str, user_id: str, nickname: str, text: str) -> bool:
         """收到消息时调用；解析成排列就算一次作答，重复提交忽略。
