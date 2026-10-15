@@ -793,6 +793,25 @@ async def test_pk_restart_cooldown_recovery(tmp_path: Path) -> None:
     assert await coordinator.cooldown_remaining(GROUP_ID, INITIATOR) == 0
 
 
+async def test_pk_restart_also_notifies_leaderboard(tmp_path: Path) -> None:
+    """没有冷却记录时，重启也会 @ 好感度榜上的成员（相当于一次冷却刷新）。"""
+
+    coordinator = _coordinator(tmp_path)
+    await _ready(coordinator, INITIATOR, RIVAL)
+    sent: list[tuple[str, str]] = []
+
+    async def fake_send(group_id: str, message) -> None:
+        sent.append((group_id, str(message)))
+
+    reminded = await announce_finished_cooldowns(coordinator, send=fake_send)
+
+    assert reminded == 2
+    assert len(sent) == 1
+    assert sent[0][0] == GROUP_ID
+    assert "又能发起问答 PK 啦" in sent[0][1]
+    assert f"qq={INITIATOR}" in sent[0][1] and f"qq={RIVAL}" in sent[0][1]
+
+
 async def test_pk_cooldown_reminder_survives_restart(tmp_path: Path) -> None:
     """冷却记录写在数据文件里，重启后还能读出来。"""
 

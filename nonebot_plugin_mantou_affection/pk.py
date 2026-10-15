@@ -770,28 +770,40 @@ async def announce_finished_cooldowns(
     *,
     send: Callable[[str, Message], Awaitable[object]] | None = None,
 ) -> int:
-    """重启后处理冷却记录：全部补发提醒，然后全部清除。
+    """重启后给好感度榜成员与有冷却记录的人补发提醒，然后全部清除。
 
-    到点时 bot 若没在运行，提醒自然也不会发出，所以已到期的记录同样需要
-    补发提醒，而不是静默丢弃。
+    重启正好也是一次冷却刷新：好感度榜上的所有人和有冷却记录的人都会被
+    @ 提醒「又能发起问答 PK 啦」，到期的冷却记录同样补发，最后清空冷却。
     send 是 (group_id, message) 形式的发送函数，不传就用当前 bot 发群消息。
     返回提醒的人数。
     """
 
     cooldowns = await coordinator.service.store.cooldowns()
+    recipients: dict[str, set[str]] = {
+        str(group_id): set(users) for group_id, users in cooldowns.items()
+    }
+    for group_id in await coordinator.service.store.group_ids():
+        entries = await coordinator.service.ranking(group_id)
+        if not entries:
+            continue
+        bucket = recipients.setdefault(str(group_id), set())
+        for entry in entries:
+            bucket.add(str(entry.profile.user_id))
+
     reminded = 0
-    for group_id, users in cooldowns.items():
-        for user_id, _expires in users.items():
-            message = MessageSegment.at(user_id) + MessageSegment.text(
-                f" {PK_COOLDOWN_REPLY}"
-            )
-            try:
-                if send is not None:
-                    await send(group_id, message)
-                else:
-                    await get_bot().send_group_msg(group_id=int(group_id), message=message)
-                reminded += 1
-            except Exception:
-                logger.exception("[mantou-affection] 发送问答 PK 冷却恢复提醒失败")
+    for group_id, users in recipients.items():
+        if not users:
+            continue
+        segments = [MessageSegment.at(user_id) for user_id in sorted(users)]
+        segments.append(MessageSegment.text(f" {PK_COOLDOWN_REPLY}"))
+        message = Message(segments)
+        try:
+            if send is not None:
+                await send(group_id, message)
+            else:
+                await get_bot().send_group_msg(group_id=int(group_id), message=message)
+            reminded += len(users)
+        except Exception:
+            logger.exception("[mantou-affection] 发送问答 PK 冷却恢复提醒失败")
     await coordinator.service.store.clear_cooldowns()
     return reminded

@@ -124,6 +124,10 @@ class AffectionStore:
         async with self._lock:
             return await asyncio.to_thread(self._get_profile_sync, str(group_id), str(user_id))
 
+    async def group_ids(self) -> list[str]:
+        async with self._lock:
+            return list(self._load_sync()["groups"].keys())
+
     def _ranking_sync(self, group_id: str, limit: int) -> list[RankingEntry]:
         groups = self._load_sync()["groups"]
         group = groups.get(str(group_id), {})
