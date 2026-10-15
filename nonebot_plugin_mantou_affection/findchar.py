@@ -409,13 +409,13 @@ class FindCharCoordinator:
         self.pending: dict[str, PendingFindChar] = {}
 
     def busy(self, group_id: str) -> bool:
-        """本群是否已经有待结算的活动：找字小游戏或随机事件。"""
+        """本群是否已经有待结算的活动：找字小游戏、随机事件、博弈或问答 PK。"""
 
         key = str(group_id)
         if key in self.pending:
             return True
         events = self.events
-        return events is not None and key in events.pending
+        return events is not None and events.busy(key)
 
     def start(self, group_id: str, user_id: str, nickname: str) -> PendingFindChar | None:
         """从题库抽一道题开局并登记待作答状态。

@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import tempfile
+from collections.abc import Iterable
 from contextlib import suppress
 from pathlib import Path
 from typing import Any, Callable, TypeVar
@@ -21,23 +22,42 @@ class AffectionStore:
         self._lock = asyncio.Lock()
         self._data: dict[str, Any] | None = None
 
+    @staticmethod
+    def _empty_data() -> dict[str, Any]:
+        return {
+            "version": 1,
+            "groups": {},
+            "settings": {},
+            "cooldowns": {},
+            "pk_used_questions": [],
+        }
+
     def _load_sync(self) -> dict[str, Any]:
         if self._data is not None:
             return self._data
         if not self.path.is_file():
-            self._data = {"version": 1, "groups": {}, "settings": {}}
+            self._data = self._empty_data()
             return self._data
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             payload = {}
-        groups = payload.get("groups") if isinstance(payload, dict) else None
-        settings = payload.get("settings") if isinstance(payload, dict) else None
-        self._data = {
-            "version": 1,
-            "groups": groups if isinstance(groups, dict) else {},
-            "settings": settings if isinstance(settings, dict) else {},
-        }
+        data = self._empty_data()
+        if isinstance(payload, dict):
+            if isinstance(payload.get("groups"), dict):
+                data["groups"] = payload["groups"]
+            if isinstance(payload.get("settings"), dict):
+                data["settings"] = payload["settings"]
+            if isinstance(payload.get("cooldowns"), dict):
+                data["cooldowns"] = payload["cooldowns"]
+            used = payload.get("pk_used_questions")
+            if isinstance(used, list):
+                data["pk_used_questions"] = [
+                    int(index)
+                    for index in used
+                    if isinstance(index, int) and not isinstance(index, bool)
+                ]
+        self._data = data
         return self._data
 
     def _save_sync(self) -> None:
@@ -136,6 +156,89 @@ class AffectionStore:
     async def set_setting(self, key: str, value: Any) -> None:
         async with self._lock:
             await asyncio.to_thread(self._set_setting_sync, str(key), value)
+
+    def _cooldowns_sync(self) -> dict[str, dict[str, float]]:
+        raw = self._load_sync()["cooldowns"]
+        result: dict[str, dict[str, float]] = {}
+        for group_id, users in raw.items():
+            if not isinstance(users, dict):
+                continue
+            cleaned = {
+                str(user_id): float(expires)
+                for user_id, expires in users.items()
+                if isinstance(expires, (int, float)) and not isinstance(expires, bool)
+            }
+            if cleaned:
+                result[str(group_id)] = cleaned
+        return result
+
+    async def cooldowns(self) -> dict[str, dict[str, float]]:
+        """读取 (群 -> 人 -> 到期时间戳) 的冷却记录。"""
+
+        async with self._lock:
+            return await asyncio.to_thread(self._cooldowns_sync)
+
+    def _set_cooldown_sync(self, group_id: str, user_id: str, expires_at: float) -> None:
+        data = self._load_sync()
+        group = data["cooldowns"].get(str(group_id))
+        if not isinstance(group, dict):
+            group = {}
+            data["cooldowns"][str(group_id)] = group
+        group[str(user_id)] = float(expires_at)
+        self._save_sync()
+
+    async def set_cooldown(self, group_id: str, user_id: str, expires_at: float) -> None:
+        async with self._lock:
+            await asyncio.to_thread(
+                self._set_cooldown_sync, str(group_id), str(user_id), expires_at
+            )
+
+    def _clear_cooldown_sync(self, group_id: str, user_id: str) -> None:
+        data = self._load_sync()
+        group = data["cooldowns"].get(str(group_id))
+        if not isinstance(group, dict):
+            return
+        group.pop(str(user_id), None)
+        if not group:
+            data["cooldowns"].pop(str(group_id), None)
+        self._save_sync()
+
+    async def clear_cooldown(self, group_id: str, user_id: str) -> None:
+        async with self._lock:
+            await asyncio.to_thread(
+                self._clear_cooldown_sync, str(group_id), str(user_id)
+            )
+
+    def _clear_cooldowns_sync(self) -> None:
+        self._load_sync()["cooldowns"] = {}
+        self._save_sync()
+
+    async def clear_cooldowns(self) -> None:
+        """清空所有冷却记录（重启恢复时用）。"""
+
+        async with self._lock:
+            await asyncio.to_thread(self._clear_cooldowns_sync)
+
+    def _used_questions_sync(self) -> list[int]:
+        return sorted(set(self._load_sync()["pk_used_questions"]))
+
+    async def used_questions(self) -> list[int]:
+        """读取已经出过的问答题题号。"""
+
+        async with self._lock:
+            return await asyncio.to_thread(self._used_questions_sync)
+
+    def _add_used_questions_sync(self, indices: Iterable[int]) -> None:
+        used = set(self._load_sync()["pk_used_questions"])
+        used.update(int(index) for index in indices)
+        self._load_sync()["pk_used_questions"] = sorted(used)
+        self._save_sync()
+
+    async def add_used_questions(self, indices: Iterable[int]) -> None:
+        """把题号标记为已出（发出去就算用掉）。"""
+
+        async with self._lock:
+            await asyncio.to_thread(self._add_used_questions_sync, list(indices))
 
     def _reset_all_sync(self) -> int:
         data = self._load_sync()

@@ -72,6 +72,53 @@ def _parse_find_char_value(token: str) -> float:
         raise ValueError(FIND_CHAR_CHANCE_HINT) from error
 
 
+DURATION_HINT = "请输入秒数（如 1800）或带单位的时间（如 30分钟、1小时）"
+COUNT_HINT = "请输入 {minimum}~{maximum} 之间的整数"
+_DURATION_UNITS: dict[str, int] = {
+    "秒": 1,
+    "分钟": 60,
+    "分": 60,
+    "小时": 3600,
+    "时": 3600,
+    "天": 86400,
+}
+
+
+def parse_duration(text: str) -> int:
+    """把 "1800" / "30分钟" / "1小时" 解析成秒数。"""
+
+    raw = text.strip()
+    if not raw:
+        raise ValueError(DURATION_HINT)
+    unit = 1
+    numeric = raw
+    for suffix, seconds in _DURATION_UNITS.items():
+        if raw.endswith(suffix):
+            unit = seconds
+            numeric = raw[: -len(suffix)].strip()
+            break
+    try:
+        value = int(numeric)
+    except ValueError as error:
+        raise ValueError(DURATION_HINT) from error
+    if value < 0:
+        raise ValueError(DURATION_HINT)
+    return value * unit
+
+
+def parse_message_count(text: str, *, minimum: int = 1, maximum: int = 1000) -> int:
+    """解析「最近 N 条群消息」里的 N。"""
+
+    hint = COUNT_HINT.format(minimum=minimum, maximum=maximum)
+    try:
+        value = int(text.strip())
+    except ValueError as error:
+        raise ValueError(hint) from error
+    if not minimum <= value <= maximum:
+        raise ValueError(hint)
+    return value
+
+
 def parse_adjustment(message: Message) -> Adjustment:
     target = ""
     for segment in message:

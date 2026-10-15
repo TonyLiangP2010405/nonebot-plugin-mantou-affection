@@ -29,6 +29,8 @@ AMBIENT_PROBABILITY_SETTING = "ambient_probability"
 FIND_CHAR_GROUP_CHANCE_SETTING = "find_char_group_chance"
 FIND_CHAR_POKE_CHANCE_SETTING = "find_char_poke_chance"
 BET_PROBABILITY_SETTING = "bet_probability"
+PK_COOLDOWN_SETTING = "pk_cooldown"
+PK_RECENT_MESSAGES_SETTING = "pk_recent_messages"
 AMBIENT_SCENE = "mantou.ambient"
 
 
@@ -203,6 +205,36 @@ class AffectionService:
 
     async def set_bet_probability(self, value: float) -> None:
         await self.store.set_setting(BET_PROBABILITY_SETTING, float(value))
+
+    async def pk_cooldown(self) -> int:
+        """问答 PK 的冷却秒数，运行时用 /馒头问答冷却 覆盖过就优先用它。"""
+
+        value = await self._stored_int(
+            PK_COOLDOWN_SETTING, self.config.mantou_affection_pk_cooldown
+        )
+        return min(86400, max(0, value))
+
+    async def set_pk_cooldown(self, value: int) -> None:
+        await self.store.set_setting(PK_COOLDOWN_SETTING, int(value))
+
+    async def pk_recent_messages(self) -> int:
+        """选对手时看的最近群消息条数，运行时用 /馒头问答活跃 覆盖。"""
+
+        value = await self._stored_int(
+            PK_RECENT_MESSAGES_SETTING, self.config.mantou_affection_pk_recent_messages
+        )
+        return min(1000, max(1, value))
+
+    async def set_pk_recent_messages(self, value: int) -> None:
+        await self.store.set_setting(PK_RECENT_MESSAGES_SETTING, int(value))
+
+    async def _stored_int(self, key: str, default: int) -> int:
+        """读取运行时覆盖的整数设置，缺省或数据损坏时退回配置默认值。"""
+
+        stored: Any = await self.store.get_setting(key, None)
+        if isinstance(stored, bool) or not isinstance(stored, int):
+            return default
+        return stored
 
     async def _stored_probability(self, key: str, default: float) -> float:
         """读取运行时覆盖的概率，缺省或数据损坏时退回配置默认值。"""

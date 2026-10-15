@@ -19,6 +19,7 @@ from .logic import (
     UPSET_EVENT_RATIOS,
     snapshot_for,
 )
+from .pk import BUNDLED_PK_PATH, PkCoordinator, PkQuestionLibrary
 from .service import AffectionService
 
 ANSWERS = {"1": 0, "2": 1, "3": 2, "4": 3, "5": 4, "6": 5}
@@ -117,6 +118,7 @@ class EventCoordinator:
         rng: random.Random | None = None,
         findchar: FindCharCoordinator | None = None,
         bet: BetCoordinator | None = None,
+        pk: PkCoordinator | None = None,
     ):
         self.service = service
         self.config = config
@@ -125,6 +127,7 @@ class EventCoordinator:
         self.rng = rng or random.Random()
         self.findchar = findchar
         self.bet = bet
+        self.pk = pk
         self.pending: dict[str, PendingEvent] = {}
 
     def attach_find_char(self, findchar: FindCharCoordinator) -> None:
@@ -137,14 +140,20 @@ class EventCoordinator:
 
         self.bet = bet
 
+    def attach_pk(self, pk: PkCoordinator) -> None:
+        """接入问答 PK，让四种活动共用同一个群的席位。"""
+
+        self.pk = pk
+
     def busy(self, group_id: str) -> bool:
-        """本群是否已经有待结算的活动：随机事件、找字小游戏或馒头博弈。"""
+        """本群是否已经有待结算的活动：随机事件、找字、博弈或问答 PK。"""
 
         key = str(group_id)
         if key in self.pending:
             return True
         return any(
-            peer is not None and key in peer.pending for peer in (self.findchar, self.bet)
+            peer is not None and key in peer.pending
+            for peer in (self.findchar, self.bet, self.pk)
         )
 
     def triggered(self) -> bool:
@@ -428,14 +437,15 @@ def register_ambient(
     events: EventCoordinator | None = None,
     findchar: FindCharCoordinator | None = None,
     bet: BetCoordinator | None = None,
+    pk: PkCoordinator | None = None,
 ) -> tuple:
     """群友发言时按概率让馒头冒个小动作，偶尔升级为群里多人可答的随机事件。
 
     好感度 > 0 的群友发言时先按找字小游戏的概率掷一次：命中了就只发找字方阵；
     没命中再看馒头博弈（好感度超过门槛且掷中概率就开局）；都没命中才继续走原来的
-    0.05% 小动作流程。三者互斥，不会在同一条消息上同时触发，作答都走这里的答案路由。
-    另外注册了一个事件预处理器，把每条群消息（含被命令接管的）记进博弈的
-    最近发言表，供抽对手时使用。
+    0.05% 小动作流程。问答 PK 由命令发起、自己占席位，但作答同样走这里的答案路由。
+    几种活动互斥，不会在同一条消息上同时触发；另外注册了一个事件预处理器，把每条
+    群消息（含被命令接管的）记进博弈的最近发言表和 PK 的消息计数里。
     """
 
     coordinator = events or EventCoordinator(service, config)
@@ -453,8 +463,16 @@ def register_ambient(
         events=coordinator,
         rng=coordinator.rng,
     )
+    pk_coordinator = pk or PkCoordinator(
+        service,
+        config,
+        PkQuestionLibrary(BUNDLED_PK_PATH),
+        events=coordinator,
+        rng=coordinator.rng,
+    )
     coordinator.attach_find_char(find_char)
     coordinator.attach_bet(bet_coordinator)
+    coordinator.attach_pk(pk_coordinator)
     ambient = on_message(rule=GROUP_ONLY, priority=90, block=False)
     answer = on_message(rule=GROUP_ONLY, priority=5, block=False)
 
@@ -463,8 +481,12 @@ def register_ambient(
         """事件预处理：每条群消息（含被命令接管的）都记进博弈的最近发言表。"""
 
         if isinstance(event, GroupMessageEvent):
+            nickname = _sender_name(event)
             bet_coordinator.note_message(
-                str(event.group_id), str(event.user_id), _sender_name(event)
+                str(event.group_id), str(event.user_id), nickname
+            )
+            pk_coordinator.note_message(
+                str(event.group_id), str(event.user_id), nickname
             )
 
     @answer.handle()
@@ -474,6 +496,8 @@ def register_ambient(
             user_id = str(event.user_id)
             name = _sender_name(event)
             text = event.message.extract_plain_text()
+            if await pk_coordinator.answer(group_id, user_id, name, text):
+                return
             if await bet_coordinator.answer(group_id, user_id, name, text):
                 return
             if find_char.answer(group_id, user_id, name, text):
@@ -488,6 +512,7 @@ def register_ambient(
         user_id = str(event.user_id)
         nickname = _sender_name(event)
         bet_coordinator.note_message(group_id, user_id, nickname)
+        pk_coordinator.note_message(group_id, user_id, nickname)
 
         try:
             find_char_ready = await service.find_char_triggered(group_id, user_id)

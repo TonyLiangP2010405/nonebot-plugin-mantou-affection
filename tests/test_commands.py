@@ -108,6 +108,10 @@ def test_registered_matchers_include_probability_command() -> None:
         probability_cmd,
         find_char_cmd,
         bet_cmd,
+        pk_cmd,
+        pk_cooldown_cmd,
+        pk_active_cmd,
+        pk_bank_cmd,
     ) = matchers
     assert probability_cmd.priority == 10
     assert probability_cmd.block is True
@@ -124,6 +128,16 @@ def test_registered_matchers_include_probability_command() -> None:
     assert [handler.call.__name__ for handler in bet_cmd.handlers] == [
         "handle_bet_probability"
     ]
+    expected_handlers = {
+        pk_cmd: "handle_pk",
+        pk_cooldown_cmd: "handle_pk_cooldown",
+        pk_active_cmd: "handle_pk_active",
+        pk_bank_cmd: "handle_pk_bank",
+    }
+    for matcher, handler_name in expected_handlers.items():
+        assert matcher.priority == 10
+        assert matcher.block is True
+        assert [handler.call.__name__ for handler in matcher.handlers] == [handler_name]
 
 
 def _event(group_id: int = 90001, user_id: int = 90002) -> GroupMessageEvent:

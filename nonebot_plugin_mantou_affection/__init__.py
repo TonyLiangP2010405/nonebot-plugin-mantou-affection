@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Iterable
 from pathlib import Path
 
-from nonebot import get_plugin_config, logger, require
+from nonebot import get_driver, get_plugin_config, logger, require
 from nonebot.plugin import PluginMetadata
 
 from .config import Config
@@ -12,9 +12,10 @@ __plugin_meta__ = PluginMetadata(
     name="馒头好感度",
     description="为群聊机器人馒头提供互动、关系阶段和跨插件共享好感状态",
     usage=(
-        "/馒头互动｜/馒头好感｜/馒头好感榜｜/馒头好感帮助\n"
-        "SUPERUSER：/馒头好感调整 @群友 +10｜/馒头好感重置 确认｜"
-        "/馒头反应概率 5%｜/馒头找字概率 5%｜/馒头博弈概率 0.05%"
+        "/馒头互动｜/馒头好感｜/馒头好感榜｜/馒头好感帮助｜/馒头问答PK\n"
+        "SUPERUSER：/馒头好感调整 @群友 +10｜/馒头好感重置 确认｜/馒头反应概率 5%｜"
+        "/馒头找字概率 5%｜/馒头博弈概率 0.05%｜/馒头问答冷却 30分钟｜"
+        "/馒头问答活跃 20｜/馒头问答题库"
     ),
     type="application",
     homepage="https://github.com/TonyLiangP2010405/nonebot-plugin-mantou-affection",
@@ -35,6 +36,12 @@ from .events import EventLibrary
 from .findchar import BUNDLED_PUZZLES_PATH, FindCharCoordinator, FindCharLibrary
 from .integration import register_plugin_linkage
 from .models import AffectionResponse, AffectionSnapshot, PokeResult
+from .pk import (
+    BUNDLED_PK_PATH,
+    PkCoordinator,
+    PkQuestionLibrary,
+    announce_finished_cooldowns,
+)
 from .service import AffectionService
 from .storage import AffectionStore
 
@@ -63,11 +70,34 @@ bet_coordinator = BetCoordinator(
     service, plugin_config, bet_library, events=event_coordinator
 )
 event_coordinator.attach_bet(bet_coordinator)
-matchers = register_commands(service, plugin_config)
+pk_library = PkQuestionLibrary(BUNDLED_PK_PATH)
+pk_coordinator = PkCoordinator(
+    service, plugin_config, pk_library, events=event_coordinator
+)
+event_coordinator.attach_pk(pk_coordinator)
+matchers = register_commands(service, plugin_config, pk_coordinator)
 ambient_matcher, answer_matcher = register_ambient(
-    service, plugin_config, event_coordinator, find_char_coordinator, bet_coordinator
+    service,
+    plugin_config,
+    event_coordinator,
+    find_char_coordinator,
+    bet_coordinator,
+    pk_coordinator,
 )
 plugin_linkage = register_plugin_linkage(service, plugin_config)
+
+
+@get_driver().on_startup
+async def resume_pk_cooldowns() -> None:
+    """重启后把还在冷却中的问答 PK 记录提醒掉，并清空冷却。"""
+
+    try:
+        reminded = await announce_finished_cooldowns(pk_coordinator)
+    except Exception:
+        logger.exception("[mantou-affection] 恢复问答 PK 冷却失败")
+        return
+    if reminded:
+        logger.info(f"[mantou-affection] 重启后提醒了 {reminded} 位群友的问答 PK 冷却")
 
 
 async def add_affection(
