@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable, Iterable
 from pathlib import Path
 
-from nonebot import get_driver, get_plugin_config, logger, require
+from nonebot import get_bot, get_driver, get_plugin_config, logger, require
 from nonebot.plugin import PluginMetadata
 
 from .config import Config
@@ -86,18 +87,38 @@ ambient_matcher, answer_matcher = register_ambient(
 )
 plugin_linkage = register_plugin_linkage(service, plugin_config)
 
+_resume_tasks: set[asyncio.Task] = set()
+
 
 @get_driver().on_startup
 async def resume_pk_cooldowns() -> None:
-    """重启后把还在冷却中的问答 PK 记录提醒掉，并清空冷却。"""
+    """重启后把还在冷却中的问答 PK 记录提醒掉，并清空冷却。
 
-    try:
-        reminded = await announce_finished_cooldowns(pk_coordinator)
-    except Exception:
-        logger.exception("[mantou-affection] 恢复问答 PK 冷却失败")
-        return
-    if reminded:
-        logger.info(f"[mantou-affection] 重启后提醒了 {reminded} 位群友的问答 PK 冷却")
+    startup 阶段 OneBot 适配器往往还没连上（get_bot 会报 There are no bots to
+    get），所以放到后台任务里等 bot 就绪后再发提醒。
+    """
+
+    async def wait_and_announce() -> None:
+        for _ in range(120):
+            try:
+                get_bot()
+                break
+            except ValueError:
+                await asyncio.sleep(0.5)
+        else:
+            logger.warning("[mantou-affection] 等待 bot 连接超时，问答 PK 冷却提醒放弃")
+            return
+        try:
+            reminded = await announce_finished_cooldowns(pk_coordinator)
+        except Exception:
+            logger.exception("[mantou-affection] 恢复问答 PK 冷却失败")
+            return
+        if reminded:
+            logger.info(f"[mantou-affection] 重启后提醒了 {reminded} 位群友的问答 PK 冷却")
+
+    task = asyncio.create_task(wait_and_announce())
+    _resume_tasks.add(task)
+    task.add_done_callback(_resume_tasks.discard)
 
 
 async def add_affection(

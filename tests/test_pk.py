@@ -812,6 +812,42 @@ async def test_pk_restart_also_notifies_leaderboard(tmp_path: Path) -> None:
     assert f"qq={INITIATOR}" in sent[0][1] and f"qq={RIVAL}" in sent[0][1]
 
 
+async def test_resume_pk_cooldowns_waits_for_bot(tmp_path: Path, monkeypatch) -> None:
+    """startup 阶段 bot 还没连上时，会先等 bot 就绪再补发提醒。"""
+
+    import nonebot_plugin_mantou_affection as plugin
+
+    await _ready(plugin.pk_coordinator, INITIATOR, RIVAL)
+    sent: list[tuple[str, str]] = []
+    calls = {"n": 0}
+
+    def fake_get_bot():
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise ValueError("There are no bots to get.")
+        return object()
+
+    async def fake_send(group_id: str, message) -> None:
+        sent.append((group_id, str(message)))
+
+    async def fake_announce(coordinator, *, send=None) -> int:
+        from nonebot_plugin_mantou_affection.pk import announce_finished_cooldowns as real
+
+        return await real(coordinator, send=send or fake_send)
+
+    monkeypatch.setattr(plugin, "get_bot", fake_get_bot)
+    monkeypatch.setattr(plugin, "announce_finished_cooldowns", fake_announce)
+
+    await plugin.resume_pk_cooldowns()
+    await asyncio.sleep(1.5)
+
+    assert calls["n"] == 3
+    ours = [message for message in sent if message[0] == GROUP_ID]
+    assert len(ours) == 1
+    assert "又能发起问答 PK 啦" in ours[0][1]
+    assert f"qq={INITIATOR}" in ours[0][1] and f"qq={RIVAL}" in ours[0][1]
+
+
 async def test_pk_cooldown_reminder_survives_restart(tmp_path: Path) -> None:
     """冷却记录写在数据文件里，重启后还能读出来。"""
 
