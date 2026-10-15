@@ -785,7 +785,8 @@ async def test_pk_restart_cooldown_recovery(tmp_path: Path) -> None:
 
     reminded = await announce_finished_cooldowns(coordinator, send=fake_send)
 
-    assert reminded == 1
+    # 未到期与已到期的冷却记录都补发提醒, 随后清空
+    assert reminded == 2
     assert sent[0][0] == GROUP_ID
     assert "又能发起问答 PK 啦" in sent[0][1]
     assert await coordinator.service.store.cooldowns() == {}

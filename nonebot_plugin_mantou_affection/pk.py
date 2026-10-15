@@ -770,19 +770,18 @@ async def announce_finished_cooldowns(
     *,
     send: Callable[[str, Message], Awaitable[object]] | None = None,
 ) -> int:
-    """重启后处理冷却记录：还在冷却中的立刻 @ 提醒，然后全部清除。
+    """重启后处理冷却记录：全部补发提醒，然后全部清除。
 
+    到点时 bot 若没在运行，提醒自然也不会发出，所以已到期的记录同样需要
+    补发提醒，而不是静默丢弃。
     send 是 (group_id, message) 形式的发送函数，不传就用当前 bot 发群消息。
     返回提醒的人数。
     """
 
     cooldowns = await coordinator.service.store.cooldowns()
-    now = time.time()
     reminded = 0
     for group_id, users in cooldowns.items():
-        for user_id, expires in users.items():
-            if expires <= now:
-                continue
+        for user_id, _expires in users.items():
             message = MessageSegment.at(user_id) + MessageSegment.text(
                 f" {PK_COOLDOWN_REPLY}"
             )
