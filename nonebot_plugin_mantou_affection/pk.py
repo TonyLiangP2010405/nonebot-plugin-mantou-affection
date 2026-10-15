@@ -34,7 +34,11 @@ PK_SELECT_TIMEOUT_REPLY = "{bot}等不到你的选择，这局先不开了。"
 PK_BUSY_REPLY = "群里正有一场活动在进行，等它结束了再来吧。"
 PK_NOT_IN_RANKING_REPLY = "你还不在{bot}的好感榜上，先去 /馒头互动 攒点好感再来吧。"
 PK_COOLDOWN_WAIT_REPLY = "刚开过一局，{wait} 后才能再发起问答 PK。"
-PK_COOLDOWN_REPLY = "又能发起问答 PK 啦，发送 /馒头问答PK 就能开一局。"
+PK_COOLDOWN_REPLY = (
+    "又能发起问答 PK 啦！用法：发送 /馒头问答PK 开一局，"
+    "按提示回复编号选对手，两边各答 3 道题，答对多的队伍赢，"
+    "输方队长会拿出 10% 好感度当奖池分给大家。"
+)
 PK_EMPTY_BANK_REPLY = "题库已经出完了，请 SUPERUSER 往 resources/pk_questions.json 里补题。"
 PK_LOW_BANK_REPLY = "题库只剩 {remaining} 题，凑不齐一局，请 SUPERUSER 补题。"
 PK_NO_RIVAL_REPLY = "最近 {within} 条群消息里没有别的榜上群友说话，这次先不开啦。"
