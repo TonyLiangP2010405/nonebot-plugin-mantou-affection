@@ -30,8 +30,7 @@ class Config(BaseModel):
     mantou_affection_bet_min_affection: int = Field(default=50, ge=0, le=999999)
     mantou_affection_bet_recent_minutes: int = Field(default=5, ge=1, le=120)
     mantou_affection_bet_window: int = Field(default=60, ge=3, le=600)
-    mantou_affection_pk_cooldown: int = Field(default=3600, ge=0, le=86400)
-    mantou_affection_pk_recent_messages: int = Field(default=10, ge=1, le=1000)
+    mantou_affection_pk_chance: float = Field(default=0.01, ge=0.0, le=1.0)
     mantou_affection_pk_low_stock_warning: int = Field(default=100, ge=0, le=100000)
     mantou_affection_link_rewards: dict[str, int] = Field(
         default_factory=lambda: {

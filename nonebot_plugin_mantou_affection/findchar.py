@@ -409,7 +409,7 @@ class FindCharCoordinator:
         self.pending: dict[str, PendingFindChar] = {}
 
     def busy(self, group_id: str) -> bool:
-        """本群是否已经有待结算的活动：找字小游戏、随机事件、博弈或问答 PK。"""
+        """本群是否已经有待结算的活动：找字小游戏、随机事件、博弈或随机问答。"""
 
         key = str(group_id)
         if key in self.pending:

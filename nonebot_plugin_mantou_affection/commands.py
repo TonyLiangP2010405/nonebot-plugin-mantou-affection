@@ -12,9 +12,7 @@ from .logic import level_for, progress_text
 from .parsing import (
     FIND_CHAR_CHANCE_USAGE,
     parse_adjustment,
-    parse_duration,
     parse_find_char_chances,
-    parse_message_count,
     parse_probability,
 )
 from .pk import BUNDLED_PK_PATH, PkCoordinator, PkQuestionLibrary
@@ -23,8 +21,7 @@ from .service import AffectionService, normalize_nickname
 BET_CHANCE_USAGE = (
     "请输入 0~1 的小数（如 0.0005）或百分数（如 0.05%），0 即关闭馒头博弈"
 )
-PK_COOLDOWN_USAGE = "请输入秒数（如 1800）或带单位的时间（如 30分钟、1小时），0 即关闭冷却"
-PK_ACTIVE_USAGE = "请输入 1~1000 的整数，比如 20"
+PK_CHANCE_USAGE = "请输入 0~1 的小数（如 0.01）或百分数（如 1%），0 即关闭馒头问答"
 
 
 async def _group_only(event: Event) -> bool:
@@ -124,21 +121,9 @@ def register_commands(
         priority=10,
         block=True,
     )
-    pk_cmd = on_command(
-        "馒头问答PK",
-        aliases={"馒头PK"},
-        rule=GROUP_ONLY,
-        priority=10,
-        block=True,
-    )
-    pk_cooldown_cmd = on_command(
-        "馒头问答冷却",
-        permission=SUPERUSER,
-        priority=10,
-        block=True,
-    )
-    pk_active_cmd = on_command(
-        "馒头问答活跃",
+    pk_probability_cmd = on_command(
+        "馒头问答概率",
+        aliases={"馒头问答触发概率"},
         permission=SUPERUSER,
         priority=10,
         block=True,
@@ -229,9 +214,7 @@ def register_commands(
             "/馒头好感重置 确认 —— SUPERUSER 清空所有好感数据\n"
             "/馒头找字概率 5% —— SUPERUSER 查看或调整找字小游戏概率\n"
             "/馒头博弈概率 0.05% —— SUPERUSER 查看或调整馒头博弈概率\n"
-            "/馒头问答PK —— 和榜上群友来一局问答 PK\n"
-            "/馒头问答冷却 30分钟 —— SUPERUSER 查看或调整 PK 冷却\n"
-            "/馒头问答活跃 20 —— SUPERUSER 查看或调整活跃消息数\n"
+            "/馒头问答概率 1% —— SUPERUSER 查看或调整随机问答概率\n"
             "/馒头问答题库 —— SUPERUSER 查看题库余量"
         )
 
@@ -369,77 +352,39 @@ def register_commands(
             return
         await bet_cmd.finish(f"馒头博弈概率已调整为 {_format_probability(value)}")
 
-    @pk_cmd.handle()
-    async def handle_pk(event: GroupMessageEvent) -> None:
-        try:
-            result = await pk_coordinator.start(
-                group_id=str(event.group_id),
-                user_id=str(event.user_id),
-                nickname=_nickname(event),
-                send=pk_cmd.send,
-            )
-        except Exception:
-            logger.exception("[mantou-affection] 发起问答 PK 失败")
-            await pk_cmd.finish("馒头翻了翻题库，但这次没准备好，请稍后再试。")
-            return
-        await pk_cmd.finish(result.message)
-
-    @pk_cooldown_cmd.handle()
-    async def handle_pk_cooldown(args: Message = CommandArg()) -> None:
+    @pk_probability_cmd.handle()
+    async def handle_pk_probability(args: Message = CommandArg()) -> None:
         raw = args.extract_plain_text().strip()
         if not raw:
             try:
-                current = await service.pk_cooldown()
+                current = await service.pk_probability()
+                override = await service.pk_probability_override()
             except Exception:
-                logger.exception("[mantou-affection] 读取问答冷却失败")
-                await pk_cooldown_cmd.finish("读取失败，请检查数据目录权限后重试。")
+                logger.exception("[mantou-affection] 读取问答概率失败")
+                await pk_probability_cmd.finish("读取失败，请检查数据目录权限后重试。")
                 return
-            await pk_cooldown_cmd.finish(
-                f"当前问答 PK 冷却：{_format_wait(current)}\n用法：{PK_COOLDOWN_USAGE}"
+            default = config.mantou_affection_pk_chance
+            if override is None:
+                source = f"配置默认 {_format_probability(default)}"
+            else:
+                source = f"运行时覆盖，配置默认 {_format_probability(default)}"
+            await pk_probability_cmd.finish(
+                f"当前馒头问答概率：{_format_probability(current)}（{source}）\n"
+                f"用法：{PK_CHANCE_USAGE}"
             )
             return
         try:
-            value = parse_duration(raw)
+            value = parse_probability(raw)
         except ValueError as error:
-            await pk_cooldown_cmd.finish(f"{error}。{PK_COOLDOWN_USAGE}")
-            return
-        if value > 86400:
-            await pk_cooldown_cmd.finish(f"冷却时间不能超过 24 小时。{PK_COOLDOWN_USAGE}")
+            await pk_probability_cmd.finish(f"{error}。{PK_CHANCE_USAGE}")
             return
         try:
-            await service.set_pk_cooldown(value)
+            await service.set_pk_probability(value)
         except Exception:
-            logger.exception("[mantou-affection] 保存问答冷却失败")
-            await pk_cooldown_cmd.finish("保存失败，请检查数据目录权限后重试。")
+            logger.exception("[mantou-affection] 保存问答概率失败")
+            await pk_probability_cmd.finish("保存失败，请检查数据目录权限后重试。")
             return
-        await pk_cooldown_cmd.finish(f"问答 PK 冷却已调整为 {_format_wait(value)}")
-
-    @pk_active_cmd.handle()
-    async def handle_pk_active(args: Message = CommandArg()) -> None:
-        raw = args.extract_plain_text().strip()
-        if not raw:
-            try:
-                current = await service.pk_recent_messages()
-            except Exception:
-                logger.exception("[mantou-affection] 读取问答活跃消息数失败")
-                await pk_active_cmd.finish("读取失败，请检查数据目录权限后重试。")
-                return
-            await pk_active_cmd.finish(
-                f"当前问答 PK 活跃消息数：{current} 条\n用法：{PK_ACTIVE_USAGE}"
-            )
-            return
-        try:
-            value = parse_message_count(raw, minimum=1, maximum=1000)
-        except ValueError as error:
-            await pk_active_cmd.finish(str(error))
-            return
-        try:
-            await service.set_pk_recent_messages(value)
-        except Exception:
-            logger.exception("[mantou-affection] 保存问答活跃消息数失败")
-            await pk_active_cmd.finish("保存失败，请检查数据目录权限后重试。")
-            return
-        await pk_active_cmd.finish(f"问答 PK 活跃消息数已调整为 {value} 条")
+        await pk_probability_cmd.finish(f"馒头问答概率已调整为 {_format_probability(value)}")
 
     @pk_bank_cmd.handle()
     async def handle_pk_bank() -> None:
@@ -463,8 +408,6 @@ def register_commands(
         probability_cmd,
         find_char_cmd,
         bet_cmd,
-        pk_cmd,
-        pk_cooldown_cmd,
-        pk_active_cmd,
+        pk_probability_cmd,
         pk_bank_cmd,
     )

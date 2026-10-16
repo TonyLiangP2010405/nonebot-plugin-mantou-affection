@@ -218,7 +218,7 @@ class AffectionStore:
         self._save_sync()
 
     async def clear_cooldowns(self) -> None:
-        """清空所有冷却记录（重启恢复时用）。"""
+        """清空所有冷却记录。"""
 
         async with self._lock:
             await asyncio.to_thread(self._clear_cooldowns_sync)

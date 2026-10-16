@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Awaitable, Callable, Iterable
 from pathlib import Path
 
-from nonebot import get_bot, get_driver, get_plugin_config, logger, require
+from nonebot import get_plugin_config, logger, require
 from nonebot.plugin import PluginMetadata
 
 from .config import Config
@@ -13,10 +12,9 @@ __plugin_meta__ = PluginMetadata(
     name="馒头好感度",
     description="为群聊机器人馒头提供互动、关系阶段和跨插件共享好感状态",
     usage=(
-        "/馒头互动｜/馒头好感｜/馒头好感榜｜/馒头好感帮助｜/馒头问答PK\n"
+        "/馒头互动｜/馒头好感｜/馒头好感榜｜/馒头好感帮助\n"
         "SUPERUSER：/馒头好感调整 @群友 +10｜/馒头好感重置 确认｜/馒头反应概率 5%｜"
-        "/馒头找字概率 5%｜/馒头博弈概率 0.05%｜/馒头问答冷却 30分钟｜"
-        "/馒头问答活跃 20｜/馒头问答题库"
+        "/馒头找字概率 5%｜/馒头博弈概率 0.05%｜/馒头问答概率 1%｜/馒头问答题库"
     ),
     type="application",
     homepage="https://github.com/TonyLiangP2010405/nonebot-plugin-mantou-affection",
@@ -37,12 +35,7 @@ from .events import EventLibrary
 from .findchar import BUNDLED_PUZZLES_PATH, FindCharCoordinator, FindCharLibrary
 from .integration import register_plugin_linkage
 from .models import AffectionResponse, AffectionSnapshot, PokeResult
-from .pk import (
-    BUNDLED_PK_PATH,
-    PkCoordinator,
-    PkQuestionLibrary,
-    announce_finished_cooldowns,
-)
+from .pk import BUNDLED_PK_PATH, PkCoordinator, PkQuestionLibrary
 from .service import AffectionService
 from .storage import AffectionStore
 
@@ -86,39 +79,6 @@ ambient_matcher, answer_matcher = register_ambient(
     pk_coordinator,
 )
 plugin_linkage = register_plugin_linkage(service, plugin_config)
-
-_resume_tasks: set[asyncio.Task] = set()
-
-
-@get_driver().on_startup
-async def resume_pk_cooldowns() -> None:
-    """重启后把还在冷却中的问答 PK 记录提醒掉，并清空冷却。
-
-    startup 阶段 OneBot 适配器往往还没连上（get_bot 会报 There are no bots to
-    get），所以放到后台任务里等 bot 就绪后再发提醒。
-    """
-
-    async def wait_and_announce() -> None:
-        for _ in range(120):
-            try:
-                get_bot()
-                break
-            except ValueError:
-                await asyncio.sleep(0.5)
-        else:
-            logger.warning("[mantou-affection] 等待 bot 连接超时，问答 PK 冷却提醒放弃")
-            return
-        try:
-            reminded = await announce_finished_cooldowns(pk_coordinator)
-        except Exception:
-            logger.exception("[mantou-affection] 恢复问答 PK 冷却失败")
-            return
-        if reminded:
-            logger.info(f"[mantou-affection] 重启后提醒了 {reminded} 位群友的问答 PK 冷却")
-
-    task = asyncio.create_task(wait_and_announce())
-    _resume_tasks.add(task)
-    task.add_done_callback(_resume_tasks.discard)
 
 
 async def add_affection(

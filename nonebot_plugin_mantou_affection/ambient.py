@@ -141,12 +141,12 @@ class EventCoordinator:
         self.bet = bet
 
     def attach_pk(self, pk: PkCoordinator) -> None:
-        """接入问答 PK，让四种活动共用同一个群的席位。"""
+        """接入随机问答，让四种活动共用同一个群的席位。"""
 
         self.pk = pk
 
     def busy(self, group_id: str) -> bool:
-        """本群是否已经有待结算的活动：随机事件、找字、博弈或问答 PK。"""
+        """本群是否已经有待结算的活动：随机事件、找字、博弈或随机问答。"""
 
         key = str(group_id)
         if key in self.pending:
@@ -439,13 +439,11 @@ def register_ambient(
     bet: BetCoordinator | None = None,
     pk: PkCoordinator | None = None,
 ) -> tuple:
-    """群友发言时按概率让馒头冒个小动作，偶尔升级为群里多人可答的随机事件。
+    """群友发言时按概率触发找字、博弈、随机问答或馒头小动作。
 
-    好感度 > 0 的群友发言时先按找字小游戏的概率掷一次：命中了就只发找字方阵；
-    没命中再看馒头博弈（好感度超过门槛且掷中概率就开局）；都没命中才继续走原来的
-    0.05% 小动作流程。问答 PK 由命令发起、自己占席位，但作答同样走这里的答案路由。
-    几种活动互斥，不会在同一条消息上同时触发；另外注册了一个事件预处理器，把每条
-    群消息（含被命令接管的）记进博弈的最近发言表和 PK 的消息计数里。
+    找字和博弈保留各自的好感度门槛；随机问答不看榜单或好感度，默认每次群消息有
+    1% 概率给当前发言者出一道题。几种活动互斥，不会在同一条消息上同时触发；
+    所有数字答案都走这里的答案路由。事件预处理器只给博弈记录最近发言表。
     """
 
     coordinator = events or EventCoordinator(service, config)
@@ -485,9 +483,6 @@ def register_ambient(
             bet_coordinator.note_message(
                 str(event.group_id), str(event.user_id), nickname
             )
-            pk_coordinator.note_message(
-                str(event.group_id), str(event.user_id), nickname
-            )
 
     @answer.handle()
     async def handle_answer(event: GroupMessageEvent) -> None:
@@ -512,7 +507,6 @@ def register_ambient(
         user_id = str(event.user_id)
         nickname = _sender_name(event)
         bet_coordinator.note_message(group_id, user_id, nickname)
-        pk_coordinator.note_message(group_id, user_id, nickname)
 
         try:
             find_char_ready = await service.find_char_triggered(group_id, user_id)
@@ -558,6 +552,25 @@ def register_ambient(
                 )
             except Exception:
                 logger.exception("[mantou-affection] 抽取馒头博弈失败")
+                started = False
+            if started:
+                return
+
+        try:
+            pk_ready = await service.pk_triggered()
+        except Exception:
+            logger.exception("[mantou-affection] 判定随机问答失败")
+            pk_ready = False
+        if pk_ready:
+            try:
+                started = await pk_coordinator.start(
+                    group_id=group_id,
+                    user_id=user_id,
+                    nickname=nickname,
+                    send=ambient.send,
+                )
+            except Exception:
+                logger.exception("[mantou-affection] 发起随机问答失败")
                 started = False
             if started:
                 return

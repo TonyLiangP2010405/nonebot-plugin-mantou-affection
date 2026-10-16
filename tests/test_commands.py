@@ -98,6 +98,7 @@ def test_format_probability(value: float, expected: str) -> None:
 def test_registered_matchers_include_probability_command() -> None:
     from nonebot_plugin_mantou_affection import matchers
 
+    assert len(matchers) == 11
     (
         _profile_cmd,
         _interact_cmd,
@@ -108,9 +109,7 @@ def test_registered_matchers_include_probability_command() -> None:
         probability_cmd,
         find_char_cmd,
         bet_cmd,
-        pk_cmd,
-        pk_cooldown_cmd,
-        pk_active_cmd,
+        pk_probability_cmd,
         pk_bank_cmd,
     ) = matchers
     assert probability_cmd.priority == 10
@@ -129,9 +128,7 @@ def test_registered_matchers_include_probability_command() -> None:
         "handle_bet_probability"
     ]
     expected_handlers = {
-        pk_cmd: "handle_pk",
-        pk_cooldown_cmd: "handle_pk_cooldown",
-        pk_active_cmd: "handle_pk_active",
+        pk_probability_cmd: "handle_pk_probability",
         pk_bank_cmd: "handle_pk_bank",
     }
     for matcher, handler_name in expected_handlers.items():

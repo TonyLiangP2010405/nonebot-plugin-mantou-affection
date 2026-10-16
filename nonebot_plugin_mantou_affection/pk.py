@@ -3,8 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import random
-import time
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -20,50 +19,27 @@ if TYPE_CHECKING:
 
 BUNDLED_PK_PATH = Path(__file__).parent / "resources" / "pk_questions.json"
 
-PK_SIDE_A = "A"
-PK_SIDE_B = "B"
-PK_QUESTIONS_PER_SIDE = 3
-PK_TOTAL_QUESTIONS = PK_QUESTIONS_PER_SIDE * 2
-PK_SELECT_TIMEOUT = 60.0
-PK_QUESTION_TIMEOUT = 60.0
+PK_QUESTION_TIMEOUT = 30.0
 PK_ANSWER_CHOICES = {"1": 0, "2": 1, "3": 2}
+PK_RIGHT_REWARD = 3
+PK_WRONG_PENALTY = -5
+PK_TIMEOUT_PENALTY = -10
 
-PK_PREFIX = "🍑 桃子问答 PK！"
-PK_SELECT_PROMPT = "{prefix}\n想和谁 PK？请在 {timeout} 秒内回复编号：\n{candidates}"
-PK_SELECT_TIMEOUT_REPLY = "{bot}等不到你的选择，这局先不开了。"
-PK_BUSY_REPLY = "群里正有一场活动在进行，等它结束了再来吧。"
-PK_NOT_IN_RANKING_REPLY = "你还不在{bot}的好感榜上，先去 /馒头互动 攒点好感再来吧。"
-PK_COOLDOWN_WAIT_REPLY = "刚开过一局，{wait} 后才能再发起问答 PK。"
-PK_COOLDOWN_REPLY = (
-    "又能发起问答 PK 啦！用法：发送 /馒头问答PK 开一局，"
-    "按提示回复编号选对手，两边各答 3 道题，答对多的队伍赢，"
-    "输方队长会拿出 10% 好感度当奖池分给大家。"
-)
-PK_EMPTY_BANK_REPLY = "题库已经出完了，请 SUPERUSER 往 resources/pk_questions.json 里补题。"
-PK_LOW_BANK_REPLY = "题库只剩 {remaining} 题，凑不齐一局，请 SUPERUSER 补题。"
-PK_NO_RIVAL_REPLY = "最近 {within} 条群消息里没有别的榜上群友说话，这次先不开啦。"
-PK_ORDER_REPLY = "{bot}把签筒摇了摇：先让 {first} 答题，后让 {second} 答题。"
+PK_PREFIX = "🍑 桃子问答！"
 PK_QUESTION_REPLY = (
-    "第 {index} 题：{text}\n"
+    "{prefix}\n{text}\n"
     "1. {first}\n"
     "2. {second}\n"
     "3. {third}\n"
-    "{timeout} 秒内作答，直接发 1、2、3 即可（答题不用@）"
+    "被 @ 的群友必须作答，其他群友也可以回答；直接发送 1、2、3 即可（答题不用@）。\n"
+    "答对 +3，答错 -5；被 @ 的群友超时未答 -10。请在 {timeout} 秒内作答。"
 )
-PK_QUESTION_RESULT_REPLY = "第 {index} 题答案：{number}. {option}"
+PK_EMPTY_BANK_REPLY = "题库已经出完了，请 SUPERUSER 往 resources/pk_questions.json 里补题。"
+PK_RESULT_REPLY = "{prefix}\n答案：{number}. {option}"
 PK_ANSWER_RIGHT_REPLY = "答对了"
 PK_ANSWER_WRONG_REPLY = "答错了"
-PK_WRONG_SIDE_REPLY = "你已经参与了 {joined} 的队伍，不能再参与 {other} 的队伍了"
-PK_SCORE_REPLY = "{side} 方答对 {hits} 题"
-PK_WIN_REPLY = "这一边赢下了这局 PK！"
-PK_DRAW_REPLY = "两边答对数一样，这局平局，谁都不用拿出好感度。"
-PK_LOSE_REPLY = "输掉了 PK，拿出 {pool} 点好感度当奖池，好感度 -{pool}，当前 {affection}"
-PK_CAPTAIN_WIN_REPLY = "获胜队长分得 {amount} 点好感度，当前 {affection}"
-PK_CAPTAIN_EMPTY_REPLY = "获胜队长这次没有奖池可分，当前 {affection}"
-PK_MATE_WIN_REPLY = "答对 {hits} 题，和队长一起分得 {amount} 点好感度，当前 {affection}"
-PK_MATE_EMPTY_REPLY = "答对 {hits} 题，这次没有奖池可分，当前 {affection}"
-PK_MATE_SKIP_REPLY = "答对 {hits} 题，没达到队长的手气，这次没分到好感度，当前 {affection}"
-PK_LOSE_SIDE_REPLY = "答对 {hits} 题，队伍输了，好感度没有变化，当前 {affection}"
+PK_ANSWER_REPLY = "{result}，好感度 {delta:+d}，当前 {affection}"
+PK_TIMEOUT_REPLY = "超时未答，好感度 {delta:+d}，当前 {affection}"
 PK_LOW_STOCK_DM = (
     "馒头问答题库只剩 {remaining}/{total} 题啦，记得往 resources/pk_questions.json 里补题。"
 )
@@ -71,7 +47,7 @@ PK_LOW_STOCK_DM = (
 
 @dataclass(frozen=True)
 class PkQuestion:
-    """一道 PK 题：题干、三个选项和正确选项下标（0 起）。"""
+    """一道问答题：题干、三个选项和正确选项下标（0 起）。"""
 
     text: str
     options: tuple[str, str, str]
@@ -95,7 +71,7 @@ class PkQuestionLibrary:
             with path.open("r", encoding="utf-8") as file:
                 return PkQuestionLibrary._normalize(json.load(file))
         except (OSError, json.JSONDecodeError, ValueError) as error:
-            logger.warning(f"[mantou-affection] 加载问答题库失败，暂时关闭问答 PK: {error}")
+            logger.warning(f"[mantou-affection] 加载问答题库失败，暂时关闭随机问答: {error}")
             return ()
 
     @classmethod
@@ -149,14 +125,6 @@ class PkQuestionLibrary:
         return rng.sample(available, count)
 
 
-@dataclass(frozen=True)
-class PkStart:
-    """一次发起请求的结果：message 是要回给发起者的文案。"""
-
-    ok: bool
-    message: str
-
-
 class PkAnswer:
     """一次作答：某人选了第几个选项。"""
 
@@ -166,63 +134,28 @@ class PkAnswer:
         self.index = index
 
 
-class PkRound:
-    """当前正在作答的一道题。"""
+class PendingPk:
+    """一道进行中的随机问答，被点名者必须作答，其他群友可选答。"""
 
-    def __init__(self, side: str, index: int, question: PkQuestion):
-        self.side = side
-        self.index = index
+    def __init__(self, group_id: str, target: tuple[str, str], question: PkQuestion):
+        self.group_id = group_id
+        self.target = target
         self.question = question
         self.answers: dict[str, PkAnswer] = {}
+        self.accepting = True
+        self.task: asyncio.Task | None = None
 
     def record(self, user_id: str, nickname: str, index: int) -> bool:
-        """记录作答，每人每题只算第一次。"""
+        """记录作答，每人只算第一次。"""
 
-        if user_id in self.answers:
+        if not self.accepting or user_id in self.answers:
             return False
         self.answers[user_id] = PkAnswer(user_id, nickname, index)
         return True
 
 
-class PendingPk:
-    """一局进行中的问答 PK：选人阶段或答题阶段。"""
-
-    def __init__(
-        self,
-        group_id: str,
-        initiator: tuple[str, str],
-        candidates: Sequence[tuple[str, str]],
-    ):
-        self.group_id = group_id
-        self.initiator = initiator
-        self.candidates = tuple(candidates)
-        self.phase = "select"
-        self.selection: asyncio.Future[int] = asyncio.get_running_loop().create_future()
-        self.send: Callable[[Message | str], Awaitable[object]] | None = None
-        self.captains: dict[str, tuple[str, str]] = {}
-        self.round: PkRound | None = None
-        self.side_of: dict[str, str] = {}
-        self.names: dict[str, str] = {}
-        self.hits: dict[str, int] = {}
-        self.task: asyncio.Task | None = None
-
-    def add_hits(self, user_id: str, nickname: str, hits: int) -> None:
-        self.names.setdefault(user_id, nickname)
-        self.hits[user_id] = self.hits.get(user_id, 0) + hits
-
-    def side_totals(self) -> dict[str, int]:
-        """每边所有人的答对数之和。"""
-
-        totals = {PK_SIDE_A: 0, PK_SIDE_B: 0}
-        for user_id, hits in self.hits.items():
-            side = self.side_of.get(user_id)
-            if side in totals:
-                totals[side] += hits
-        return totals
-
-
 class PkCoordinator:
-    """管理问答 PK 的发起、选人、出题与结算，同一个群同时只有一个活动。"""
+    """管理随机问答的出题、作答与结算，同一个群同时只有一个活动。"""
 
     def __init__(
         self,
@@ -239,38 +172,9 @@ class PkCoordinator:
         self.events = events
         self.rng = rng or random.Random()
         self.pending: dict[str, PendingPk] = {}
-        self.select_timeout = PK_SELECT_TIMEOUT
+        self._start_lock = asyncio.Lock()
         self.question_timeout = PK_QUESTION_TIMEOUT
-        self.message_seq: dict[str, int] = {}
-        self.last_seen: dict[tuple[str, str], tuple[int, str]] = {}
-        self.cooldown_tasks: dict[tuple[str, str], asyncio.Task] = {}
         self.low_stock_warned = False
-
-    # ------------------------------------------------------------ 最近发言
-
-    def note_message(self, group_id: str, user_id: str, nickname: str) -> None:
-        """记录一条群消息：本群消息计数 +1，并更新这个人的最后发言序号。"""
-
-        group = str(group_id)
-        seq = self.message_seq.get(group, 0) + 1
-        self.message_seq[group] = seq
-        self.last_seen[(group, str(user_id))] = (
-            seq,
-            normalize_nickname(nickname, str(user_id)),
-        )
-
-    def recent_speakers(self, group_id: str, *, within: int) -> set[str]:
-        """最近 within 条群消息里出现过的人。"""
-
-        group = str(group_id)
-        cutoff = self.message_seq.get(group, 0) - within
-        return {
-            user_id
-            for (seen_group, user_id), (seq, _name) in self.last_seen.items()
-            if seen_group == group and seq > cutoff
-        }
-
-    # ------------------------------------------------------------ 题库余量
 
     @property
     def total_questions(self) -> int:
@@ -282,10 +186,8 @@ class PkCoordinator:
         used = await self.service.store.used_questions()
         return max(0, self.total_questions - len(set(used)))
 
-    # ------------------------------------------------------------ 发起
-
     def busy(self, group_id: str) -> bool:
-        """本群是否已经有待结算的活动：问答 PK、博弈、随机事件或找字小游戏。"""
+        """本群是否已经有待结算的活动。"""
 
         key = str(group_id)
         if key in self.pending:
@@ -293,8 +195,10 @@ class PkCoordinator:
         events = self.events
         return events is not None and events.busy(key)
 
-    def discard(self, group_id: str) -> None:
-        self.pending.pop(str(group_id), None)
+    def discard(self, group_id: str, pending: PendingPk | None = None) -> None:
+        key = str(group_id)
+        if pending is None or self.pending.get(key) is pending:
+            self.pending.pop(key, None)
 
     async def start(
         self,
@@ -303,62 +207,57 @@ class PkCoordinator:
         user_id: str,
         nickname: str,
         send: Callable[[Message | str], Awaitable[object]],
-    ) -> PkStart:
-        """发起一局 PK：检查席位、榜单、冷却与题库，然后进入选人阶段。"""
+    ) -> bool:
+        """给当前发言者出一道题；概率命中后的本次处理完成时返回 True。"""
 
         group = str(group_id)
         user = str(user_id)
         name = normalize_nickname(nickname, user)
-        if self.busy(group):
-            return PkStart(False, PK_BUSY_REPLY)
-        entries = await self.service.ranking(group)
-        if not any(entry.profile.user_id == user for entry in entries):
-            return PkStart(
-                False,
-                PK_NOT_IN_RANKING_REPLY.format(
-                    bot=self.config.mantou_affection_bot_name
-                ),
-            )
-        cooldown = await self.cooldown_remaining(group, user)
-        if cooldown > 0:
-            return PkStart(
-                False, PK_COOLDOWN_WAIT_REPLY.format(wait=format_wait(cooldown))
-            )
-        remaining = await self.remaining_questions()
-        if remaining <= 0:
-            return PkStart(False, PK_EMPTY_BANK_REPLY)
-        if remaining < PK_TOTAL_QUESTIONS:
-            return PkStart(False, PK_LOW_BANK_REPLY.format(remaining=remaining))
+        async with self._start_lock:
+            if self.busy(group):
+                return False
+            question = await self._draw_question()
+            if question is not None:
+                pending = PendingPk(group, (user, name), question)
+                self.pending[group] = pending
 
-        within = await self.service.pk_recent_messages()
-        speakers = self.recent_speakers(group, within=within)
-        candidates: list[tuple[str, str]] = []
-        for entry in entries:
-            candidate_id = entry.profile.user_id
-            if candidate_id == user or candidate_id not in speakers:
-                continue
-            seen = self.last_seen.get((group, candidate_id))
-            candidate_name = seen[1] if seen is not None else entry.profile.nickname
-            candidates.append((candidate_id, candidate_name or candidate_id))
-        if not candidates:
-            return PkStart(False, PK_NO_RIVAL_REPLY.format(within=within))
+        if question is None:
+            await send(PK_EMPTY_BANK_REPLY)
+            await self._check_low_stock()
+            return True
 
-        pending = PendingPk(group, (user, name), candidates)
-        pending.send = send
-        self.pending[group] = pending
+        try:
+            await send(
+                MessageSegment.at(user)
+                + MessageSegment.text(
+                    " "
+                    + PK_QUESTION_REPLY.format(
+                        prefix=PK_PREFIX,
+                        text=question.text,
+                        first=question.options[0],
+                        second=question.options[1],
+                        third=question.options[2],
+                        timeout=int(self.question_timeout),
+                    )
+                )
+            )
+        except Exception:
+            self.discard(group, pending)
+            raise
         self.schedule(pending, send=send)
-        listing = "\n".join(
-            f"{index}. {candidate_name}"
-            for index, (_candidate_id, candidate_name) in enumerate(candidates, start=1)
-        )
-        return PkStart(
-            True,
-            PK_SELECT_PROMPT.format(
-                prefix=PK_PREFIX,
-                timeout=int(self.select_timeout),
-                candidates=listing,
-            ),
-        )
+        return True
+
+    async def _draw_question(self) -> PkQuestion | None:
+        """从未用过的题里抽一道，并立刻标记为已用。"""
+
+        if self.library is None:
+            return None
+        used = set(await self.service.store.used_questions())
+        indices = self.library.pick(used, 1, self.rng)
+        if indices is None:
+            return None
+        await self.service.store.add_used_questions(indices)
+        return self.library.questions[indices[0]]
 
     def schedule(
         self,
@@ -366,197 +265,22 @@ class PkCoordinator:
         *,
         send: Callable[[Message | str], Awaitable[object]],
     ) -> asyncio.Task:
-        """后台跑完整局 PK：选人、六道题、结算，异常只记日志。"""
+        """等待作答窗口结束并统一结算，异常只记日志。"""
 
         async def run() -> None:
             try:
-                await self._play(pending, send=send)
+                await asyncio.sleep(self.question_timeout)
+                pending.accepting = False
+                await self._settle(pending, send=send)
+            except asyncio.CancelledError:
+                raise
             except Exception:
-                logger.exception("[mantou-affection] 问答 PK 流程失败")
+                logger.exception("[mantou-affection] 随机问答流程失败")
             finally:
-                self.discard(pending.group_id)
+                self.discard(pending.group_id, pending)
 
         pending.task = asyncio.create_task(run())
         return pending.task
-
-    async def _play(
-        self,
-        pending: PendingPk,
-        *,
-        send: Callable[[Message | str], Awaitable[object]],
-    ) -> None:
-        """选人 → 定先后 → 两边各三题 → 结算。"""
-
-        try:
-            index = await asyncio.wait_for(
-                pending.selection, timeout=self.select_timeout
-            )
-        except asyncio.TimeoutError:
-            await send(
-                PK_SELECT_TIMEOUT_REPLY.format(
-                    bot=self.config.mantou_affection_bot_name
-                )
-            )
-            return
-
-        rival_id, rival_name = pending.candidates[index]
-        captains = [pending.initiator, (rival_id, rival_name)]
-        self.rng.shuffle(captains)
-        (first_id, first_name), (second_id, second_name) = captains
-        pending.captains = {
-            PK_SIDE_A: (first_id, first_name),
-            PK_SIDE_B: (second_id, second_name),
-        }
-        pending.phase = "question"
-
-        await self._begin_cooldown(pending, send=send)
-        await send(
-            PK_ORDER_REPLY.format(
-                bot=self.config.mantou_affection_bot_name,
-                first=first_name,
-                second=second_name,
-            )
-        )
-
-        questions = await self._draw_questions()
-        if questions is None:
-            await send(
-                PK_LOW_BANK_REPLY.format(remaining=await self.remaining_questions())
-            )
-            return
-        for side_index, side in enumerate((PK_SIDE_A, PK_SIDE_B)):
-            for question_index in range(PK_QUESTIONS_PER_SIDE):
-                question = questions[side_index * PK_QUESTIONS_PER_SIDE + question_index]
-                await self._ask(pending, side, question_index + 1, question, send=send)
-        await self._settle(pending, send=send)
-
-    async def _draw_questions(self) -> list[PkQuestion] | None:
-        """从未用过的题里抽六道互不相同的题，并立刻标记为已用。"""
-
-        if self.library is None:
-            return None
-        used = set(await self.service.store.used_questions())
-        indices = self.library.pick(used, PK_TOTAL_QUESTIONS, self.rng)
-        if indices is None:
-            return None
-        await self.service.store.add_used_questions(indices)
-        return [self.library.questions[index] for index in indices]
-
-    async def _ask(
-        self,
-        pending: PendingPk,
-        side: str,
-        index: int,
-        question: PkQuestion,
-        *,
-        send: Callable[[Message | str], Awaitable[object]],
-    ) -> None:
-        """发一道题，等满窗口后公布答案与各人正误。"""
-
-        round_ = PkRound(side, index, question)
-        pending.round = round_
-        captain_id, _captain_name = pending.captains[side]
-        await send(
-            MessageSegment.at(captain_id)
-            + MessageSegment.text(
-                " "
-                + PK_QUESTION_REPLY.format(
-                    index=index,
-                    text=question.text,
-                    first=question.options[0],
-                    second=question.options[1],
-                    third=question.options[2],
-                    timeout=int(self.question_timeout),
-                )
-            )
-        )
-        await asyncio.sleep(self.question_timeout)
-        pending.round = None
-        for answer in round_.answers.values():
-            pending.side_of.setdefault(answer.user_id, side)
-            pending.add_hits(
-                answer.user_id,
-                answer.nickname,
-                1 if answer.index == question.answer else 0,
-            )
-        await send(self._result_message(round_))
-
-    @staticmethod
-    def _result_message(round_: PkRound) -> Message:
-        question = round_.question
-        segments = [
-            MessageSegment.text(
-                PK_QUESTION_RESULT_REPLY.format(
-                    index=round_.index,
-                    number=question.answer + 1,
-                    option=question.options[question.answer],
-                )
-            )
-        ]
-        for answer in round_.answers.values():
-            correct = answer.index == question.answer
-            segments.append(MessageSegment.text("\n"))
-            segments.append(MessageSegment.at(answer.user_id))
-            segments.append(
-                MessageSegment.text(
-                    " " + (PK_ANSWER_RIGHT_REPLY if correct else PK_ANSWER_WRONG_REPLY)
-                )
-            )
-        return Message(segments)
-
-    # ------------------------------------------------------------ 作答路由
-
-    async def answer(self, group_id: str, user_id: str, nickname: str, text: str) -> bool:
-        """收到消息时调用：选人阶段只认发起者的编号，答题阶段认 1/2/3。"""
-
-        pending = self.pending.get(str(group_id))
-        if pending is None:
-            return False
-        raw = text.strip()
-        if pending.phase == "select":
-            if str(user_id) != pending.initiator[0] or not raw.isdigit():
-                return False
-            index = int(raw) - 1
-            if not 0 <= index < len(pending.candidates):
-                return False
-            if not pending.selection.done():
-                pending.selection.set_result(index)
-            return True
-
-        round_ = pending.round
-        if round_ is None:
-            return False
-        index = PK_ANSWER_CHOICES.get(raw)
-        if index is None:
-            return False
-        user = str(user_id)
-        joined = pending.side_of.get(user)
-        if joined is not None and joined != round_.side:
-            joined_name = pending.captains[joined][1]
-            other_name = pending.captains[round_.side][1]
-            await self._notify(
-                pending,
-                MessageSegment.at(user)
-                + MessageSegment.text(
-                    " " + PK_WRONG_SIDE_REPLY.format(joined=joined_name, other=other_name)
-                ),
-            )
-            return True
-        if not round_.record(user, normalize_nickname(nickname, user), index):
-            return True
-        pending.side_of.setdefault(user, round_.side)
-        return True
-
-    async def _notify(self, pending: PendingPk, message: Message) -> None:
-        send = pending.send
-        if send is None:
-            return
-        try:
-            await send(message)
-        except Exception:
-            logger.exception("[mantou-affection] 发送问答 PK 提醒失败")
-
-    # ------------------------------------------------------------ 结算
 
     async def _settle(
         self,
@@ -564,68 +288,41 @@ class PkCoordinator:
         *,
         send: Callable[[Message | str], Awaitable[object]],
     ) -> None:
-        totals = pending.side_totals()
-        segments = [MessageSegment.text(PK_PREFIX)]
-        for side in (PK_SIDE_A, PK_SIDE_B):
-            captain_id, _captain_name = pending.captains[side]
-            segments.append(MessageSegment.text("\n"))
-            segments.append(MessageSegment.at(captain_id))
-            segments.append(
-                MessageSegment.text(
-                    " " + PK_SCORE_REPLY.format(side=side, hits=totals[side])
+        question = pending.question
+        segments = [
+            MessageSegment.text(
+                PK_RESULT_REPLY.format(
+                    prefix=PK_PREFIX,
+                    number=question.answer + 1,
+                    option=question.options[question.answer],
                 )
             )
-
-        if totals[PK_SIDE_A] == totals[PK_SIDE_B]:
-            segments.append(MessageSegment.text(f"\n{PK_DRAW_REPLY}"))
-            await send(Message(segments))
-            await self._check_low_stock()
-            return
-
-        winner = PK_SIDE_A if totals[PK_SIDE_A] > totals[PK_SIDE_B] else PK_SIDE_B
-        loser = PK_SIDE_B if winner == PK_SIDE_A else PK_SIDE_A
-        winner_id, _winner_name = pending.captains[winner]
-        loser_id, loser_name = pending.captains[loser]
-        segments.append(MessageSegment.text("\n"))
-        segments.append(MessageSegment.at(winner_id))
-        segments.append(MessageSegment.text(f" {PK_WIN_REPLY}"))
-
-        pool = await self._take_pool(pending, loser_id, loser_name, segments)
-        captain_hits = pending.hits.get(winner_id, 0)
-        winners = [winner_id] + [
-            user_id
-            for user_id in pending.hits
-            if user_id != winner_id
-            and pending.side_of.get(user_id) == winner
-            and pending.hits[user_id] >= captain_hits
         ]
-        share, remainder = divmod(pool, len(winners))
-        for position, user_id in enumerate(winners):
-            amount = share + (remainder if position == 0 else 0)
-            _, profile = await self.service.adjust(
-                pending.group_id, user_id, pending.names.get(user_id, user_id), amount
+        target_id, target_name = pending.target
+        for answer in pending.answers.values():
+            correct = answer.index == question.answer
+            delta = PK_RIGHT_REWARD if correct else PK_WRONG_PENALTY
+            applied, profile = await self.service.adjust(
+                pending.group_id, answer.user_id, answer.nickname, delta
             )
-            if user_id == winner_id:
-                template = PK_CAPTAIN_WIN_REPLY if amount > 0 else PK_CAPTAIN_EMPTY_REPLY
-                line = template.format(amount=amount, affection=profile.affection)
-            else:
-                template = PK_MATE_WIN_REPLY if amount > 0 else PK_MATE_EMPTY_REPLY
-                line = template.format(
-                    hits=pending.hits.get(user_id, 0),
-                    amount=amount,
-                    affection=profile.affection,
-                )
-            self._add_line(segments, user_id, line)
+            result = PK_ANSWER_RIGHT_REPLY if correct else PK_ANSWER_WRONG_REPLY
+            self._add_line(
+                segments,
+                answer.user_id,
+                PK_ANSWER_REPLY.format(
+                    result=result, delta=applied, affection=profile.affection
+                ),
+            )
 
-        for user_id, hits in pending.hits.items():
-            if user_id in winners:
-                continue
-            profile = await self.service.profile(pending.group_id, user_id)
-            if pending.side_of.get(user_id) == winner:
-                line = PK_MATE_SKIP_REPLY.format(hits=hits, affection=profile.affection)
-            else:
-                line = PK_LOSE_SIDE_REPLY.format(hits=hits, affection=profile.affection)
-            self._add_line(segments, user_id, line)
+        if target_id not in pending.answers:
+            applied, profile = await self.service.adjust(
+                pending.group_id, target_id, target_name, PK_TIMEOUT_PENALTY
+            )
+            self._add_line(
+                segments,
+                target_id,
+                PK_TIMEOUT_REPLY.format(delta=applied, affection=profile.affection),
+            )
 
         await send(Message(segments))
         await self._check_low_stock()
@@ -636,89 +333,22 @@ class PkCoordinator:
         segments.append(MessageSegment.at(user_id))
         segments.append(MessageSegment.text(f" {line}"))
 
-    async def _take_pool(
-        self,
-        pending: PendingPk,
-        loser_id: str,
-        loser_name: str,
-        segments: list[MessageSegment],
-    ) -> int:
-        """输家队长拿出好感度的 10% 当奖池，返回实际拿到的点数。"""
+    async def answer(self, group_id: str, user_id: str, nickname: str, text: str) -> bool:
+        """收到群消息时调用：答题窗口内认 1/2/3，每人只算第一次。"""
 
-        current = (await self.service.profile(pending.group_id, loser_id)).affection
-        pool = max(1, current * 10 // 100) if current > 0 else 0
-        _, profile = await self.service.adjust(
-            pending.group_id, loser_id, loser_name, -pool
-        )
-        self._add_line(
-            segments,
-            loser_id,
-            PK_LOSE_REPLY.format(pool=pool, affection=profile.affection),
-        )
-        return pool
-
-    # ------------------------------------------------------------ 冷却
-
-    async def cooldown_remaining(self, group_id: str, user_id: str) -> float:
-        """返回这个人还剩多少秒冷却，没有冷却返回 0。"""
-
-        cooldowns = await self.service.store.cooldowns()
-        expires = cooldowns.get(str(group_id), {}).get(str(user_id), 0.0)
-        return max(0.0, expires - time.time())
-
-    async def _begin_cooldown(
-        self,
-        pending: PendingPk,
-        *,
-        send: Callable[[Message | str], Awaitable[object]],
-    ) -> None:
-        """正式开赛：给发起者记冷却，并安排到点提醒。"""
-
-        seconds = await self.service.pk_cooldown()
-        if seconds <= 0:
-            return
-        initiator_id, _initiator_name = pending.initiator
-        expires = time.time() + seconds
-        await self.service.store.set_cooldown(pending.group_id, initiator_id, expires)
-        self.schedule_cooldown_reminder(
-            pending.group_id, initiator_id, seconds=seconds, send=send
-        )
-
-    def schedule_cooldown_reminder(
-        self,
-        group_id: str,
-        user_id: str,
-        *,
-        seconds: float,
-        send: Callable[[Message | str], Awaitable[object]],
-    ) -> asyncio.Task:
-        """到点后在群里 @ 这个人提醒可以再发起。"""
-
-        async def run() -> None:
-            try:
-                await asyncio.sleep(seconds)
-                await send(
-                    MessageSegment.at(user_id)
-                    + MessageSegment.text(f" {PK_COOLDOWN_REPLY}")
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("[mantou-affection] 发送问答 PK 冷却提醒失败")
-            finally:
-                self.cooldown_tasks.pop((str(group_id), str(user_id)), None)
-                await self.service.store.clear_cooldown(str(group_id), str(user_id))
-
-        task = asyncio.create_task(run())
-        self.cooldown_tasks[(str(group_id), str(user_id))] = task
-        return task
-
-    # ------------------------------------------------------------ 余量提醒
+        pending = self.pending.get(str(group_id))
+        if pending is None or not pending.accepting:
+            return False
+        index = PK_ANSWER_CHOICES.get(text.strip())
+        if index is None:
+            return False
+        pending.record(str(user_id), normalize_nickname(nickname, str(user_id)), index)
+        return True
 
     async def _check_low_stock(
         self, *, send_private: Callable[[str, str], Awaitable[object]] | None = None
     ) -> bool:
-        """PK 结束后看余量：低于阈值提醒一次 superuser，回升后重置标记。"""
+        """问答结束后看余量：低于阈值提醒一次 superuser，回升后重置标记。"""
 
         threshold = self.config.mantou_affection_pk_low_stock_warning
         remaining = await self.remaining_questions()
@@ -754,60 +384,3 @@ class PkCoordinator:
             except Exception:
                 logger.exception(f"[mantou-affection] 提醒 superuser {user_id} 题库余量失败")
         return sent
-
-
-def format_wait(seconds: float) -> str:
-    """把剩余秒数说成人话。"""
-
-    total = max(1, int(seconds + 0.999))
-    if total >= 3600:
-        hours, remainder = divmod(total, 3600)
-        minutes = remainder // 60
-        return f"{hours} 小时 {minutes} 分钟" if minutes else f"{hours} 小时"
-    if total >= 60:
-        return f"{total // 60} 分钟"
-    return f"{total} 秒"
-
-
-async def announce_finished_cooldowns(
-    coordinator: PkCoordinator,
-    *,
-    send: Callable[[str, Message], Awaitable[object]] | None = None,
-) -> int:
-    """重启后给好感度榜成员与有冷却记录的人补发提醒，然后全部清除。
-
-    重启正好也是一次冷却刷新：好感度榜上的所有人和有冷却记录的人都会被
-    @ 提醒「又能发起问答 PK 啦」，到期的冷却记录同样补发，最后清空冷却。
-    send 是 (group_id, message) 形式的发送函数，不传就用当前 bot 发群消息。
-    返回提醒的人数。
-    """
-
-    cooldowns = await coordinator.service.store.cooldowns()
-    recipients: dict[str, set[str]] = {
-        str(group_id): set(users) for group_id, users in cooldowns.items()
-    }
-    for group_id in await coordinator.service.store.group_ids():
-        entries = await coordinator.service.ranking(group_id)
-        if not entries:
-            continue
-        bucket = recipients.setdefault(str(group_id), set())
-        for entry in entries:
-            bucket.add(str(entry.profile.user_id))
-
-    reminded = 0
-    for group_id, users in recipients.items():
-        if not users:
-            continue
-        segments = [MessageSegment.at(user_id) for user_id in sorted(users)]
-        segments.append(MessageSegment.text(f" {PK_COOLDOWN_REPLY}"))
-        message = Message(segments)
-        try:
-            if send is not None:
-                await send(group_id, message)
-            else:
-                await get_bot().send_group_msg(group_id=int(group_id), message=message)
-            reminded += len(users)
-        except Exception:
-            logger.exception("[mantou-affection] 发送问答 PK 冷却恢复提醒失败")
-    await coordinator.service.store.clear_cooldowns()
-    return reminded
