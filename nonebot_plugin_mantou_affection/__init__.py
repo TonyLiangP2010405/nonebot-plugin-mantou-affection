@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Iterable
 from pathlib import Path
 
-from nonebot import get_plugin_config, logger, require
+from nonebot import get_driver, get_plugin, get_plugin_config, logger, require
 from nonebot.plugin import PluginMetadata
 
 from .config import Config
@@ -14,7 +14,8 @@ __plugin_meta__ = PluginMetadata(
     usage=(
         "/馒头互动｜/馒头好感｜/馒头好感榜｜/馒头好感帮助\n"
         "SUPERUSER：/馒头好感调整 @群友 +10｜/馒头好感重置 确认｜/馒头反应概率 5%｜"
-        "/馒头找字概率 5%｜/馒头博弈概率 0.05%｜/馒头问答概率 1%｜/馒头问答题库"
+        "/馒头找字概率 5%｜/馒头博弈概率 0.05%｜/馒头问答概率 1%｜/馒头问答题库｜"
+        "/馒头转盘概率 0.1%"
     ),
     type="application",
     homepage="https://github.com/TonyLiangP2010405/nonebot-plugin-mantou-affection",
@@ -38,6 +39,8 @@ from .models import AffectionResponse, AffectionSnapshot, PokeResult
 from .pk import BUNDLED_PK_PATH, PkCoordinator, PkQuestionLibrary
 from .service import AffectionService
 from .storage import AffectionStore
+from .wheel import WheelCoordinator
+from .wheel_memes import MemeGeneratorAdapter, MemeResourceManager
 
 plugin_config = get_plugin_config(Config)
 data_file = Path(get_plugin_data_dir()) / "affection.json"
@@ -69,6 +72,18 @@ pk_coordinator = PkCoordinator(
     service, plugin_config, pk_library, events=event_coordinator
 )
 event_coordinator.attach_pk(pk_coordinator)
+meme_generator_adapter = MemeGeneratorAdapter(
+    bot_name=plugin_config.mantou_affection_bot_name
+)
+meme_resources = MemeResourceManager()
+wheel_coordinator = WheelCoordinator(
+    service,
+    plugin_config,
+    events=event_coordinator,
+    memes=meme_generator_adapter,
+    resources=meme_resources,
+)
+event_coordinator.attach_wheel(wheel_coordinator)
 matchers = register_commands(service, plugin_config, pk_coordinator)
 ambient_matcher, answer_matcher = register_ambient(
     service,
@@ -77,8 +92,22 @@ ambient_matcher, answer_matcher = register_ambient(
     find_char_coordinator,
     bet_coordinator,
     pk_coordinator,
+    wheel_coordinator,
 )
 plugin_linkage = register_plugin_linkage(service, plugin_config)
+
+driver = get_driver()
+
+
+@driver.on_startup
+def _check_meme_resources_on_startup() -> None:
+    """启动时只发起一次后台素材检查，不阻塞启动，也不调用同步 check_resources。"""
+
+    memes_plugin = get_plugin("nonebot_plugin_memes")
+    handled = memes_plugin is not None and bool(
+        getattr(driver.config, "memes_check_resources_on_startup", True)
+    )
+    meme_resources.check_on_startup(handled_by_memes_plugin=handled)
 
 
 async def add_affection(

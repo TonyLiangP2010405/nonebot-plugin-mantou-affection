@@ -1,6 +1,28 @@
 import nonebot
 
 
+def test_wheel_is_wired_without_new_public_affection_api() -> None:
+    import nonebot_plugin_mantou_affection as plugin
+
+    assert plugin.event_coordinator.wheel is plugin.wheel_coordinator
+    assert plugin.wheel_coordinator.memes is plugin.meme_generator_adapter
+    assert plugin.wheel_coordinator.resources is plugin.meme_resources
+
+
+def test_meme_startup_hook_delegates_to_resource_manager(monkeypatch) -> None:
+    import nonebot_plugin_mantou_affection as plugin
+
+    calls = []
+    monkeypatch.setattr(plugin, "get_plugin", lambda _name: None)
+    monkeypatch.setattr(
+        plugin.meme_resources,
+        "check_on_startup",
+        lambda **kwargs: calls.append(kwargs),
+    )
+    plugin._check_meme_resources_on_startup()
+    assert calls == [{"handled_by_memes_plugin": False}]
+
+
 def test_plugin_load() -> None:
     plugin = nonebot.get_plugin_by_module_name("nonebot_plugin_mantou_affection")
     assert plugin is not None
