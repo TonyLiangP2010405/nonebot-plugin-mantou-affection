@@ -4,6 +4,7 @@ import random
 from contextlib import suppress
 from pathlib import Path
 from time import time
+from types import SimpleNamespace
 
 import pytest
 from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message
@@ -22,6 +23,7 @@ from nonebot_plugin_mantou_affection.logic import UPSET_EVENT_RATIOS, snapshot_f
 from nonebot_plugin_mantou_affection.models import Profile
 from nonebot_plugin_mantou_affection.service import AffectionService
 from nonebot_plugin_mantou_affection.storage import AffectionStore
+from nonebot_plugin_mantou_affection.wheel import WheelCoordinator
 
 GROUP_ID = "90001"
 TRIGGER_ID = "90002"
@@ -150,6 +152,7 @@ def _setup(
     **config_kwargs,
 ) -> tuple:
     rng = config_kwargs.pop("coordinator_rng", random.Random(0))
+    config_kwargs.setdefault("mantou_affection_wheel_chance", 0.0)
     config = Config(mantou_affection_ambient_probability=1.0, **config_kwargs)
     service = _service(tmp_path, AffectionTextLibrary(bundled_texts_path), config)
     coordinator = _coordinator(service, config, bundled_texts_path, rng=rng)
@@ -258,6 +261,40 @@ async def test_ambient_handler_swallows_service_errors(
     await ambient.handlers[0].call(_event())
 
     assert sent == []
+
+
+async def test_ambient_handler_starts_wheel(tmp_path: Path, monkeypatch) -> None:
+    config = Config(
+        mantou_affection_find_char_chance=0.0,
+        mantou_affection_bet_chance=0.0,
+        mantou_affection_pk_chance=0.0,
+        mantou_affection_ambient_enabled=False,
+        mantou_affection_wheel_chance=1.0,
+    )
+    service = _service(tmp_path, config=config)
+    events = EventCoordinator(service, config)
+    wheel = WheelCoordinator(service, config, events=events)
+    ambient, _ = register_ambient(service, config, events, wheel=wheel)
+    sent = _capture_send(ambient, monkeypatch)
+    monkeypatch.setattr(
+        "nonebot_plugin_mantou_affection.ambient.get_bot", lambda: SimpleNamespace(self_id=999)
+    )
+    await _give_affection(service, 10)
+
+    await ambient.handlers[0].call(_event())
+
+    assert GROUP_ID in wheel.pending
+    assert "命运齿轮转盘" in sent[-1].extract_plain_text()
+    wheel.pending[GROUP_ID].task.cancel()
+
+
+async def test_event_coordinator_includes_wheel_in_group_busy(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    events = EventCoordinator(service, Config())
+    wheel = WheelCoordinator(service, Config(), events=events)
+    events.attach_wheel(wheel)
+    wheel.pending[GROUP_ID] = object()
+    assert events.busy(GROUP_ID) is True
 
 
 async def test_zero_event_ratio_keeps_plain_ambient_copy(

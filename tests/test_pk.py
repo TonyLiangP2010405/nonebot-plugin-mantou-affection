@@ -501,8 +501,8 @@ def _commands(tmp_path: Path, monkeypatch) -> tuple:
     service = _service(tmp_path)
     coordinator = PkCoordinator(service, Config(), _library(tmp_path))
     commands = register_commands(service, Config(), coordinator)
-    assert len(commands) == 11
-    probability_cmd, bank_cmd = commands[9:]
+    assert len(commands) == 12
+    probability_cmd, bank_cmd = commands[9:11]
     sent: list[str] = []
 
     async def fake_finish(message: Message | str = "", **kwargs) -> None:

@@ -104,7 +104,7 @@ def test_format_probability(value: float, expected: str) -> None:
 def test_registered_matchers_include_probability_command() -> None:
     from nonebot_plugin_mantou_affection import matchers
 
-    assert len(matchers) == 11
+    assert len(matchers) == 12
     (
         _profile_cmd,
         _interact_cmd,
@@ -117,6 +117,7 @@ def test_registered_matchers_include_probability_command() -> None:
         bet_cmd,
         pk_probability_cmd,
         pk_bank_cmd,
+        wheel_cmd,
     ) = matchers
     assert probability_cmd.priority == 10
     assert probability_cmd.block is True
@@ -136,6 +137,7 @@ def test_registered_matchers_include_probability_command() -> None:
     expected_handlers = {
         pk_probability_cmd: "handle_pk_probability",
         pk_bank_cmd: "handle_pk_bank",
+        wheel_cmd: "handle_wheel_probability",
     }
     for matcher, handler_name in expected_handlers.items():
         assert matcher.priority == 10
@@ -213,3 +215,23 @@ async def test_reset_command_requires_confirmation(tmp_path: Path, monkeypatch) 
     await handler.call(Message("确认"))
     assert "共清空 1 条" in sent[-1]
     assert (await service.store.get_profile("1", "10")).affection == 0
+
+
+async def test_wheel_probability_command_query_and_set(tmp_path: Path, monkeypatch) -> None:
+    service = AffectionService(AffectionStore(tmp_path / "affection.json"), Config())
+    wheel_cmd = register_commands(service, Config())[11]
+    sent = []
+
+    async def fake_finish(message: Message | str = "", **kwargs) -> None:
+        sent.append(str(message))
+
+    monkeypatch.setattr(wheel_cmd, "finish", fake_finish)
+    handler = wheel_cmd.handlers[0]
+    await handler.call(Message(""))
+    assert "当前馒头转盘概率：0.1%" in sent[-1]
+    await handler.call(Message("0.2%"))
+    assert "已调整为 0.2%" in sent[-1]
+    assert await service.wheel_probability() == 0.002
+    await handler.call(Message("not-a-probability"))
+    assert "请输入 0~1" in sent[-1]
+    assert await service.wheel_probability() == 0.002

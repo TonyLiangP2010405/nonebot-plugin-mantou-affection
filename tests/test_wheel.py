@@ -159,6 +159,12 @@ def test_not_operate_delta_is_one_third_positive() -> None:
     assert draw_not_operate_delta(FixedRollRng(0, 0.9)) == -2
 
 
+async def test_wheel_answer_ignores_unrelated_text(tmp_path: Path) -> None:
+    coordinator = make_coordinator(tmp_path)
+    assert await coordinator.answer(GROUP, OTHER, "路人", "普通聊天") is False
+    assert await coordinator.answer(GROUP, OTHER, "路人", "1") is False
+
+
 async def test_wheel_join_rolls_back_partial_fee(tmp_path: Path) -> None:
     coordinator = make_coordinator(tmp_path)
     await give(coordinator.service, OTHER, 1)

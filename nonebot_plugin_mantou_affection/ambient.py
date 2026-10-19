@@ -4,7 +4,7 @@ import asyncio
 import random
 from collections.abc import Awaitable, Callable
 
-from nonebot import logger, on_message
+from nonebot import get_bot, logger, on_message
 from nonebot.adapters import Event as AdapterEvent
 from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message, MessageSegment
 from nonebot.message import event_preprocessor
@@ -21,6 +21,7 @@ from .logic import (
 )
 from .pk import BUNDLED_PK_PATH, PkCoordinator, PkQuestionLibrary
 from .service import AffectionService
+from .wheel import WheelCoordinator
 
 ANSWERS = {"1": 0, "2": 1, "3": 2, "4": 3, "5": 4, "6": 5}
 EVENT_MESSAGE = (
@@ -119,6 +120,7 @@ class EventCoordinator:
         findchar: FindCharCoordinator | None = None,
         bet: BetCoordinator | None = None,
         pk: PkCoordinator | None = None,
+        wheel: WheelCoordinator | None = None,
     ):
         self.service = service
         self.config = config
@@ -128,6 +130,7 @@ class EventCoordinator:
         self.findchar = findchar
         self.bet = bet
         self.pk = pk
+        self.wheel = wheel
         self.pending: dict[str, PendingEvent] = {}
 
     def attach_find_char(self, findchar: FindCharCoordinator) -> None:
@@ -145,15 +148,18 @@ class EventCoordinator:
 
         self.pk = pk
 
+    def attach_wheel(self, wheel: WheelCoordinator) -> None:
+        self.wheel = wheel
+
     def busy(self, group_id: str) -> bool:
-        """本群是否已经有待结算的活动：随机事件、找字、博弈或随机问答。"""
+        """本群是否已经有待结算的活动：随机事件、找字、博弈、随机问答或命运齿轮转盘。"""
 
         key = str(group_id)
         if key in self.pending:
             return True
         return any(
             peer is not None and key in peer.pending
-            for peer in (self.findchar, self.bet, self.pk)
+            for peer in (self.findchar, self.bet, self.pk, self.wheel)
         )
 
     def triggered(self) -> bool:
@@ -438,12 +444,15 @@ def register_ambient(
     findchar: FindCharCoordinator | None = None,
     bet: BetCoordinator | None = None,
     pk: PkCoordinator | None = None,
+    wheel: WheelCoordinator | None = None,
 ) -> tuple:
-    """群友发言时按概率触发找字、博弈、随机问答或馒头小动作。
+    """群友发言时按概率触发找字、博弈、随机问答、命运齿轮转盘或馒头小动作。
 
     找字和博弈保留各自的好感度门槛；随机问答不看榜单或好感度，默认每次群消息有
-    1% 概率给当前发言者出一道题。几种活动互斥，不会在同一条消息上同时触发；
-    所有数字答案都走这里的答案路由。事件预处理器只给博弈记录最近发言表。
+    1% 概率给当前发言者出一道题。命运齿轮转盘只看好感大于 0 和它自己的独立概率，
+    不参与小动作的抽签。几种活动互斥，不会在同一条消息上同时触发；所有数字答案
+    都走这里的答案路由，「参与 / 运作 / 不运作」也由同一个 answer matcher 转给转盘。
+    事件预处理器只给博弈记录最近发言表。
     """
 
     coordinator = events or EventCoordinator(service, config)
@@ -468,9 +477,13 @@ def register_ambient(
         events=coordinator,
         rng=coordinator.rng,
     )
+    wheel_coordinator = wheel or WheelCoordinator(
+        service, config, events=coordinator, rng=coordinator.rng
+    )
     coordinator.attach_find_char(find_char)
     coordinator.attach_bet(bet_coordinator)
     coordinator.attach_pk(pk_coordinator)
+    coordinator.attach_wheel(wheel_coordinator)
     ambient = on_message(rule=GROUP_ONLY, priority=90, block=False)
     answer = on_message(rule=GROUP_ONLY, priority=5, block=False)
 
@@ -491,6 +504,8 @@ def register_ambient(
             user_id = str(event.user_id)
             name = _sender_name(event)
             text = event.message.extract_plain_text()
+            if await wheel_coordinator.answer(group_id, user_id, name, text):
+                return
             if await pk_coordinator.answer(group_id, user_id, name, text):
                 return
             if await bet_coordinator.answer(group_id, user_id, name, text):
@@ -571,6 +586,26 @@ def register_ambient(
                 )
             except Exception:
                 logger.exception("[mantou-affection] 发起随机问答失败")
+                started = False
+            if started:
+                return
+
+        try:
+            wheel_ready = await service.wheel_triggered(group_id, user_id)
+        except Exception:
+            logger.exception("[mantou-affection] 判定命运齿轮转盘失败")
+            wheel_ready = False
+        if wheel_ready:
+            try:
+                started = await wheel_coordinator.start(
+                    group_id=group_id,
+                    user_id=user_id,
+                    nickname=nickname,
+                    bot=get_bot(),
+                    send=ambient.send,
+                )
+            except Exception:
+                logger.exception("[mantou-affection] 发起命运齿轮转盘失败")
                 started = False
             if started:
                 return

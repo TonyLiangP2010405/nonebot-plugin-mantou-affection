@@ -22,6 +22,7 @@ BET_CHANCE_USAGE = (
     "请输入 0~1 的小数（如 0.0005）或百分数（如 0.05%），0 即关闭馒头博弈"
 )
 PK_CHANCE_USAGE = "请输入 0~1 的小数（如 0.01）或百分数（如 1%），0 即关闭馒头问答"
+WHEEL_CHANCE_USAGE = "请输入 0~1 的小数或百分数（如 0.1%），0 即关闭馒头转盘"
 
 
 async def _group_only(event: Event) -> bool:
@@ -130,6 +131,13 @@ def register_commands(
     )
     pk_bank_cmd = on_command(
         "馒头问答题库",
+        permission=SUPERUSER,
+        priority=10,
+        block=True,
+    )
+    wheel_cmd = on_command(
+        "馒头转盘概率",
+        aliases={"馒头转盘触发概率"},
         permission=SUPERUSER,
         priority=10,
         block=True,
@@ -398,6 +406,40 @@ def register_commands(
             f"问答题库：还剩 {remaining}/{pk_coordinator.total_questions} 题"
         )
 
+    @wheel_cmd.handle()
+    async def handle_wheel_probability(args: Message = CommandArg()) -> None:
+        raw = args.extract_plain_text().strip()
+        if not raw:
+            try:
+                current = await service.wheel_probability()
+                override = await service.wheel_probability_override()
+            except Exception:
+                logger.exception("[mantou-affection] 读取转盘概率失败")
+                await wheel_cmd.finish("读取失败，请检查数据目录权限后重试。")
+                return
+            default = config.mantou_affection_wheel_chance
+            if override is None:
+                source = f"配置默认 {_format_probability(default)}"
+            else:
+                source = f"运行时覆盖，配置默认 {_format_probability(default)}"
+            await wheel_cmd.finish(
+                f"当前馒头转盘概率：{_format_probability(current)}（{source}）\n"
+                f"用法：{WHEEL_CHANCE_USAGE}"
+            )
+            return
+        try:
+            value = parse_probability(raw)
+        except ValueError as error:
+            await wheel_cmd.finish(f"{error}。{WHEEL_CHANCE_USAGE}")
+            return
+        try:
+            await service.set_wheel_probability(value)
+        except Exception:
+            logger.exception("[mantou-affection] 保存转盘概率失败")
+            await wheel_cmd.finish("保存失败，请检查数据目录权限后重试。")
+            return
+        await wheel_cmd.finish(f"馒头转盘概率已调整为 {_format_probability(value)}")
+
     return (
         profile_cmd,
         interact_cmd,
@@ -410,4 +452,5 @@ def register_commands(
         bet_cmd,
         pk_probability_cmd,
         pk_bank_cmd,
+        wheel_cmd,
     )
