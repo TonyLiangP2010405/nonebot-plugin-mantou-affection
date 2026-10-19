@@ -208,6 +208,16 @@ class WheelCoordinator:
         )
         return applied, profile
 
+    async def _safe_refund(self, pending: PendingWheel, participant: WheelParticipant):
+        try:
+            return await self._refund(pending, participant)
+        except Exception:
+            logger.exception(
+                f"[mantou-affection] 转盘退费失败 group={pending.group_id} "
+                f"user={participant.user_id}"
+            )
+            return None
+
     async def _expire(self, pending: PendingWheel) -> None:
         try:
             await asyncio.sleep(self.choice_timeout)
@@ -219,7 +229,7 @@ class WheelCoordinator:
             pending.accepting = False
         try:
             for participant in pending.participants:
-                await self._refund(pending, participant)
+                await self._safe_refund(pending, participant)
             await pending.send("馒头命运齿轮转盘超时取消，参与费已退回。")
         finally:
             self.discard(pending)
@@ -228,38 +238,55 @@ class WheelCoordinator:
         try:
             trigger = pending.trigger
             delta = draw_not_operate_delta(self.rng)
-            applied, profile = await self.service.adjust(
-                pending.group_id, trigger.user_id, trigger.nickname, delta
-            )
-            await pending.send(
-                MessageSegment.at(trigger.user_id)
-                + MessageSegment.text(f" 选择不运作，好感 {applied:+d}，当前 {profile.affection}")
-            )
+            try:
+                applied, profile = await self.service.adjust(
+                    pending.group_id, trigger.user_id, trigger.nickname, delta
+                )
+                await pending.send(
+                    MessageSegment.at(trigger.user_id)
+                    + MessageSegment.text(
+                        f" 选择不运作，好感 {applied:+d}，当前 {profile.affection}"
+                    )
+                )
+            except Exception:
+                logger.exception(
+                    f"[mantou-affection] 转盘不运作结算失败 group={pending.group_id} "
+                    f"user={trigger.user_id}"
+                )
             for participant in pending.participants:
-                await self._refund(pending, participant)
+                await self._safe_refund(pending, participant)
         finally:
             self.discard(pending)
 
     async def _run_operation(self, pending: PendingWheel) -> None:
         try:
             for participant in [pending.trigger, *pending.participants]:
-                outcome = draw_wheel_outcome(self.rng)
-                if outcome.kind == "affection":
-                    applied, profile = await self.service.adjust(
-                        pending.group_id, participant.user_id, participant.nickname, outcome.value
-                    )
-                    fee = WHEEL_JOIN_FEE if participant.fee_paid else 0
-                    await pending.send(
-                        MessageSegment.at(participant.user_id)
-                        + MessageSegment.text(
-                            f" 转盘好感 {applied:+d}，本轮净变化 {applied - fee:+d}，"
-                            f"当前 {profile.affection}"
+                try:
+                    outcome = draw_wheel_outcome(self.rng)
+                    if outcome.kind == "affection":
+                        applied, profile = await self.service.adjust(
+                            pending.group_id,
+                            participant.user_id,
+                            participant.nickname,
+                            outcome.value,
                         )
+                        fee = WHEEL_JOIN_FEE if participant.fee_paid else 0
+                        await pending.send(
+                            MessageSegment.at(participant.user_id)
+                            + MessageSegment.text(
+                                f" 转盘好感 {applied:+d}，本轮净变化 {applied - fee:+d}，"
+                                f"当前 {profile.affection}"
+                            )
+                        )
+                    elif outcome.kind == "poke":
+                        await self._run_poke(pending, participant, outcome.value)
+                    else:
+                        await self._run_meme(pending, participant)
+                except Exception:
+                    logger.exception(
+                        f"[mantou-affection] 转盘参与者结算失败 group={pending.group_id} "
+                        f"user={participant.user_id}"
                     )
-                elif outcome.kind == "poke":
-                    await self._run_poke(pending, participant, outcome.value)
-                else:
-                    await self._run_meme(pending, participant)
         finally:
             self.discard(pending)
 
@@ -281,7 +308,7 @@ class WheelCoordinator:
                 MessageSegment.at(participant.user_id)
                 + MessageSegment.text(" 主动戳一戳未完整执行")
             )
-            await self._refund(pending, participant)
+            await self._safe_refund(pending, participant)
             return
         fee = "，本轮参与费 -2" if participant.fee_paid else ""
         await pending.send(
@@ -306,7 +333,7 @@ class WheelCoordinator:
                 MessageSegment.at(participant.user_id)
                 + MessageSegment.text(" 表情素材尚未下载完成，本次不重抽")
             )
-            await self._refund(pending, participant)
+            await self._safe_refund(pending, participant)
             return
         except MemeGenerationError as error:
             logger.warning(f"[mantou-affection] memes 结果生成失败: {error}")
@@ -314,7 +341,7 @@ class WheelCoordinator:
                 MessageSegment.at(participant.user_id)
                 + MessageSegment.text(" 本次表情生成失败，不重抽")
             )
-            await self._refund(pending, participant)
+            await self._safe_refund(pending, participant)
             return
         fee = "，本轮参与费 -2" if participant.fee_paid else ""
         await pending.send(

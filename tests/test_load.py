@@ -23,6 +23,27 @@ def test_meme_startup_hook_delegates_to_resource_manager(monkeypatch) -> None:
     assert calls == [{"handled_by_memes_plugin": False}]
 
 
+def test_meme_startup_hook_coerces_string_false_config(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    import nonebot_plugin_mantou_affection as plugin
+
+    calls = []
+    monkeypatch.setattr(plugin, "get_plugin", lambda _name: object())
+    monkeypatch.setattr(
+        plugin,
+        "driver",
+        SimpleNamespace(config=SimpleNamespace(memes_check_resources_on_startup="false")),
+    )
+    monkeypatch.setattr(
+        plugin.meme_resources,
+        "check_on_startup",
+        lambda **kwargs: calls.append(kwargs),
+    )
+    plugin._check_meme_resources_on_startup()
+    assert calls == [{"handled_by_memes_plugin": False}]
+
+
 def test_plugin_load() -> None:
     plugin = nonebot.get_plugin_by_module_name("nonebot_plugin_mantou_affection")
     assert plugin is not None

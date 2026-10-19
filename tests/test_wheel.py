@@ -389,3 +389,58 @@ async def test_wheel_choice_during_opening_send_keeps_settlement_task(tmp_path: 
             if task is not None and not task.done():
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_wheel_timeout_refund_failure_does_not_block_other_refunds(
+    tmp_path: Path, monkeypatch
+) -> None:
+    coordinator = make_coordinator(tmp_path)
+    coordinator.choice_timeout = 0.01
+    await give(coordinator.service, OTHER, 10)
+    await give(coordinator.service, "94004", 10)
+    pending, sent, _ = await start(coordinator)
+    await coordinator.answer(GROUP, OTHER, "路人", "参与")
+    await coordinator.answer(GROUP, "94004", "路人", "参与")
+    assert (await coordinator.service.profile(GROUP, OTHER)).affection == 8
+    assert (await coordinator.service.profile(GROUP, "94004")).affection == 8
+
+    original_adjust = coordinator.service.adjust
+
+    async def flaky_adjust(group_id, user_id, nickname, delta):
+        if user_id == OTHER and delta > 0:
+            raise RuntimeError("refund failed")
+        return await original_adjust(group_id, user_id, nickname, delta)
+
+    monkeypatch.setattr(coordinator.service, "adjust", flaky_adjust)
+
+    await asyncio.wait_for(pending.task, 2)
+    assert (await coordinator.service.profile(GROUP, OTHER)).affection == 8
+    assert (await coordinator.service.profile(GROUP, "94004")).affection == 10
+    assert GROUP not in coordinator.pending
+    assert any("超时取消" in message.extract_plain_text() for message in sent)
+
+
+async def test_wheel_operation_continues_after_participant_adjust_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    coordinator = make_coordinator(tmp_path, rng=SequenceRng([50, 50]))
+    await give(coordinator.service, TRIGGER, 10)
+    await give(coordinator.service, OTHER, 10)
+    pending, sent, _ = await start(coordinator)
+    await coordinator.answer(GROUP, OTHER, "路人", "参与")
+
+    original_adjust = coordinator.service.adjust
+
+    async def flaky_adjust(group_id, user_id, nickname, delta):
+        if user_id == TRIGGER:
+            raise RuntimeError("settle failed")
+        return await original_adjust(group_id, user_id, nickname, delta)
+
+    monkeypatch.setattr(coordinator.service, "adjust", flaky_adjust)
+
+    await coordinator.answer(GROUP, TRIGGER, "触发者", "运作")
+    await wait_for_choice(pending)
+    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 10
+    assert (await coordinator.service.profile(GROUP, OTHER)).affection == 9
+    assert GROUP not in coordinator.pending
+    assert any("净变化 -1" in message.extract_plain_text() for message in sent)

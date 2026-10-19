@@ -98,13 +98,23 @@ plugin_linkage = register_plugin_linkage(service, plugin_config)
 
 driver = get_driver()
 
+_FALSE_STARTUP_FLAG_STRINGS = {"", "0", "false", "no", "off"}
+
+
+def _startup_flag_enabled(value: object) -> bool:
+    """.env 来源的配置项可能是字符串，需显式解析布尔语义。"""
+
+    if isinstance(value, str):
+        return value.strip().lower() not in _FALSE_STARTUP_FLAG_STRINGS
+    return bool(value)
+
 
 @driver.on_startup
 def _check_meme_resources_on_startup() -> None:
     """启动时只发起一次后台素材检查，不阻塞启动，也不调用同步 check_resources。"""
 
     memes_plugin = get_plugin("nonebot_plugin_memes")
-    handled = memes_plugin is not None and bool(
+    handled = memes_plugin is not None and _startup_flag_enabled(
         getattr(driver.config, "memes_check_resources_on_startup", True)
     )
     meme_resources.check_on_startup(handled_by_memes_plugin=handled)
