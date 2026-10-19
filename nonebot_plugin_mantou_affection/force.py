@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from typing import Union
 
 from nonebot import get_bot, logger, on_command, on_message
 from nonebot.adapters import Event
@@ -59,7 +60,7 @@ FORCE_INVALID_REPLY = "这不是有效的活动编号，馒头强制事件已取
 FORCE_RIVAL_REPLY = "最近发言的群友不足两位，凑不齐对手，馒头博弈开不了局。"
 FORCE_FAIL_REPLY = "馒头没能把这场活动摆出来，已经取消，好感度没有变化。"
 
-Send = Callable[[Message | str], Awaitable[object]]
+Send = Callable[[Union[Message, str]], Awaitable[object]]
 
 
 class PendingForce:
