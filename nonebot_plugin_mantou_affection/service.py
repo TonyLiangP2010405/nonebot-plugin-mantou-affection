@@ -30,6 +30,7 @@ FIND_CHAR_GROUP_CHANCE_SETTING = "find_char_group_chance"
 FIND_CHAR_POKE_CHANCE_SETTING = "find_char_poke_chance"
 BET_PROBABILITY_SETTING = "bet_probability"
 PK_PROBABILITY_SETTING = "pk_probability"
+WHEEL_PROBABILITY_SETTING = "wheel_probability"
 AMBIENT_SCENE = "mantou.ambient"
 
 
@@ -228,6 +229,29 @@ class AffectionService:
 
     async def set_pk_probability(self, value: float) -> None:
         await self.store.set_setting(PK_PROBABILITY_SETTING, float(value))
+
+    async def wheel_triggered(self, group_id: str, user_id: str) -> bool:
+        profile = await self.store.get_profile(group_id, user_id)
+        if profile.affection <= 0:
+            return False
+        chance = await self.wheel_probability()
+        if chance <= 0:
+            return False
+        return self.rng.random() < chance
+
+    async def wheel_probability(self) -> float:
+        return await self._stored_probability(
+            WHEEL_PROBABILITY_SETTING, self.config.mantou_affection_wheel_chance
+        )
+
+    async def wheel_probability_override(self) -> float | None:
+        stored: Any = await self.store.get_setting(WHEEL_PROBABILITY_SETTING, None)
+        if isinstance(stored, bool) or not isinstance(stored, (int, float)):
+            return None
+        return min(1.0, max(0.0, float(stored)))
+
+    async def set_wheel_probability(self, value: float) -> None:
+        await self.store.set_setting(WHEEL_PROBABILITY_SETTING, float(value))
 
     async def _stored_int(self, key: str, default: int) -> int:
         """读取运行时覆盖的整数设置，缺省或数据损坏时退回配置默认值。"""

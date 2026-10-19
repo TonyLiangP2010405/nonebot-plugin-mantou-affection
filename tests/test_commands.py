@@ -57,6 +57,12 @@ def test_poke_event_chance_default() -> None:
     assert Config(mantou_affection_poke_event_chance=0.5).mantou_affection_poke_event_chance == 0.5
 
 
+def test_wheel_defaults() -> None:
+    config = Config()
+    assert config.mantou_affection_wheel_chance == 0.001
+    assert config.mantou_affection_wheel_timeout == 30
+
+
 def test_gain_text_shows_sign() -> None:
     assert _gain_text(3) == "好感度 +3"
     assert _gain_text(1) == "好感度 +1"

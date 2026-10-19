@@ -207,6 +207,30 @@ async def test_ambient_reaction_propagates_store_errors(tmp_path: Path, monkeypa
         await service.ambient_reaction("100", "200")
 
 
+async def test_wheel_probability_prefers_stored_override(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    assert await service.wheel_probability() == 0.001
+    assert await service.wheel_probability_override() is None
+
+    await service.set_wheel_probability(0.05)
+    assert await service.wheel_probability() == 0.05
+    assert await service.wheel_probability_override() == 0.05
+
+    restarted = _service(tmp_path)
+    assert await restarted.wheel_probability() == 0.05
+
+
+async def test_wheel_triggered_requires_positive_affection(tmp_path: Path) -> None:
+    service = _service(tmp_path, mantou_affection_wheel_chance=1.0)
+    assert await service.wheel_triggered("100", "200") is False
+    await _set_affection(service, 10)
+    assert await service.wheel_triggered("100", "200") is True
+
+    disabled = _service(tmp_path, mantou_affection_wheel_chance=0.0)
+    await disabled.set_wheel_probability(0.0)
+    assert await disabled.wheel_triggered("100", "200") is False
+
+
 def test_gained_points_today_ignores_stale_date(tmp_path: Path) -> None:
     service = _service(tmp_path)
     today = service._now().date().isoformat()
