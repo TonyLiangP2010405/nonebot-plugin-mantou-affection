@@ -223,7 +223,8 @@ def register_commands(
             "/馒头找字概率 5% —— SUPERUSER 查看或调整找字小游戏概率\n"
             "/馒头博弈概率 0.05% —— SUPERUSER 查看或调整馒头博弈概率\n"
             "/馒头问答概率 1% —— SUPERUSER 查看或调整随机问答概率\n"
-            "/馒头问答题库 —— SUPERUSER 查看题库余量"
+            "/馒头问答题库 —— SUPERUSER 查看题库余量\n"
+            "/馒头强制事件 @群友 —— SUPERUSER 强制开一场活动（回复 1~6 选择）"
         )
 
     @adjust_cmd.handle()

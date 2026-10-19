@@ -357,20 +357,24 @@ class BetCoordinator:
         nickname: str,
         candidates: Iterable[Any],
         send: Callable[[Message | str], Awaitable[object]],
+        force: bool = False,
     ) -> bool:
         """按概率开一局博弈：本群已有活动、掷骰没中或凑不齐两人都返回 False。
 
         好感度门槛只约束触发者（`bet_triggered` 里判定），两位对手只要是最近说过话的
         群友就行。群消息路径由 ambient 调用（candidates 取自己的最近发言表），对外 API
-        `maybe_start_bet` 也走这条路，两边的开局、结算逻辑完全一致。
+        `maybe_start_bet` 也走这条路，两边的开局、结算逻辑完全一致。`force=True` 是
+        SUPERUSER 的强制事件专用：跳过概率判定，其余门控（群席位、对手人数、题库）
+        一个都不少，默认 False 时行为不变。
         """
 
         key = str(group_id)
         if send is None or self.busy(key):
             return False
-        chance = await self.service.bet_probability()
-        if self.rng.random() >= chance:
-            return False
+        if not force:
+            chance = await self.service.bet_probability()
+            if self.rng.random() >= chance:
+                return False
         rivals = self._pick_rivals(candidates, str(user_id))
         if rivals is None:
             return False

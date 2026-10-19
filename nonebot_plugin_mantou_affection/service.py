@@ -280,6 +280,14 @@ class AffectionService:
             return None
         return self.text_library.pick(AMBIENT_SCENE, snapshot_for(profile.affection))
 
+    async def forced_ambient_reaction(self, group_id: str, user_id: str) -> str | None:
+        """强制小动作：绕过开关、概率和好感门槛，直接按好感阶段抽一句旁白。"""
+
+        if self.text_library is None:
+            return None
+        profile = await self.store.get_profile(group_id, user_id)
+        return self.text_library.pick(AMBIENT_SCENE, snapshot_for(profile.affection))
+
     async def ranking(self, group_id: str) -> list[RankingEntry]:
         return await self.store.ranking(group_id, self.config.mantou_affection_ranking_size)
 

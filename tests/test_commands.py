@@ -60,7 +60,7 @@ def test_poke_event_chance_default() -> None:
 def test_wheel_defaults() -> None:
     config = Config()
     assert config.mantou_affection_wheel_chance == 0.001
-    assert config.mantou_affection_wheel_timeout == 30
+    assert config.mantou_affection_wheel_timeout == 60
 
 
 def test_gain_text_shows_sign() -> None:

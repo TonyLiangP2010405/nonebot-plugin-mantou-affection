@@ -246,13 +246,16 @@ async def test_wheel_poke_failure_refunds_without_calling_incoming_poke(
     await give(coordinator.service, TRIGGER, 10)
     await give(coordinator.service, OTHER, 10)
     bot = FakeBot(fail_users={OTHER})
-    pending, _, _ = await start(coordinator, bot=bot)
+    pending, sent, _ = await start(coordinator, bot=bot)
     await coordinator.answer(GROUP, OTHER, "路人", "参与")
     await coordinator.answer(GROUP, TRIGGER, "触发者", "运作")
     await wait_for_choice(pending)
 
     assert bot.calls == [{"group_id": int(GROUP), "user_id": int(OTHER)}]
     assert (await coordinator.service.profile(GROUP, OTHER)).affection == 10
+    failure = "\n".join(message.extract_plain_text() for message in sent)
+    assert "馒头主动戳你失败" in failure
+    assert "不用你回戳" in failure
 
 
 async def test_wheel_meme_missing_refunds_and_requests_throttled_recheck(tmp_path: Path) -> None:
@@ -326,6 +329,17 @@ async def test_wheel_poke_counts(tmp_path: Path, roll: int, count: int) -> None:
     await wait_for_choice(pending)
     assert len(bot.calls) == count
     assert all(call["user_id"] == int(TRIGGER) for call in bot.calls)
+
+
+async def test_wheel_poke_message_clearly_says_mantou_pokes_you(tmp_path: Path) -> None:
+    coordinator = make_coordinator(tmp_path, rng=SequenceRng([20]))
+    pending, sent, _ = await start(coordinator)
+    await coordinator.answer(GROUP, TRIGGER, "触发者", "运作")
+    await wait_for_choice(pending)
+
+    body = sent[-1].extract_plain_text()
+    assert "馒头主动戳了你 1 次" in body
+    assert "是馒头戳你，不用你回戳" in body
 
 
 async def test_wheel_uses_actual_applied_delta_at_bounds(tmp_path: Path) -> None:

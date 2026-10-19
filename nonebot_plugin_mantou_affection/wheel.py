@@ -306,14 +306,16 @@ class WheelCoordinator:
             logger.exception("[mantou-affection] 转盘主动戳一戳失败")
             await pending.send(
                 MessageSegment.at(participant.user_id)
-                + MessageSegment.text(" 主动戳一戳未完整执行")
+                + MessageSegment.text(" 馒头主动戳你失败（是馒头戳你，不用你回戳）")
             )
             await self._safe_refund(pending, participant)
             return
         fee = "，本轮参与费 -2" if participant.fee_paid else ""
         await pending.send(
             MessageSegment.at(participant.user_id)
-            + MessageSegment.text(f" 馒头戳了你 {count} 次{fee}")
+            + MessageSegment.text(
+                f" 馒头主动戳了你 {count} 次（是馒头戳你，不用你回戳）{fee}"
+            )
         )
 
     async def _run_meme(self, pending: PendingWheel, participant: WheelParticipant) -> None:
