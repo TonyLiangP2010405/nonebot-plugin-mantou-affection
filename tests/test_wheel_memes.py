@@ -7,6 +7,7 @@ from nonebot_plugin_mantou_affection.wheel_memes import (
     MemeAssetMissing,
     MemeGenerationError,
     MemeGeneratorAdapter,
+    MemeResourceManager,
 )
 
 
@@ -130,3 +131,31 @@ async def test_avatar_failure_is_wrapped() -> None:
         await adapter.generate(
             bot=SimpleNamespace(self_id=999), user_id="123", nickname="群昵称"
         )
+
+
+def test_resource_startup_check_runs_once_and_skips_memes_owned_check() -> None:
+    calls = []
+    clock_values = iter([100.0, 101.0, 102.0])
+    manager = MemeResourceManager(
+        check=lambda: calls.append("check"), clock=lambda: next(clock_values)
+    )
+    assert manager.check_on_startup(handled_by_memes_plugin=False) is True
+    assert manager.check_on_startup(handled_by_memes_plugin=False) is False
+    assert calls == ["check"]
+
+    skipped = MemeResourceManager(check=lambda: calls.append("duplicate"), clock=lambda: 200.0)
+    assert skipped.check_on_startup(handled_by_memes_plugin=True) is False
+    assert calls == ["check"]
+
+
+def test_resource_missing_recheck_is_throttled() -> None:
+    calls = []
+    current = [1000.0]
+    manager = MemeResourceManager(
+        check=lambda: calls.append("check"), clock=lambda: current[0], retry_seconds=600
+    )
+    assert manager.check_after_missing() is True
+    assert manager.check_after_missing() is False
+    current[0] += 601
+    assert manager.check_after_missing() is True
+    assert calls == ["check", "check"]

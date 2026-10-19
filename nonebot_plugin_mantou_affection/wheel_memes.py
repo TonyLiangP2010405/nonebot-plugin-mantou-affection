@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import random
+import time
 import urllib.request
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -99,3 +100,53 @@ class MemeGeneratorAdapter:
             raise MemeAssetMissing(str(getattr(result, "path", "未知素材")))
         detail = getattr(result, "error", None) or getattr(result, "feedback", None)
         raise MemeGenerationError(str(detail or type(result).__name__))
+
+
+def _load_resource_check() -> Callable[[], None] | None:
+    try:
+        module = importlib.import_module("meme_generator.resources")
+        return module.check_resources_in_background
+    except (ImportError, AttributeError, OSError) as error:
+        logger.warning(f"[mantou-affection] memes 素材检查不可用: {error}")
+        return None
+
+
+class MemeResourceManager:
+    def __init__(
+        self,
+        *,
+        check: Callable[[], None] | None = None,
+        clock: Callable[[], float] = time.monotonic,
+        retry_seconds: float = 600.0,
+    ):
+        self.check = check if check is not None else _load_resource_check()
+        self.clock = clock
+        self.retry_seconds = retry_seconds
+        self._startup_checked = False
+        self._last_check: float | None = None
+
+    def _start_check(self) -> bool:
+        if self.check is None:
+            return False
+        try:
+            self.check()
+        except Exception:
+            logger.exception("[mantou-affection] 发起 memes 素材后台检查失败")
+            return False
+        self._last_check = self.clock()
+        return True
+
+    def check_on_startup(self, *, handled_by_memes_plugin: bool) -> bool:
+        if self._startup_checked:
+            return False
+        self._startup_checked = True
+        if handled_by_memes_plugin:
+            self._last_check = self.clock()
+            return False
+        return self._start_check()
+
+    def check_after_missing(self) -> bool:
+        now = self.clock()
+        if self._last_check is not None and now - self._last_check < self.retry_seconds:
+            return False
+        return self._start_check()
