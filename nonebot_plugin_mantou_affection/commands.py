@@ -22,6 +22,9 @@ BET_CHANCE_USAGE = (
     "请输入 0~1 的小数（如 0.0005）或百分数（如 0.05%），0 即关闭馒头博弈"
 )
 PK_CHANCE_USAGE = "请输入 0~1 的小数（如 0.01）或百分数（如 1%），0 即关闭馒头问答"
+GROUP_QUIZ_CHANCE_USAGE = (
+    "请输入 0~1 的小数（如 0.0005）或百分数（如 0.05%），0 即关闭群友问答"
+)
 WHEEL_CHANCE_USAGE = "请输入 0~1 的小数或百分数（如 0.1%），0 即关闭馒头转盘"
 
 
@@ -142,6 +145,13 @@ def register_commands(
         priority=10,
         block=True,
     )
+    group_quiz_cmd = on_command(
+        "馒头群友问答概率",
+        aliases={"馒头群友问答触发概率"},
+        permission=SUPERUSER,
+        priority=10,
+        block=True,
+    )
     pk_coordinator = pk or PkCoordinator(
         service, config, PkQuestionLibrary(BUNDLED_PK_PATH)
     )
@@ -224,7 +234,8 @@ def register_commands(
             "/馒头博弈概率 0.05% —— SUPERUSER 查看或调整馒头博弈概率\n"
             "/馒头问答概率 1% —— SUPERUSER 查看或调整随机问答概率\n"
             "/馒头问答题库 —— SUPERUSER 查看题库余量\n"
-            "/馒头强制事件 @群友 —— SUPERUSER 强制开一场活动（回复 1~6 选择）"
+            "/馒头群友问答概率 0.05% —— SUPERUSER 查看或调整群友问答概率\n"
+            "/馒头强制事件 @群友 —— SUPERUSER 强制开一场活动（回复 1~7 选择）"
         )
 
     @adjust_cmd.handle()
@@ -441,6 +452,42 @@ def register_commands(
             return
         await wheel_cmd.finish(f"馒头转盘概率已调整为 {_format_probability(value)}")
 
+    @group_quiz_cmd.handle()
+    async def handle_group_quiz_probability(args: Message = CommandArg()) -> None:
+        raw = args.extract_plain_text().strip()
+        if not raw:
+            try:
+                current = await service.group_quiz_probability()
+                override = await service.group_quiz_probability_override()
+            except Exception:
+                logger.exception("[mantou-affection] 读取群友问答概率失败")
+                await group_quiz_cmd.finish("读取失败，请检查数据目录权限后重试。")
+                return
+            default = config.mantou_affection_group_quiz_chance
+            if override is None:
+                source = f"配置默认 {_format_probability(default)}"
+            else:
+                source = f"运行时覆盖，配置默认 {_format_probability(default)}"
+            await group_quiz_cmd.finish(
+                f"当前群友问答概率：{_format_probability(current)}（{source}）\n"
+                f"用法：{GROUP_QUIZ_CHANCE_USAGE}"
+            )
+            return
+        try:
+            value = parse_probability(raw)
+        except ValueError as error:
+            await group_quiz_cmd.finish(f"{error}。{GROUP_QUIZ_CHANCE_USAGE}")
+            return
+        try:
+            await service.set_group_quiz_probability(value)
+        except Exception:
+            logger.exception("[mantou-affection] 保存群友问答概率失败")
+            await group_quiz_cmd.finish("保存失败，请检查数据目录权限后重试。")
+            return
+        await group_quiz_cmd.finish(
+            f"群友问答概率已调整为 {_format_probability(value)}"
+        )
+
     return (
         profile_cmd,
         interact_cmd,
@@ -454,4 +501,5 @@ def register_commands(
         pk_probability_cmd,
         pk_bank_cmd,
         wheel_cmd,
+        group_quiz_cmd,
     )

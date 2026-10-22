@@ -15,7 +15,8 @@ __plugin_meta__ = PluginMetadata(
         "/馒头互动｜/馒头好感｜/馒头好感榜｜/馒头好感帮助\n"
         "SUPERUSER：/馒头好感调整 @群友 +10｜/馒头好感重置 确认｜/馒头反应概率 5%｜"
         "/馒头找字概率 5%｜/馒头博弈概率 0.05%｜/馒头问答概率 1%｜/馒头问答题库｜"
-        "/馒头转盘概率 0.1%｜/馒头强制事件 @群友（回复 1~6 强制开一场活动）"
+        "/馒头群友问答概率 0.05%｜/馒头转盘概率 0.1%｜"
+        "/馒头强制事件 @群友（回复 1~7 强制开一场活动）"
     ),
     type="application",
     homepage="https://github.com/TonyLiangP2010405/nonebot-plugin-mantou-affection",
@@ -35,6 +36,7 @@ from .copywriting import AffectionTextLibrary
 from .events import EventLibrary
 from .findchar import BUNDLED_PUZZLES_PATH, FindCharCoordinator, FindCharLibrary
 from .force import register_force_commands
+from .group_quiz import BUNDLED_GROUP_QUIZ_PATH, GroupQuizCoordinator
 from .integration import register_plugin_linkage
 from .models import AffectionResponse, AffectionSnapshot, PokeResult
 from .pk import BUNDLED_PK_PATH, PkCoordinator, PkQuestionLibrary
@@ -73,6 +75,11 @@ pk_coordinator = PkCoordinator(
     service, plugin_config, pk_library, events=event_coordinator
 )
 event_coordinator.attach_pk(pk_coordinator)
+group_quiz_library = PkQuestionLibrary(BUNDLED_GROUP_QUIZ_PATH)
+group_quiz_coordinator = GroupQuizCoordinator(
+    service, plugin_config, group_quiz_library, events=event_coordinator
+)
+event_coordinator.attach_group_quiz(group_quiz_coordinator)
 meme_generator_adapter = MemeGeneratorAdapter(
     bot_name=plugin_config.mantou_affection_bot_name,
 )
@@ -100,6 +107,7 @@ ambient_matcher, answer_matcher = register_ambient(
     bet_coordinator,
     pk_coordinator,
     wheel_coordinator,
+    group_quiz_coordinator,
 )
 force_matchers = register_force_commands(
     service,
@@ -109,6 +117,7 @@ force_matchers = register_force_commands(
     bet=bet_coordinator,
     pk=pk_coordinator,
     wheel=wheel_coordinator,
+    group_quiz=group_quiz_coordinator,
 )
 plugin_linkage = register_plugin_linkage(service, plugin_config)
 

@@ -16,6 +16,7 @@ from .bet import BET_RIVALS, BetCoordinator
 from .commands import GROUP_ONLY
 from .config import Config
 from .findchar import FindCharCoordinator
+from .group_quiz import GroupQuizCoordinator
 from .pk import PkCoordinator
 from .service import AffectionService, normalize_nickname
 from .wheel import WheelCoordinator
@@ -30,6 +31,7 @@ FORCE_ACTIVITY_EVENT = "event"
 FORCE_ACTIVITY_FINDCHAR = "findchar"
 FORCE_ACTIVITY_BET = "bet"
 FORCE_ACTIVITY_PK = "pk"
+FORCE_ACTIVITY_GROUP_QUIZ = "group_quiz"
 FORCE_ACTIVITY_WHEEL = "wheel"
 
 FORCE_CHOICES: dict[str, str] = {
@@ -38,7 +40,8 @@ FORCE_CHOICES: dict[str, str] = {
     "3": FORCE_ACTIVITY_FINDCHAR,
     "4": FORCE_ACTIVITY_BET,
     "5": FORCE_ACTIVITY_PK,
-    "6": FORCE_ACTIVITY_WHEEL,
+    "6": FORCE_ACTIVITY_GROUP_QUIZ,
+    "7": FORCE_ACTIVITY_WHEEL,
 }
 FORCE_ACTIVITY_LINES: tuple[str, ...] = (
     "1. 馒头小动作",
@@ -46,7 +49,8 @@ FORCE_ACTIVITY_LINES: tuple[str, ...] = (
     "3. 找字",
     "4. 馒头博弈",
     "5. 桃子问答",
-    "6. 命运齿轮转盘",
+    "6. 群友问答",
+    "7. 命运齿轮转盘",
 )
 FORCE_PROMPT = (
     "🎛️ 馒头强制事件（目标：{target}）\n"
@@ -75,7 +79,7 @@ class PendingForce:
 
 
 class ForceCoordinator:
-    """管理强制事件的选择状态与六类活动分发，选择窗口默认 20 秒。
+    """管理强制事件的选择状态与七类活动分发，选择窗口默认 20 秒。
 
     强制触发绕过概率、好感门槛和功能开关，但保留群级互斥：本群已有待结算的活动时
     命令与选择都会被拒绝。强制事件自己的选择状态不占群席位，所以命令发出去的 20 秒
@@ -92,6 +96,7 @@ class ForceCoordinator:
         bet: BetCoordinator,
         pk: PkCoordinator,
         wheel: WheelCoordinator,
+        group_quiz: GroupQuizCoordinator | None = None,
         choice_timeout: float = FORCE_CHOICE_TIMEOUT,
     ):
         self.service = service
@@ -101,6 +106,7 @@ class ForceCoordinator:
         self.bet = bet
         self.pk = pk
         self.wheel = wheel
+        self.group_quiz = group_quiz
         self.choice_timeout = float(choice_timeout)
         self.pending: dict[str, PendingForce] = {}
 
@@ -197,6 +203,8 @@ class ForceCoordinator:
             return await self._start_bet(pending, send)
         if choice == FORCE_ACTIVITY_PK:
             return await self._start_pk(pending, send)
+        if choice == FORCE_ACTIVITY_GROUP_QUIZ:
+            return await self._start_group_quiz(pending, send)
         if choice == FORCE_ACTIVITY_WHEEL:
             return await self._start_wheel(pending, send)
         return FORCE_FAIL_REPLY
@@ -279,6 +287,17 @@ class ForceCoordinator:
         )
         return None if started else FORCE_FAIL_REPLY
 
+    async def _start_group_quiz(self, pending: PendingForce, send: Send) -> str | None:
+        if self.group_quiz is None:
+            return FORCE_FAIL_REPLY
+        started = await self.group_quiz.start(
+            group_id=pending.group_id,
+            user_id=pending.target_id,
+            nickname=pending.target_name,
+            send=send,
+        )
+        return None if started else FORCE_FAIL_REPLY
+
     async def _start_wheel(self, pending: PendingForce, send: Send) -> str | None:
         started = await self.wheel.start(
             group_id=pending.group_id,
@@ -324,6 +343,7 @@ def register_force_commands(
     pk: PkCoordinator,
     wheel: WheelCoordinator,
     *,
+    group_quiz: GroupQuizCoordinator | None = None,
     coordinator: ForceCoordinator | None = None,
 ) -> tuple:
     """/馒头强制事件：SUPERUSER 发活动列表，发起者 20 秒内回复编号强制开一场。
@@ -340,6 +360,7 @@ def register_force_commands(
         bet=bet,
         pk=pk,
         wheel=wheel,
+        group_quiz=group_quiz,
     )
     force_cmd = on_command(
         FORCE_COMMAND,

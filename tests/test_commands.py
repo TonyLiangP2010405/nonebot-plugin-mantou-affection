@@ -104,7 +104,7 @@ def test_format_probability(value: float, expected: str) -> None:
 def test_registered_matchers_include_probability_command() -> None:
     from nonebot_plugin_mantou_affection import matchers
 
-    assert len(matchers) == 12
+    assert len(matchers) == 13
     (
         _profile_cmd,
         _interact_cmd,
@@ -118,6 +118,7 @@ def test_registered_matchers_include_probability_command() -> None:
         pk_probability_cmd,
         pk_bank_cmd,
         wheel_cmd,
+        group_quiz_cmd,
     ) = matchers
     assert probability_cmd.priority == 10
     assert probability_cmd.block is True
@@ -138,6 +139,7 @@ def test_registered_matchers_include_probability_command() -> None:
         pk_probability_cmd: "handle_pk_probability",
         pk_bank_cmd: "handle_pk_bank",
         wheel_cmd: "handle_wheel_probability",
+        group_quiz_cmd: "handle_group_quiz_probability",
     }
     for matcher, handler_name in expected_handlers.items():
         assert matcher.priority == 10

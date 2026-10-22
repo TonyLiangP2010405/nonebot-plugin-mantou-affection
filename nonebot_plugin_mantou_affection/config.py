@@ -35,6 +35,8 @@ class Config(BaseModel):
     mantou_affection_memes_extra_repos: bool = True
     mantou_affection_pk_chance: float = Field(default=0.01, ge=0.0, le=1.0)
     mantou_affection_pk_low_stock_warning: int = Field(default=100, ge=0, le=100000)
+    mantou_affection_group_quiz_chance: float = Field(default=0.0005, ge=0.0, le=1.0)
+    mantou_affection_group_quiz_timeout: int = Field(default=60, ge=5, le=600)
     mantou_affection_link_rewards: dict[str, int] = Field(
         default_factory=lambda: {
             "nonebot_plugin_taozi": 2,

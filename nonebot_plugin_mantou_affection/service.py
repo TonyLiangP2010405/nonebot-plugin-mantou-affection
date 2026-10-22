@@ -30,6 +30,7 @@ FIND_CHAR_GROUP_CHANCE_SETTING = "find_char_group_chance"
 FIND_CHAR_POKE_CHANCE_SETTING = "find_char_poke_chance"
 BET_PROBABILITY_SETTING = "bet_probability"
 PK_PROBABILITY_SETTING = "pk_probability"
+GROUP_QUIZ_PROBABILITY_SETTING = "group_quiz_probability"
 WHEEL_PROBABILITY_SETTING = "wheel_probability"
 AMBIENT_SCENE = "mantou.ambient"
 
@@ -229,6 +230,31 @@ class AffectionService:
 
     async def set_pk_probability(self, value: float) -> None:
         await self.store.set_setting(PK_PROBABILITY_SETTING, float(value))
+
+    async def group_quiz_triggered(self) -> bool:
+        """群友问答不看榜单或好感度，只按独立概率判定。"""
+
+        chance = await self.group_quiz_probability()
+        return self.rng.random() < chance
+
+    async def group_quiz_probability(self) -> float:
+        """群友问答的触发概率，运行时用 /馒头群友问答概率 覆盖过就优先用它。"""
+
+        return await self._stored_probability(
+            GROUP_QUIZ_PROBABILITY_SETTING,
+            self.config.mantou_affection_group_quiz_chance,
+        )
+
+    async def group_quiz_probability_override(self) -> float | None:
+        """读取运行时覆盖的群友问答概率，没覆盖过返回 None。"""
+
+        stored: Any = await self.store.get_setting(GROUP_QUIZ_PROBABILITY_SETTING, None)
+        if isinstance(stored, bool) or not isinstance(stored, (int, float)):
+            return None
+        return min(1.0, max(0.0, float(stored)))
+
+    async def set_group_quiz_probability(self, value: float) -> None:
+        await self.store.set_setting(GROUP_QUIZ_PROBABILITY_SETTING, float(value))
 
     async def wheel_triggered(self, group_id: str, user_id: str) -> bool:
         profile = await self.store.get_profile(group_id, user_id)

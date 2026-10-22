@@ -15,6 +15,7 @@ from .commands import GROUP_ONLY
 from .config import Config
 from .events import Event, EventLibrary, EventOption
 from .findchar import BUNDLED_PUZZLES_PATH, FindCharCoordinator, FindCharLibrary
+from .group_quiz import BUNDLED_GROUP_QUIZ_PATH, GroupQuizCoordinator
 from .logic import (
     UPSET_EVENT_RATIOS,
     snapshot_for,
@@ -121,6 +122,7 @@ class EventCoordinator:
         bet: BetCoordinator | None = None,
         pk: PkCoordinator | None = None,
         wheel: WheelCoordinator | None = None,
+        group_quiz: GroupQuizCoordinator | None = None,
     ):
         self.service = service
         self.config = config
@@ -131,6 +133,7 @@ class EventCoordinator:
         self.bet = bet
         self.pk = pk
         self.wheel = wheel
+        self.group_quiz = group_quiz
         self.pending: dict[str, PendingEvent] = {}
 
     def attach_find_char(self, findchar: FindCharCoordinator) -> None:
@@ -151,15 +154,20 @@ class EventCoordinator:
     def attach_wheel(self, wheel: WheelCoordinator) -> None:
         self.wheel = wheel
 
+    def attach_group_quiz(self, group_quiz: GroupQuizCoordinator) -> None:
+        """接入群友问答，让它和随机事件、找字、博弈、问答、转盘共用同一个群的席位。"""
+
+        self.group_quiz = group_quiz
+
     def busy(self, group_id: str) -> bool:
-        """本群是否已经有待结算的活动：随机事件、找字、博弈、随机问答或命运齿轮转盘。"""
+        """本群是否已经有待结算的活动：随机事件、找字、博弈、问答、群友问答或转盘。"""
 
         key = str(group_id)
         if key in self.pending:
             return True
         return any(
             peer is not None and key in peer.pending
-            for peer in (self.findchar, self.bet, self.pk, self.wheel)
+            for peer in (self.findchar, self.bet, self.pk, self.group_quiz, self.wheel)
         )
 
     def triggered(self) -> bool:
@@ -445,13 +453,14 @@ def register_ambient(
     bet: BetCoordinator | None = None,
     pk: PkCoordinator | None = None,
     wheel: WheelCoordinator | None = None,
+    group_quiz: GroupQuizCoordinator | None = None,
 ) -> tuple:
-    """群友发言时按概率触发找字、博弈、随机问答、命运齿轮转盘或馒头小动作。
+    """群友发言时按概率触发找字、博弈、随机问答、群友问答、命运齿轮转盘或馒头小动作。
 
-    找字和博弈保留各自的好感度门槛；随机问答不看榜单或好感度，默认每次群消息有
-    1% 概率给当前发言者出一道题。命运齿轮转盘只看好感大于 0 和它自己的独立概率，
-    不参与小动作的抽签。几种活动互斥，不会在同一条消息上同时触发；所有数字答案
-    都走这里的答案路由，「参与 / 运作 / 不运作」也由同一个 answer matcher 转给转盘。
+    找字和博弈保留各自的好感度门槛；随机问答和群友问答不看榜单或好感度，分别默认每次
+    群消息有 1%、0.05% 概率给当前发言者出一道题。命运齿轮转盘只看好感大于 0 和它自己的
+    独立概率，不参与小动作的抽签。几种活动互斥，不会在同一条消息上同时触发；所有数字
+    答案都走这里的答案路由，「参与 / 运作 / 不运作」也由同一个 answer matcher 转给转盘。
     事件预处理器只给博弈记录最近发言表。
     """
 
@@ -480,10 +489,18 @@ def register_ambient(
     wheel_coordinator = wheel or WheelCoordinator(
         service, config, events=coordinator, rng=coordinator.rng
     )
+    group_quiz_coordinator = group_quiz or GroupQuizCoordinator(
+        service,
+        config,
+        PkQuestionLibrary(BUNDLED_GROUP_QUIZ_PATH),
+        events=coordinator,
+        rng=coordinator.rng,
+    )
     coordinator.attach_find_char(find_char)
     coordinator.attach_bet(bet_coordinator)
     coordinator.attach_pk(pk_coordinator)
     coordinator.attach_wheel(wheel_coordinator)
+    coordinator.attach_group_quiz(group_quiz_coordinator)
     ambient = on_message(rule=GROUP_ONLY, priority=90, block=False)
     answer = on_message(rule=GROUP_ONLY, priority=5, block=False)
 
@@ -507,6 +524,8 @@ def register_ambient(
             if await wheel_coordinator.answer(group_id, user_id, name, text):
                 return
             if await pk_coordinator.answer(group_id, user_id, name, text):
+                return
+            if await group_quiz_coordinator.answer(group_id, user_id, name, text):
                 return
             if await bet_coordinator.answer(group_id, user_id, name, text):
                 return
@@ -586,6 +605,25 @@ def register_ambient(
                 )
             except Exception:
                 logger.exception("[mantou-affection] 发起随机问答失败")
+                started = False
+            if started:
+                return
+
+        try:
+            group_quiz_ready = await service.group_quiz_triggered()
+        except Exception:
+            logger.exception("[mantou-affection] 判定群友问答失败")
+            group_quiz_ready = False
+        if group_quiz_ready:
+            try:
+                started = await group_quiz_coordinator.start(
+                    group_id=group_id,
+                    user_id=user_id,
+                    nickname=nickname,
+                    send=ambient.send,
+                )
+            except Exception:
+                logger.exception("[mantou-affection] 发起群友问答失败")
                 started = False
             if started:
                 return

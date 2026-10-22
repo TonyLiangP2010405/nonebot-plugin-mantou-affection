@@ -1,4 +1,4 @@
-"""SUPERUSER 强制事件：命令校验、选择状态与六类活动分发。"""
+"""SUPERUSER 强制事件：命令校验、选择状态与七类活动分发。"""
 
 import asyncio
 import json
@@ -38,6 +38,10 @@ from nonebot_plugin_mantou_affection.force import (
     ForceCoordinator,
     register_force_commands,
 )
+from nonebot_plugin_mantou_affection.group_quiz import (
+    BUNDLED_GROUP_QUIZ_PATH,
+    GroupQuizCoordinator,
+)
 from nonebot_plugin_mantou_affection.pk import (
     BUNDLED_PK_PATH,
     PkCoordinator,
@@ -60,7 +64,8 @@ EXPECTED_ACTIVITY_LINES = (
     "3. 找字",
     "4. 馒头博弈",
     "5. 桃子问答",
-    "6. 命运齿轮转盘",
+    "6. 群友问答",
+    "7. 命运齿轮转盘",
 )
 
 
@@ -169,10 +174,18 @@ class Harness:
             events=self.events,
             rng=rng,
         )
+        self.group_quiz = GroupQuizCoordinator(
+            self.service,
+            self.config,
+            PkQuestionLibrary(BUNDLED_GROUP_QUIZ_PATH),
+            events=self.events,
+            rng=rng,
+        )
         self.wheel = WheelCoordinator(self.service, self.config, events=self.events, rng=rng)
         self.events.attach_find_char(self.findchar)
         self.events.attach_bet(self.bet)
         self.events.attach_pk(self.pk)
+        self.events.attach_group_quiz(self.group_quiz)
         self.events.attach_wheel(self.wheel)
         self.force = ForceCoordinator(
             self.service,
@@ -182,6 +195,7 @@ class Harness:
             bet=self.bet,
             pk=self.pk,
             wheel=self.wheel,
+            group_quiz=self.group_quiz,
             choice_timeout=choice_timeout,
         )
         self.force_cmd, self.force_answer = register_force_commands(
@@ -223,6 +237,7 @@ class Harness:
             *self.findchar.pending.values(),
             *self.bet.pending.values(),
             *self.pk.pending.values(),
+            *self.group_quiz.pending.values(),
             *self.wheel.pending.values(),
             *self.force.pending.values(),
         ):
@@ -383,7 +398,7 @@ async def test_force_choice_timeout_cancels_without_affection_change(
     await harness.cleanup()
 
 
-@pytest.mark.parametrize("text", ["7", "0", "1 2", "随便"])
+@pytest.mark.parametrize("text", ["8", "0", "1 2", "随便"])
 async def test_invalid_choice_cancels_without_affection_change(
     tmp_path: Path, bundled_texts_path: Path, monkeypatch, text: str
 ) -> None:
@@ -411,7 +426,8 @@ async def test_invalid_choice_cancels_without_affection_change(
         ("3", "findchar", "🔍 找字小游戏！"),
         ("4", "bet", "🎲 馒头博弈！"),
         ("5", "pk", "🍑 桃子问答！"),
-        ("6", "wheel", "命运齿轮转盘"),
+        ("6", "group_quiz", "💬 群友问答！"),
+        ("7", "wheel", "命运齿轮转盘"),
     ],
 )
 async def test_force_choice_starts_activity(
