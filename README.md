@@ -88,6 +88,7 @@ MANTOU_AFFECTION_GROUP_QUIZ_TIMEOUT=60
 MANTOU_AFFECTION_WHEEL_CHANCE=0.001
 MANTOU_AFFECTION_WHEEL_TIMEOUT=60
 MANTOU_AFFECTION_MEMES_EXTRA_REPOS=true
+MANTOU_AFFECTION_MEMES_BLOCKED_TERMS=
 ```
 
 `MANTOU_AFFECTION_LINK_REWARDS` 是“插件模块名 -> 单次变化值”的 JSON 对象，支持正数和负数。默认值如下：
@@ -651,6 +652,15 @@ pip install "nonebot-plugin-mantou-affection[memes]"
 
   ```dotenv
   MANTOU_AFFECTION_MEMES_EXTRA_REPOS=false
+  ```
+- **表情屏蔽词**：内置一组库洛游戏相关屏蔽词（`kurogames_` 统一前缀、「库洛」「战双」「帕弥什」「松伦」，以及
+  鸣潮角色名、昵称、阵营梗与模板的英文键名，如「今汐」「长离」「守岸人」「漂泊者」`jinhsi` `camellya`
+  `rover` 等），命中模板键名或关键词的表情不会进入转盘候选，覆盖内置表情和全部外部仓库——外部仓库里
+  全部 117 个 `kurogames_` 模板（含鸣潮、战双与库洛通用表情）默认都被屏蔽。想追加屏蔽词（逗号、顿号、
+  分号或空格分隔均可）：
+
+  ```dotenv
+  MANTOU_AFFECTION_MEMES_BLOCKED_TERMS=原神,崩坏
   ```
 - 素材没下完时生成会失败，这次表情结果按未交付处理：只提示失败、不重抽，
   其他参与者不受影响；随后会**节流补检**（默认 600 秒内只补一次），防止连续消息重复启动大量下载线程。

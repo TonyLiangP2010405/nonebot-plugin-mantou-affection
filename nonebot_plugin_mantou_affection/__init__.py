@@ -43,7 +43,12 @@ from .pk import BUNDLED_PK_PATH, PkCoordinator, PkQuestionLibrary
 from .service import AffectionService
 from .storage import AffectionStore
 from .wheel import WheelCoordinator
-from .wheel_memes import MemeGeneratorAdapter, MemeRepoManager, MemeResourceManager
+from .wheel_memes import (
+    MemeGeneratorAdapter,
+    MemeRepoManager,
+    MemeResourceManager,
+    parse_blocked_terms,
+)
 
 plugin_config = get_plugin_config(Config)
 data_file = Path(get_plugin_data_dir()) / "affection.json"
@@ -82,6 +87,7 @@ group_quiz_coordinator = GroupQuizCoordinator(
 event_coordinator.attach_group_quiz(group_quiz_coordinator)
 meme_generator_adapter = MemeGeneratorAdapter(
     bot_name=plugin_config.mantou_affection_bot_name,
+    blocked_terms=parse_blocked_terms(plugin_config.mantou_affection_memes_blocked_terms),
 )
 meme_repo_manager = MemeRepoManager(
     backend=meme_generator_adapter.backend,

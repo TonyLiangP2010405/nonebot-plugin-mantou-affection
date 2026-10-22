@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from nonebot_plugin_mantou_affection.wheel_memes import (
+    DEFAULT_BLOCKED_MEME_TERMS,
     EXTRA_MEME_REPOS,
     ExtraMemeRepo,
     MemeAssetMissing,
@@ -15,6 +16,7 @@ from nonebot_plugin_mantou_affection.wheel_memes import (
     MemeGeneratorAdapter,
     MemeRepoManager,
     MemeResourceManager,
+    parse_blocked_terms,
     repo_download_urls,
 )
 
@@ -29,9 +31,16 @@ class FakeParams:
 
 class FakeMeme:
     def __init__(
-        self, key: str, minimum: int, maximum: int, min_texts: int = 0, max_texts: int = 0
+        self,
+        key: str,
+        minimum: int,
+        maximum: int,
+        min_texts: int = 0,
+        max_texts: int = 0,
+        keywords=(),
     ):
         self.key = key
+        self.keywords = list(keywords)
         self.params_type = FakeParams(minimum, maximum, min_texts, max_texts)
         self.result: object = BytesIO(b"generated")
         self.error: Exception | None = None
@@ -117,6 +126,99 @@ async def test_incompatible_templates_are_not_candidates() -> None:
         await adapter.generate(
             bot=SimpleNamespace(self_id=999), user_id="123", nickname="群昵称"
         )
+
+
+async def test_blocked_meme_by_key_is_filtered() -> None:
+    meme = FakeMeme("kurogames_jinhsi_eat", 1, 1, keywords=["吃"])
+    adapter = adapter_for(meme)
+    with pytest.raises(MemeGenerationError, match="没有兼容"):
+        await adapter.generate(
+            bot=SimpleNamespace(self_id=999), user_id="123", nickname="群昵称"
+        )
+    assert meme.calls == []
+
+
+async def test_blocked_meme_by_keyword_is_filtered() -> None:
+    meme = FakeMeme("some_steamed_buns", 1, 1, keywords=["今汐小笼包"])
+    adapter = adapter_for(meme)
+    with pytest.raises(MemeGenerationError, match="没有兼容"):
+        await adapter.generate(
+            bot=SimpleNamespace(self_id=999), user_id="123", nickname="群昵称"
+        )
+    assert meme.calls == []
+
+
+async def test_blocked_meme_matching_is_case_insensitive() -> None:
+    meme = FakeMeme("KuroGames_CAMELLYA_holdsign", 1, 1, keywords=["举牌"])
+    adapter = adapter_for(meme)
+    with pytest.raises(MemeGenerationError, match="没有兼容"):
+        await adapter.generate(
+            bot=SimpleNamespace(self_id=999), user_id="123", nickname="群昵称"
+        )
+    assert meme.calls == []
+
+
+async def test_unblocked_meme_survives_default_blocklist() -> None:
+    meme = FakeMeme("petpet", 1, 1, keywords=["摸", "摸摸头"])
+    result = await adapter_for(meme).generate(
+        bot=SimpleNamespace(self_id=999), user_id="123", nickname="群昵称"
+    )
+    assert result == b"generated"
+    assert len(meme.calls) == 1
+
+
+async def test_blocked_meme_falls_back_to_other_candidates() -> None:
+    blocked = FakeMeme("kurogames_camellya", 1, 1, keywords=["椿"])
+    normal = FakeMeme("petpet", 1, 1, keywords=["摸"])
+    adapter = MemeGeneratorAdapter(
+        backend=FakeBackend([blocked, normal]),
+        rng=random.Random(0),
+        avatar_fetcher=avatars,
+    )
+    result = await adapter.generate(
+        bot=SimpleNamespace(self_id=999), user_id="123", nickname="群昵称"
+    )
+    assert result == b"generated"
+    assert blocked.calls == []
+    assert len(normal.calls) == 1
+
+
+async def test_extra_blocked_terms_take_effect() -> None:
+    meme = FakeMeme("rosetta", 1, 1, keywords=["罗塞塔"])
+    adapter = adapter_for(meme, blocked_terms=["罗塞塔"])
+    with pytest.raises(MemeGenerationError, match="没有兼容"):
+        await adapter.generate(
+            bot=SimpleNamespace(self_id=999), user_id="123", nickname="群昵称"
+        )
+    assert meme.calls == []
+
+
+async def test_kuro_generic_meme_is_blocked_by_default() -> None:
+    for key, keywords in (
+        ("kurogames_rosetta", ["罗塞塔"]),
+        ("kurogames_good_night", ["晚安"]),
+        ("kurogames_brqd", ["百日签到"]),
+    ):
+        meme = FakeMeme(key, 1, 1, keywords=keywords)
+        adapter = adapter_for(meme)
+        with pytest.raises(MemeGenerationError, match="没有兼容"):
+            await adapter.generate(
+                bot=SimpleNamespace(self_id=999), user_id="123", nickname="群昵称"
+            )
+        assert meme.calls == []
+
+
+def test_parse_blocked_terms_defaults_and_extra() -> None:
+    terms = parse_blocked_terms(None)
+    assert "鸣潮" in terms
+    assert "jinhsi" in terms
+    assert len(terms) == len(set(terms))
+    extra = parse_blocked_terms("罗塞塔，松伦、 ;自定义词")
+    assert "罗塞塔" in extra
+    assert "自定义词" in extra
+    # 内置词与追加词重复时不重复出现
+    assert extra.count("松伦") == 1
+    assert parse_blocked_terms("") == DEFAULT_BLOCKED_MEME_TERMS
 
 
 async def test_incompatible_backend_version_is_rejected() -> None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import random
+import re
 import shutil
 import threading
 import time
@@ -24,6 +25,42 @@ class MemeGenerationError(RuntimeError):
 
 class MemeAssetMissing(MemeGenerationError):
     pass
+
+
+DEFAULT_BLOCKED_MEME_TERMS: tuple[str, ...] = (
+    # 库洛游戏: 公司、旗下游戏与模板统一前缀
+    "库洛", "kuro", "kurogames", "战双", "帕弥什", "松伦",
+    # 鸣潮: 游戏名与玩家称呼
+    "鸣潮", "呜潮", "鸣批", "潮批", "wuwa", "wuthering",
+    # 鸣潮: 角色与昵称
+    "阿布", "今汐", "汐汐", "长离", "离妃", "守岸人", "岸宝", "椿", "大傻椿", "傻椿", "红椿",
+    "珂莱塔", "卡提西亚", "卡提希娅", "卡提", "洛可可", "菲比", "布兰特", "赞妮", "坎特蕾拉",
+    "夏空", "露帕", "弗洛洛", "奥古斯塔", "尤诺", "优诺", "嘉贝丽娜", "嘉贝莉娜", "仇远",
+    "千咲", "秧秧", "炽霞", "白芷", "安可", "维里奈", "小维", "鉴心", "凌阳", "雪豹",
+    "卡卡罗", "忌炎", "相里要", "灯灯", "釉瑚", "漂泊者", "阿漂", "散华", "丹瑾", "桃祈",
+    "渊武", "莫特斐", "秋水", "折枝", "吟霖",
+    # 鸣潮: 怪物、阵营与梗
+    "无冠者", "哀声鸷", "无妄者", "赫卡忒", "咕咕河豚", "叮咚咚", "飞廉之猩",
+    "今州", "瑝珑", "黑海岸", "残星会", "拉古那", "黎那汐塔", "岁主", "声骸",
+    # 鸣潮: 表情模板英文键名(keywords 可能是通用词, 只能靠 key 拦)
+    "camellya", "carlotta", "cartethyia", "changli", "chisa", "chouyuan", "iuno",
+    "jinhsi", "jiyan", "lingyang", "lupa", "mortefi", "phoebe", "phrolova", "roccia",
+    "rover", "shorekeeper", "verina", "yangyang", "zani", "zhezhi", "galbrena", "abby",
+)
+
+_TERM_SPLIT = re.compile(r"[,，、;；\s]+")
+
+
+def parse_blocked_terms(extra: str | None) -> tuple[str, ...]:
+    """内置屏蔽词 + 配置里追加的词，去空白去重。"""
+
+    terms: list[str] = list(DEFAULT_BLOCKED_MEME_TERMS)
+    if extra:
+        for term in _TERM_SPLIT.split(extra):
+            term = term.strip()
+            if term and term not in terms:
+                terms.append(term)
+    return tuple(terms)
 
 
 def _load_backend() -> Any | None:
@@ -59,12 +96,26 @@ class MemeGeneratorAdapter:
         avatar_fetcher: Callable[[str], Awaitable[bytes]] | None = None,
         bot_name: str = "馒头",
         repos: MemeRepoManager | None = None,
+        blocked_terms: Iterable[str] | None = None,
     ):
         self.backend = backend if backend is not None else _load_backend()
         self.rng = rng or random.Random()
         self.avatar_fetcher = avatar_fetcher or _fetch_avatar
         self.bot_name = bot_name
         self.repos = repos
+        self.blocked_terms = (
+            parse_blocked_terms(None) if blocked_terms is None else tuple(blocked_terms)
+        )
+        self._blocked_logged = False
+
+    def _is_blocked(self, meme: Any) -> bool:
+        key = str(getattr(meme, "key", "") or "").lower()
+        keywords = [str(kw).lower() for kw in (getattr(meme, "keywords", None) or ())]
+        for term in self.blocked_terms:
+            term = term.lower()
+            if term and (term in key or any(term in kw for kw in keywords)):
+                return True
+        return False
 
     @staticmethod
     def _kind(params: Any) -> str | None:
@@ -89,10 +140,17 @@ class MemeGeneratorAdapter:
         except Exception as error:
             raise MemeGenerationError("读取表情列表失败") from error
         candidates = []
+        blocked_count = 0
         for meme in available:
+            if self._is_blocked(meme):
+                blocked_count += 1
+                continue
             kind = self._kind(meme.params_type)
             if kind is not None:
                 candidates.append((meme, kind))
+        if blocked_count and not self._blocked_logged:
+            self._blocked_logged = True
+            logger.info(f"[mantou-affection] 已按屏蔽词过滤 {blocked_count} 个表情模板")
         if not candidates:
             raise MemeGenerationError("没有兼容的表情模板")
         meme, kind = self.rng.choice(candidates)
