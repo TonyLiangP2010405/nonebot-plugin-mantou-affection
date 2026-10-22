@@ -127,7 +127,9 @@ class MemeGeneratorAdapter:
             return "double"
         return None
 
-    async def generate(self, *, bot: Any, user_id: str, nickname: str) -> bytes:
+    def draw(self) -> tuple[Any, str]:
+        """从非屏蔽候选里随机抽一个模板，返回 (meme, kind)。"""
+
         backend = self.backend
         if backend is None:
             raise MemeGenerationError("meme-generator 未安装")
@@ -153,7 +155,19 @@ class MemeGeneratorAdapter:
             logger.info(f"[mantou-affection] 已按屏蔽词过滤 {blocked_count} 个表情模板")
         if not candidates:
             raise MemeGenerationError("没有兼容的表情模板")
-        meme, kind = self.rng.choice(candidates)
+        return self.rng.choice(candidates)
+
+    async def generate_with(
+        self,
+        meme: Any,
+        kind: str,
+        *,
+        bot: Any,
+        user_id: str,
+        nickname: str,
+    ) -> bytes:
+        """用指定模板生成表情。"""
+
         texts = [nickname] if kind == "text" else []
         images = []
         if kind != "text":
@@ -178,6 +192,12 @@ class MemeGeneratorAdapter:
         if callable(getvalue):
             return getvalue()
         raise MemeGenerationError(f"表情结果格式异常: {type(result).__name__}")
+
+    async def generate(self, *, bot: Any, user_id: str, nickname: str) -> bytes:
+        meme, kind = self.draw()
+        return await self.generate_with(
+            meme, kind, bot=bot, user_id=user_id, nickname=nickname
+        )
 
 
 def _load_resource_check() -> Callable[[], None] | None:

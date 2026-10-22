@@ -445,7 +445,7 @@ def _commands(tmp_path: Path, monkeypatch) -> tuple:
     service = _service(tmp_path)
     pk_coordinator = PkCoordinator(service, Config(), _library(tmp_path))
     commands = register_commands(service, Config(), pk_coordinator)
-    assert len(commands) == 13
+    assert len(commands) == 14
     group_quiz_cmd = commands[12]
     sent: list[str] = []
 

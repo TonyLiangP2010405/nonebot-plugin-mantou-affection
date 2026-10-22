@@ -1,6 +1,8 @@
 import asyncio
 import random
+from contextlib import suppress
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from nonebot.adapters.onebot.v11 import Message
@@ -14,9 +16,10 @@ from nonebot_plugin_mantou_affection.wheel import (
     WheelCoordinator,
     draw_not_operate_delta,
     draw_wheel_outcome,
+    format_meme_confirm,
     format_wheel_rules,
 )
-from nonebot_plugin_mantou_affection.wheel_memes import MemeAssetMissing
+from nonebot_plugin_mantou_affection.wheel_memes import MemeAssetMissing, MemeGenerationError
 
 GROUP = "94001"
 TRIGGER = "94002"
@@ -60,11 +63,53 @@ class FakeBot:
             raise RuntimeError("poke unsupported")
 
 
+class FakeMemeTemplate:
+    def __init__(
+        self,
+        key: str = "petpet",
+        keywords: tuple[str, ...] = ("摸摸头",),
+        tags: tuple[str, ...] = ("可爱", "宠物"),
+    ):
+        self.key = key
+        self.keywords = list(keywords)
+        self.tags = list(tags)
+
+
 class FakeMemes:
-    def __init__(self, missing_users: set[str] | None = None):
+    def __init__(
+        self,
+        missing_users: set[str] | None = None,
+        draw_error: Exception | None = None,
+        generate_error: Exception | None = None,
+    ):
         self.missing_users = missing_users or set()
+        self.template = FakeMemeTemplate()
+        self.draw_error = draw_error
+        self.generate_error = generate_error
+        self.draw_calls = 0
+        self.generate_calls = 0
+        self.generated: list[tuple[object, str, str]] = []
+
+    def draw(self) -> tuple[FakeMemeTemplate, str]:
+        self.draw_calls += 1
+        if self.draw_error is not None:
+            raise self.draw_error
+        return self.template, "single"
 
     async def generate(self, *, bot, user_id: str, nickname: str) -> bytes:
+        self.generate_calls += 1
+        if self.generate_error is not None:
+            raise self.generate_error
+        if user_id in self.missing_users:
+            raise MemeAssetMissing("petpet/base.png")
+        return f"image:{user_id}".encode()
+
+    async def generate_with(
+        self, meme, kind: str, *, bot, user_id: str, nickname: str
+    ) -> bytes:
+        self.generated.append((meme, kind, user_id))
+        if self.generate_error is not None:
+            raise self.generate_error
         if user_id in self.missing_users:
             raise MemeAssetMissing("petpet/base.png")
         return f"image:{user_id}".encode()
@@ -101,7 +146,13 @@ async def give(service: AffectionService, user_id: str, score: int) -> None:
     await service.store.update_profile(GROUP, user_id, "测试员", bump)
 
 
-async def start(coordinator: WheelCoordinator, bot=None):
+async def start(
+    coordinator: WheelCoordinator,
+    bot=None,
+    *,
+    user_id: str = TRIGGER,
+    nickname: str = "触发者",
+):
     sent = []
 
     async def send(message) -> None:
@@ -109,7 +160,7 @@ async def start(coordinator: WheelCoordinator, bot=None):
 
     bot = bot or FakeBot()
     assert await coordinator.start(
-        group_id=GROUP, user_id=TRIGGER, nickname="触发者", bot=bot, send=send
+        group_id=GROUP, user_id=user_id, nickname=nickname, bot=bot, send=send
     )
     return coordinator.pending[GROUP], sent, bot
 
@@ -117,6 +168,21 @@ async def start(coordinator: WheelCoordinator, bot=None):
 async def wait_for_choice(pending) -> None:
     assert pending.task is not None
     await asyncio.wait_for(pending.task, 2)
+
+
+async def operate(coordinator: WheelCoordinator, pending, *, user_id: str = TRIGGER) -> None:
+    await coordinator.answer(GROUP, user_id, "触发者", "运作")
+    await coordinator.answer(GROUP, user_id, "触发者", "确认")
+    await wait_for_choice(pending)
+
+
+async def cancel_meme_confirm(coordinator: WheelCoordinator, user_id: str = TRIGGER) -> None:
+    confirm = coordinator.meme_confirms.get((GROUP, user_id))
+    if confirm is None or confirm.task is None:
+        return
+    confirm.task.cancel()
+    with suppress(asyncio.CancelledError):
+        await confirm.task
 
 
 def test_wheel_weights_match_approved_table() -> None:
@@ -390,6 +456,8 @@ async def test_wheel_meme_missing_requests_throttled_recheck(tmp_path: Path) -> 
     coordinator = make_coordinator(
         tmp_path, rng=SequenceRng([0, 0]), memes=memes, resources=resources
     )
+    await coordinator.service.toggle_meme_confirm_whitelist(TRIGGER)
+    await coordinator.service.toggle_meme_confirm_whitelist(OTHER)
     await give(coordinator.service, OTHER, 10)
     pending, sent, _ = await start(coordinator)
     await coordinator.answer(GROUP, OTHER, "路人", "参与")
@@ -544,3 +612,242 @@ async def test_wheel_operation_continues_after_participant_adjust_failure(
     assert (await coordinator.service.profile(GROUP, OTHER)).affection == 11
     assert GROUP not in coordinator.pending
     assert any("转盘好感 +1" in message.extract_plain_text() for message in sent)
+
+
+def sent_text(sent: list[Message]) -> str:
+    return "\n".join(message.extract_plain_text() for message in sent)
+
+
+def test_meme_confirm_format_falls_back_to_key_and_uncategorized() -> None:
+    meme = SimpleNamespace(key="plain_key", keywords=[], tags=[])
+
+    body = format_meme_confirm(meme, 30)
+
+    assert "「plain_key」" in body
+    assert "种类：无分类" in body
+    assert "键名：plain_key" in body
+    assert "表情内容可能引起不适，请谨慎确认" in body
+    assert "请在 30 秒内回复「确认」或「不确认」" in body
+    assert "50% 概率好感 +2" in body
+    assert "50% 概率好感 -2" in body
+
+
+async def test_wheel_meme_confirm_message_lists_template_and_warning(
+    tmp_path: Path,
+) -> None:
+    memes = FakeMemes()
+    coordinator = make_coordinator(tmp_path, rng=SequenceRng([0]), memes=memes)
+    pending, sent, _ = await start(coordinator)
+
+    await operate(coordinator, pending)
+    await asyncio.sleep(0)
+
+    assert GROUP not in coordinator.pending
+    assert (GROUP, TRIGGER) in coordinator.meme_confirms
+    body = sent_text(sent)
+    assert "「摸摸头」" in body
+    assert "种类：可爱、宠物" in body
+    assert "键名：petpet" in body
+    assert "表情内容可能引起不适，请谨慎确认" in body
+    assert "请在 30 秒内回复「确认」或「不确认」" in body
+    assert "50% 概率好感 +2" in body
+    assert "50% 概率好感 -2" in body
+    assert "30 秒" in body
+    assert not any(segment.type == "image" for message in sent for segment in message)
+    assert memes.draw_calls == 1
+    assert memes.generate_calls == 0
+    assert memes.generated == []
+    await cancel_meme_confirm(coordinator)
+
+
+async def test_wheel_meme_whitelisted_user_gets_image_without_confirm(
+    tmp_path: Path,
+) -> None:
+    memes = FakeMemes()
+    coordinator = make_coordinator(tmp_path, rng=SequenceRng([0]), memes=memes)
+    await coordinator.service.toggle_meme_confirm_whitelist(TRIGGER)
+    pending, sent, _ = await start(coordinator)
+
+    await operate(coordinator, pending)
+
+    assert coordinator.meme_confirms == {}
+    assert any(segment.type == "image" for message in sent for segment in message)
+    assert "馒头为你做了一张随机表情" in sent_text(sent)
+    assert memes.generate_calls == 1
+    assert memes.draw_calls == 0
+
+
+async def test_wheel_meme_confirm_generates_with_drawn_template(tmp_path: Path) -> None:
+    memes = FakeMemes()
+    coordinator = make_coordinator(tmp_path, rng=SequenceRng([0]), memes=memes)
+    await give(coordinator.service, TRIGGER, 10)
+    pending, sent, _ = await start(coordinator)
+    await operate(coordinator, pending)
+    confirm = coordinator.meme_confirms[(GROUP, TRIGGER)]
+
+    assert await coordinator.answer(GROUP, TRIGGER, "触发者", "确认") is True
+    if confirm.task is not None:
+        with suppress(asyncio.CancelledError):
+            await confirm.task
+
+    assert memes.generated == [(confirm.meme, "single", TRIGGER)]
+    assert (GROUP, TRIGGER) not in coordinator.meme_confirms
+    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 10
+    assert any(segment.type == "image" for message in sent for segment in message)
+    assert "已确认，馒头为你做了一张表情" in sent_text(sent)
+
+
+@pytest.mark.parametrize(
+    ("value", "delta"),
+    [(0.2, 2), (0.8, -2)],
+)
+async def test_wheel_meme_decline_rolls_affection(
+    tmp_path: Path, value: float, delta: int
+) -> None:
+    memes = FakeMemes()
+    coordinator = make_coordinator(
+        tmp_path, rng=SequenceRng([0], value=value), memes=memes
+    )
+    await give(coordinator.service, TRIGGER, 10)
+    pending, sent, _ = await start(coordinator)
+    await operate(coordinator, pending)
+
+    assert await coordinator.answer(GROUP, TRIGGER, "触发者", "不确认") is True
+
+    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 10 + delta
+    body = sent_text(sent)
+    assert f"好感 {delta:+d}" in body
+    assert f"当前 {10 + delta}" in body
+    assert "已放弃制作表情" in body
+    assert not any(segment.type == "image" for message in sent for segment in message)
+    assert coordinator.meme_confirms == {}
+
+
+async def test_wheel_meme_confirm_timeout_rolls_affection(tmp_path: Path) -> None:
+    memes = FakeMemes()
+    coordinator = make_coordinator(
+        tmp_path, rng=SequenceRng([0], value=0.2), memes=memes
+    )
+    coordinator.meme_confirm_timeout = 0.02
+    await give(coordinator.service, TRIGGER, 10)
+    pending, sent, _ = await start(coordinator)
+    await operate(coordinator, pending)
+    confirm = coordinator.meme_confirms[(GROUP, TRIGGER)]
+    assert confirm.task is not None
+
+    await asyncio.wait_for(confirm.task, 2)
+
+    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 12
+    assert coordinator.meme_confirms == {}
+    body = sent_text(sent)
+    assert "表情确认超时" in body
+    assert "好感 +2，当前 12" in body
+    assert not any(segment.type == "image" for message in sent for segment in message)
+
+
+async def test_wheel_meme_confirms_run_in_parallel(tmp_path: Path) -> None:
+    memes = FakeMemes()
+    coordinator = make_coordinator(
+        tmp_path, rng=SequenceRng([0, 0], value=0.2), memes=memes
+    )
+    await give(coordinator.service, TRIGGER, 10)
+    await give(coordinator.service, OTHER, 10)
+    pending, sent, _ = await start(coordinator)
+    await coordinator.answer(GROUP, OTHER, "路人", "参与")
+
+    await operate(coordinator, pending)
+    await asyncio.sleep(0)
+
+    assert GROUP not in coordinator.pending
+    assert set(coordinator.meme_confirms) == {(GROUP, TRIGGER), (GROUP, OTHER)}
+    assert await coordinator.answer(GROUP, TRIGGER, "触发者", "确认") is True
+    assert await coordinator.answer(GROUP, OTHER, "路人", "不确认") is True
+
+    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 10
+    assert (await coordinator.service.profile(GROUP, OTHER)).affection == 12
+    body = sent_text(sent)
+    assert "已确认，馒头为你做了一张表情" in body
+    assert "已放弃制作表情，好感 +2，当前 12" in body
+    assert coordinator.meme_confirms == {}
+    assert any(segment.type == "image" for message in sent for segment in message)
+
+
+async def test_wheel_meme_confirm_replaced_by_new_draw(tmp_path: Path) -> None:
+    memes = FakeMemes()
+    coordinator = make_coordinator(
+        tmp_path, rng=SequenceRng([0, 50, 0]), memes=memes
+    )
+    coordinator.meme_confirm_timeout = 5
+    await give(coordinator.service, TRIGGER, 10)
+    await give(coordinator.service, OTHER, 10)
+    pending, _, _ = await start(coordinator)
+    await operate(coordinator, pending)
+    old = coordinator.meme_confirms[(GROUP, TRIGGER)]
+    assert old.task is not None
+
+    pending2, _, _ = await start(coordinator, user_id=OTHER, nickname="路人")
+    await coordinator.answer(GROUP, TRIGGER, "触发者", "参与")
+    await operate(coordinator, pending2, user_id=OTHER)
+
+    new = coordinator.meme_confirms[(GROUP, TRIGGER)]
+    assert new is not old
+    assert old.accepting is False
+    with suppress(asyncio.CancelledError):
+        await old.task
+    assert old.task.done()
+    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 10
+    assert (await coordinator.service.profile(GROUP, OTHER)).affection == 11
+    await cancel_meme_confirm(coordinator)
+
+
+async def test_wheel_meme_confirm_does_not_block_new_wheel(tmp_path: Path) -> None:
+    memes = FakeMemes()
+    coordinator = make_coordinator(tmp_path, rng=SequenceRng([0, 50]), memes=memes)
+    coordinator.meme_confirm_timeout = 5
+    await give(coordinator.service, TRIGGER, 10)
+    await give(coordinator.service, OTHER, 10)
+    pending, _, _ = await start(coordinator)
+    await operate(coordinator, pending)
+    assert (GROUP, TRIGGER) in coordinator.meme_confirms
+
+    pending2, _, _ = await start(coordinator, user_id=OTHER, nickname="路人")
+    await operate(coordinator, pending2, user_id=OTHER)
+
+    assert GROUP not in coordinator.pending
+    assert (GROUP, TRIGGER) in coordinator.meme_confirms
+    assert (await coordinator.service.profile(GROUP, OTHER)).affection == 11
+    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 10
+    await cancel_meme_confirm(coordinator)
+
+
+async def test_wheel_meme_confirmed_asset_missing_reports_without_redraw(
+    tmp_path: Path,
+) -> None:
+    memes = FakeMemes(missing_users={TRIGGER})
+    resources = FakeResources()
+    coordinator = make_coordinator(
+        tmp_path, rng=SequenceRng([0]), memes=memes, resources=resources
+    )
+    pending, sent, _ = await start(coordinator)
+    await operate(coordinator, pending)
+
+    assert await coordinator.answer(GROUP, TRIGGER, "触发者", "确认") is True
+
+    assert resources.calls == 1
+    assert "表情素材尚未下载完成" in sent_text(sent)
+    assert not any(segment.type == "image" for message in sent for segment in message)
+    assert coordinator.meme_confirms == {}
+    assert coordinator.meme_confirms.get((GROUP, TRIGGER)) is None
+
+
+async def test_wheel_meme_confirmed_generation_failure_reports(tmp_path: Path) -> None:
+    memes = FakeMemes(generate_error=MemeGenerationError("boom"))
+    coordinator = make_coordinator(tmp_path, rng=SequenceRng([0]), memes=memes)
+    pending, sent, _ = await start(coordinator)
+    await operate(coordinator, pending)
+
+    assert await coordinator.answer(GROUP, TRIGGER, "触发者", "确认") is True
+
+    assert "本次表情生成失败，不重抽" in sent_text(sent)
+    assert not any(segment.type == "image" for message in sent for segment in message)
+    assert coordinator.meme_confirms == {}

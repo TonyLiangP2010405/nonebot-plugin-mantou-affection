@@ -2,7 +2,7 @@ from pathlib import Path
 from time import time
 
 import pytest
-from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message
+from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message, MessageSegment
 from nonebot.adapters.onebot.v11.event import Sender
 
 from nonebot_plugin_mantou_affection.commands import (
@@ -104,7 +104,7 @@ def test_format_probability(value: float, expected: str) -> None:
 def test_registered_matchers_include_probability_command() -> None:
     from nonebot_plugin_mantou_affection import matchers
 
-    assert len(matchers) == 13
+    assert len(matchers) == 14
     (
         _profile_cmd,
         _interact_cmd,
@@ -119,6 +119,7 @@ def test_registered_matchers_include_probability_command() -> None:
         pk_bank_cmd,
         wheel_cmd,
         group_quiz_cmd,
+        meme_whitelist_cmd,
     ) = matchers
     assert probability_cmd.priority == 10
     assert probability_cmd.block is True
@@ -140,6 +141,7 @@ def test_registered_matchers_include_probability_command() -> None:
         pk_bank_cmd: "handle_pk_bank",
         wheel_cmd: "handle_wheel_probability",
         group_quiz_cmd: "handle_group_quiz_probability",
+        meme_whitelist_cmd: "handle_meme_whitelist",
     }
     for matcher, handler_name in expected_handlers.items():
         assert matcher.priority == 10
@@ -237,3 +239,39 @@ async def test_wheel_probability_command_query_and_set(tmp_path: Path, monkeypat
     await handler.call(Message("not-a-probability"))
     assert "请输入 0~1" in sent[-1]
     assert await service.wheel_probability() == 0.002
+
+
+async def test_meme_whitelist_command_toggles_only_self(
+    tmp_path: Path, monkeypatch
+) -> None:
+    service = AffectionService(AffectionStore(tmp_path / "affection.json"), Config())
+    meme_whitelist_cmd = register_commands(service, Config())[13]
+    sent: list[str] = []
+
+    async def fake_finish(message: Message | str = "", **kwargs) -> None:
+        sent.append(str(message))
+
+    monkeypatch.setattr(meme_whitelist_cmd, "finish", fake_finish)
+    handler = meme_whitelist_cmd.handlers[0]
+
+    await handler.call(_event(group_id=90001, user_id=90002), Message(""))
+    assert "已加入表情免确认白名单" in sent[-1]
+    assert await service.meme_confirm_whitelist() == {"90002"}
+
+    reopened = AffectionService(AffectionStore(tmp_path / "affection.json"), Config())
+    assert await reopened.meme_confirm_whitelist() == {"90002"}
+
+    # 白名单全局生效: 换个群再发一次仍然切换的是同一个人
+    await handler.call(_event(group_id=90002, user_id=90002), Message(""))
+    assert "已退出表情免确认白名单" in sent[-1]
+    assert await service.meme_confirm_whitelist() == set()
+
+    # 带参数(哪怕 @ 别人)只提示管理自己, 不会改动任何人的状态
+    await handler.call(_event(), Message(MessageSegment.at("90099")))
+    assert "只能管理自己" in sent[-1]
+    assert await service.meme_confirm_whitelist() == set()
+
+    # SUPERUSER 也不能借这个命令管理别人
+    await handler.call(_event(user_id=10001), Message(MessageSegment.at("90002")))
+    assert "只能管理自己" in sent[-1]
+    assert await service.meme_confirm_whitelist() == set()

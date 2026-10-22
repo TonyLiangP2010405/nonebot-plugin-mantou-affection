@@ -32,6 +32,7 @@ BET_PROBABILITY_SETTING = "bet_probability"
 PK_PROBABILITY_SETTING = "pk_probability"
 GROUP_QUIZ_PROBABILITY_SETTING = "group_quiz_probability"
 WHEEL_PROBABILITY_SETTING = "wheel_probability"
+MEME_CONFIRM_WHITELIST_SETTING = "meme_confirm_whitelist"
 AMBIENT_SCENE = "mantou.ambient"
 
 
@@ -278,6 +279,34 @@ class AffectionService:
 
     async def set_wheel_probability(self, value: float) -> None:
         await self.store.set_setting(WHEEL_PROBABILITY_SETTING, float(value))
+
+    async def meme_confirm_whitelist(self) -> set[str]:
+        """读取表情免确认白名单（全局，不分群）。"""
+
+        stored: Any = await self.store.get_setting(MEME_CONFIRM_WHITELIST_SETTING, [])
+        if not isinstance(stored, list):
+            return set()
+        return {
+            str(value)
+            for value in stored
+            if isinstance(value, (str, int)) and not isinstance(value, bool)
+        }
+
+    async def toggle_meme_confirm_whitelist(self, user_id: str) -> bool:
+        """切换某人的表情免确认状态，返回切换后是否在白名单。"""
+
+        user = str(user_id)
+        whitelist = await self.meme_confirm_whitelist()
+        if user in whitelist:
+            whitelist.discard(user)
+            enabled = False
+        else:
+            whitelist.add(user)
+            enabled = True
+        await self.store.set_setting(
+            MEME_CONFIRM_WHITELIST_SETTING, sorted(whitelist)
+        )
+        return enabled
 
     async def _stored_int(self, key: str, default: int) -> int:
         """读取运行时覆盖的整数设置，缺省或数据损坏时退回配置默认值。"""

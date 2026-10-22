@@ -183,6 +183,80 @@ async def test_blocked_meme_falls_back_to_other_candidates() -> None:
     assert len(normal.calls) == 1
 
 
+def test_draw_returns_unblocked_template_and_kind() -> None:
+    blocked = FakeMeme("kurogames_camellya", 1, 1, keywords=["椿"])
+    normal = FakeMeme("petpet", 1, 1, keywords=["摸"])
+    adapter = MemeGeneratorAdapter(
+        backend=FakeBackend([blocked, normal]),
+        rng=random.Random(0),
+        avatar_fetcher=avatars,
+    )
+
+    meme, kind = adapter.draw()
+
+    assert meme is normal
+    assert kind == "single"
+    assert blocked.calls == []
+    assert normal.calls == []
+
+
+def test_draw_reports_text_kind() -> None:
+    meme = FakeMeme("text", 0, 0, min_texts=1, max_texts=1)
+    drawn, kind = adapter_for(meme).draw()
+
+    assert drawn is meme
+    assert kind == "text"
+
+
+def test_draw_without_compatible_templates_raises() -> None:
+    backend = FakeBackend([FakeMeme("three", 3, 3)])
+    adapter = MemeGeneratorAdapter(backend=backend, avatar_fetcher=avatars)
+
+    with pytest.raises(MemeGenerationError, match="没有兼容"):
+        adapter.draw()
+
+
+async def test_generate_with_uses_only_given_template() -> None:
+    first = FakeMeme("first", 1, 1)
+    second = FakeMeme("second", 1, 1)
+    adapter = MemeGeneratorAdapter(
+        backend=FakeBackend([first, second]), avatar_fetcher=avatars
+    )
+
+    result = await adapter.generate_with(
+        second, "single", bot=SimpleNamespace(self_id=999), user_id="123", nickname="群昵称"
+    )
+
+    assert result == b"generated"
+    assert first.calls == []
+    assert len(second.calls) == 1
+    images, texts, args = second.calls[0]
+    assert images == [b"avatar:123"]
+    assert texts == []
+    assert args == {}
+
+
+async def test_generate_composes_draw_and_generate_with(monkeypatch) -> None:
+    first = FakeMeme("first", 1, 1)
+    second = FakeMeme("second", 1, 1)
+    adapter = MemeGeneratorAdapter(
+        backend=FakeBackend([first, second]), avatar_fetcher=avatars
+    )
+
+    def pick_second():
+        return second, "single"
+
+    monkeypatch.setattr(adapter, "draw", pick_second)
+
+    result = await adapter.generate(
+        bot=SimpleNamespace(self_id=999), user_id="123", nickname="群昵称"
+    )
+
+    assert result == b"generated"
+    assert first.calls == []
+    assert len(second.calls) == 1
+
+
 async def test_extra_blocked_terms_take_effect() -> None:
     meme = FakeMeme("rosetta", 1, 1, keywords=["罗塞塔"])
     adapter = adapter_for(meme, blocked_terms=["罗塞塔"])

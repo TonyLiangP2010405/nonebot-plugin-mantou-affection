@@ -152,6 +152,12 @@ def register_commands(
         priority=10,
         block=True,
     )
+    meme_whitelist_cmd = on_command(
+        "馒头表情免确认",
+        rule=GROUP_ONLY,
+        priority=10,
+        block=True,
+    )
     pk_coordinator = pk or PkCoordinator(
         service, config, PkQuestionLibrary(BUNDLED_PK_PATH)
     )
@@ -228,6 +234,7 @@ def register_commands(
             "/馒头互动 —— 和馒头玩一会儿\n"
             "/馒头好感 —— 查看自己的好感档案\n"
             "/馒头好感榜 —— 查看本群排行榜\n"
+            "/馒头表情免确认 —— 加入或退出表情免确认白名单（只能管理自己）\n"
             "/馒头好感调整 @群友 +10 —— SUPERUSER 调整好感\n"
             "/馒头好感重置 确认 —— SUPERUSER 清空所有好感数据\n"
             "/馒头找字概率 5% —— SUPERUSER 查看或调整找字小游戏概率\n"
@@ -488,6 +495,35 @@ def register_commands(
             f"群友问答概率已调整为 {_format_probability(value)}"
         )
 
+    @meme_whitelist_cmd.handle()
+    async def handle_meme_whitelist(
+        event: GroupMessageEvent, args: Message = CommandArg()
+    ) -> None:
+        if args.extract_plain_text().strip() or any(
+            segment.type != "text" for segment in args
+        ):
+            await meme_whitelist_cmd.finish(
+                "这个命令只能管理自己的表情免确认状态，直接发送 "
+                "/馒头表情免确认 即可切换。"
+            )
+            return
+        try:
+            enabled = await service.toggle_meme_confirm_whitelist(event.get_user_id())
+        except Exception:
+            logger.exception("[mantou-affection] 切换表情免确认白名单失败")
+            await meme_whitelist_cmd.finish("操作失败，请检查数据目录权限后重试。")
+            return
+        if enabled:
+            await meme_whitelist_cmd.finish(
+                "已加入表情免确认白名单，以后转盘抽到表情将直接制作，不再询问"
+                "（再发一次 /馒头表情免确认 可退出）"
+            )
+            return
+        await meme_whitelist_cmd.finish(
+            "已退出表情免确认白名单，以后转盘抽到表情会先询问确认"
+            "（再发一次 /馒头表情免确认 可重新加入）"
+        )
+
     return (
         profile_cmd,
         interact_cmd,
@@ -502,4 +538,5 @@ def register_commands(
         pk_bank_cmd,
         wheel_cmd,
         group_quiz_cmd,
+        meme_whitelist_cmd,
     )
