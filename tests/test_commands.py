@@ -169,6 +169,15 @@ def _event(group_id: int = 90001, user_id: int = 90002) -> GroupMessageEvent:
     )
 
 
+def _at_message(*targets: str) -> Message:
+    message = Message()
+    for index, target in enumerate(targets):
+        if index:
+            message.append(MessageSegment.text(" "))
+        message.append(MessageSegment.at(target))
+    return message
+
+
 async def test_profile_command_reports_daily_gain(tmp_path: Path, monkeypatch) -> None:
     service = AffectionService(AffectionStore(tmp_path / "affection.json"), Config())
     today = service._now().date().isoformat()
@@ -241,9 +250,7 @@ async def test_wheel_probability_command_query_and_set(tmp_path: Path, monkeypat
     assert await service.wheel_probability() == 0.002
 
 
-async def test_meme_whitelist_command_toggles_only_self(
-    tmp_path: Path, monkeypatch
-) -> None:
+def _meme_whitelist_handler(tmp_path: Path, monkeypatch) -> tuple:
     service = AffectionService(AffectionStore(tmp_path / "affection.json"), Config())
     meme_whitelist_cmd = register_commands(service, Config())[13]
     sent: list[str] = []
@@ -252,7 +259,13 @@ async def test_meme_whitelist_command_toggles_only_self(
         sent.append(str(message))
 
     monkeypatch.setattr(meme_whitelist_cmd, "finish", fake_finish)
-    handler = meme_whitelist_cmd.handlers[0]
+    return service, meme_whitelist_cmd.handlers[0], sent
+
+
+async def test_meme_whitelist_command_toggles_only_self(
+    tmp_path: Path, monkeypatch
+) -> None:
+    service, handler, sent = _meme_whitelist_handler(tmp_path, monkeypatch)
 
     await handler.call(_event(group_id=90001, user_id=90002), Message(""))
     assert "已加入表情免确认白名单" in sent[-1]
@@ -266,12 +279,88 @@ async def test_meme_whitelist_command_toggles_only_self(
     assert "已退出表情免确认白名单" in sent[-1]
     assert await service.meme_confirm_whitelist() == set()
 
-    # 带参数(哪怕 @ 别人)只提示管理自己, 不会改动任何人的状态
+    # 普通群友带参数(哪怕 @ 别人)只提示管理自己, 不会改动任何人的状态
     await handler.call(_event(), Message(MessageSegment.at("90099")))
     assert "只能管理自己" in sent[-1]
     assert await service.meme_confirm_whitelist() == set()
 
-    # SUPERUSER 也不能借这个命令管理别人
-    await handler.call(_event(user_id=10001), Message(MessageSegment.at("90002")))
+    await handler.call(_event(), Message("90099"))
     assert "只能管理自己" in sent[-1]
+    assert await service.meme_confirm_whitelist() == set()
+
+    multiple = _at_message("90098", "90099")
+    await handler.call(_event(), multiple)
+    assert "只能管理自己" in sent[-1]
+    assert await service.meme_confirm_whitelist() == set()
+
+
+async def test_meme_whitelist_superuser_toggles_target_by_at(
+    tmp_path: Path, monkeypatch
+) -> None:
+    service, handler, sent = _meme_whitelist_handler(tmp_path, monkeypatch)
+    await service.store.update_profile("90001", "90003", "桃友", lambda _profile: None)
+
+    await handler.call(_event(user_id=10001), Message(MessageSegment.at("90003")))
+    assert "已为 桃友(90003) 加入表情免确认白名单" in sent[-1]
+    assert await service.meme_confirm_whitelist() == {"90003"}
+
+    await handler.call(_event(user_id=10001), Message(MessageSegment.at("90003")))
+    assert "已为 桃友(90003) 退出表情免确认白名单" in sent[-1]
+    assert await service.meme_confirm_whitelist() == set()
+
+
+async def test_meme_whitelist_superuser_toggles_target_by_qq(
+    tmp_path: Path, monkeypatch
+) -> None:
+    service, handler, sent = _meme_whitelist_handler(tmp_path, monkeypatch)
+
+    await handler.call(_event(user_id=10001), Message("90004"))
+    assert "已为 90004 加入表情免确认白名单" in sent[-1]
+    assert await service.meme_confirm_whitelist() == {"90004"}
+
+    await handler.call(_event(user_id=10001), Message("90004"))
+    assert "已为 90004 退出表情免确认白名单" in sent[-1]
+    assert await service.meme_confirm_whitelist() == set()
+
+
+async def test_meme_whitelist_superuser_rejects_multiple_targets(
+    tmp_path: Path, monkeypatch
+) -> None:
+    service, handler, sent = _meme_whitelist_handler(tmp_path, monkeypatch)
+
+    two_at = _at_message("90003", "90004")
+    await handler.call(_event(user_id=10001), two_at)
+    assert "一次只能操作一个人" in sent[-1]
+    assert await service.meme_confirm_whitelist() == set()
+
+    await handler.call(_event(user_id=10001), Message("90003 90004"))
+    assert "一次只能操作一个人" in sent[-1]
+    assert await service.meme_confirm_whitelist() == set()
+
+    await handler.call(_event(user_id=10001), Message("90003，90004"))
+    assert "一次只能操作一个人" in sent[-1]
+    assert await service.meme_confirm_whitelist() == set()
+
+    mixed = _at_message("90003")
+    mixed.append(MessageSegment.text(" 90004"))
+    await handler.call(_event(user_id=10001), mixed)
+    assert "一次只能操作一个人" in sent[-1]
+    assert await service.meme_confirm_whitelist() == set()
+
+    await handler.call(_event(user_id=10001), Message("不是 QQ 号"))
+    assert "只能 @ 一位群友或填写一个 QQ 号" in sent[-1]
+    assert await service.meme_confirm_whitelist() == set()
+
+
+async def test_meme_whitelist_superuser_without_args_toggles_self(
+    tmp_path: Path, monkeypatch
+) -> None:
+    service, handler, sent = _meme_whitelist_handler(tmp_path, monkeypatch)
+
+    await handler.call(_event(user_id=10001), Message(""))
+    assert "已加入表情免确认白名单" in sent[-1]
+    assert await service.meme_confirm_whitelist() == {"10001"}
+
+    await handler.call(_event(user_id=10001), Message(""))
+    assert "已退出表情免确认白名单" in sent[-1]
     assert await service.meme_confirm_whitelist() == set()

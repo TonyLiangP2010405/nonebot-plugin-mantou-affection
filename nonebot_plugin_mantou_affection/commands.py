@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from nonebot import logger, on_command
+import re
+
+from nonebot import get_driver, logger, on_command
 from nonebot.adapters import Event
 from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message, MessageSegment
 from nonebot.params import CommandArg
@@ -57,6 +59,55 @@ def _format_wait(seconds: int) -> str:
 def _format_probability(value: float) -> str:
     percent = f"{value * 100:.6f}".rstrip("0").rstrip(".")
     return f"{percent or '0'}%"
+
+
+MEME_WHITELIST_SELF_ONLY = (
+    "这个命令只能管理自己的表情免确认状态，直接发送 "
+    "/馒头表情免确认 即可切换。"
+)
+MEME_WHITELIST_TARGET_INVALID = "只能 @ 一位群友或填写一个 QQ 号。"
+MEME_WHITELIST_MULTIPLE_TARGETS = (
+    "一次只能操作一个人，请只 @ 一位群友或填写一个 QQ 号。"
+)
+_QQ_SPLIT = re.compile(r"[\s,，、;；]+")
+
+
+def _is_qq(value: str) -> bool:
+    return value.isascii() and value.isdigit()
+
+
+def _meme_whitelist_target(args: Message) -> tuple[str | None, str | None]:
+    """解析代管目标，返回 (target_id, error)；没有参数时 target_id 为 None。"""
+
+    if any(segment.type not in {"at", "text"} for segment in args):
+        return None, MEME_WHITELIST_TARGET_INVALID
+    at_targets = [str(segment.data.get("qq")) for segment in args if segment.type == "at"]
+    if any(not _is_qq(target) for target in at_targets):
+        return None, MEME_WHITELIST_TARGET_INVALID
+    text = args.extract_plain_text().strip()
+    numbers = [part for part in _QQ_SPLIT.split(text) if part]
+    if any(not _is_qq(number) for number in numbers):
+        return None, MEME_WHITELIST_TARGET_INVALID
+    targets = [*at_targets, *numbers]
+    if not targets:
+        return None, None
+    if len(targets) > 1:
+        return None, MEME_WHITELIST_MULTIPLE_TARGETS
+    return targets[0], None
+
+
+async def _meme_target_label(
+    service: AffectionService, group_id: str, user_id: str
+) -> str:
+    """代管回复里的目标称呼：有昵称时显示「昵称(QQ)」，否则只显示 QQ。"""
+
+    try:
+        profile = await service.profile(group_id, user_id)
+    except Exception:
+        logger.exception("[mantou-affection] 读取白名单目标昵称失败")
+        return user_id
+    name = normalize_nickname(profile.nickname, user_id)
+    return user_id if name == user_id else f"{name}({user_id})"
 
 def register_commands(
     service: AffectionService,
@@ -234,7 +285,8 @@ def register_commands(
             "/馒头互动 —— 和馒头玩一会儿\n"
             "/馒头好感 —— 查看自己的好感档案\n"
             "/馒头好感榜 —— 查看本群排行榜\n"
-            "/馒头表情免确认 —— 加入或退出表情免确认白名单（只能管理自己）\n"
+            "/馒头表情免确认 —— 加入或退出表情免确认白名单"
+            "（普通群友只能管理自己，SUPERUSER 可代管）\n"
             "/馒头好感调整 @群友 +10 —— SUPERUSER 调整好感\n"
             "/馒头好感重置 确认 —— SUPERUSER 清空所有好感数据\n"
             "/馒头找字概率 5% —— SUPERUSER 查看或调整找字小游戏概率\n"
@@ -499,19 +551,37 @@ def register_commands(
     async def handle_meme_whitelist(
         event: GroupMessageEvent, args: Message = CommandArg()
     ) -> None:
-        if args.extract_plain_text().strip() or any(
-            segment.type != "text" for segment in args
-        ):
+        sender = event.get_user_id()
+        is_superuser = sender in get_driver().config.superusers
+        target, error = _meme_whitelist_target(args)
+        if error is not None:
             await meme_whitelist_cmd.finish(
-                "这个命令只能管理自己的表情免确认状态，直接发送 "
-                "/馒头表情免确认 即可切换。"
+                error if is_superuser else MEME_WHITELIST_SELF_ONLY
             )
             return
+        if target is None:
+            target = sender
+        elif not is_superuser:
+            await meme_whitelist_cmd.finish(MEME_WHITELIST_SELF_ONLY)
+            return
         try:
-            enabled = await service.toggle_meme_confirm_whitelist(event.get_user_id())
+            enabled = await service.toggle_meme_confirm_whitelist(target)
         except Exception:
             logger.exception("[mantou-affection] 切换表情免确认白名单失败")
             await meme_whitelist_cmd.finish("操作失败，请检查数据目录权限后重试。")
+            return
+        if target != sender:
+            label = await _meme_target_label(service, str(event.group_id), target)
+            if enabled:
+                await meme_whitelist_cmd.finish(
+                    f"已为 {label} 加入表情免确认白名单，"
+                    "以后转盘抽到表情将直接制作，不再询问"
+                )
+            else:
+                await meme_whitelist_cmd.finish(
+                    f"已为 {label} 退出表情免确认白名单，"
+                    "以后转盘抽到表情会先询问确认"
+                )
             return
         if enabled:
             await meme_whitelist_cmd.finish(
