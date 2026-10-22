@@ -1,6 +1,6 @@
 [project]
 name = "nonebot-plugin-mantou-affection"
-version = "0.18.0"
+version = "0.19.0"
 description = "为群聊机器人馒头提供互动、等级称号和跨插件共享状态的好感度系统"
 authors = [{ name = "TonyLiangP2010405" }]
 license = "MIT"
@@ -16,7 +16,7 @@ dependencies = [
 
 [project.optional-dependencies]
 memes = [
-    "meme-generator>=0.2.0,<0.3.0",
+    "meme-generator>=0.1.14,<0.2.0",
 ]
 
 [project.urls]

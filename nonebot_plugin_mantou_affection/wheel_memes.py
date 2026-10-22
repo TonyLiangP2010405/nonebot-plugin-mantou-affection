@@ -3,9 +3,15 @@ from __future__ import annotations
 import asyncio
 import importlib
 import random
+import shutil
+import threading
 import time
 import urllib.request
-from collections.abc import Awaitable, Callable
+import zipfile
+from collections.abc import Awaitable, Callable, Iterable
+from dataclasses import dataclass
+from io import BytesIO
+from pathlib import Path
 from typing import Any
 
 from nonebot import logger
@@ -22,10 +28,16 @@ class MemeAssetMissing(MemeGenerationError):
 
 def _load_backend() -> Any | None:
     try:
-        return importlib.import_module("meme_generator")
+        backend = importlib.import_module("meme_generator")
     except (ImportError, OSError) as error:
         logger.warning(f"[mantou-affection] memes 生成器不可用: {error}")
         return None
+    if not hasattr(backend, "MemeParamsType"):
+        logger.warning(
+            "[mantou-affection] 当前 meme-generator 版本不兼容，"
+            "请安装 0.1.x（推荐 0.1.14）以支持外部表情仓库"
+        )
+    return backend
 
 
 def _download_avatar(user_id: str) -> bytes:
@@ -46,11 +58,13 @@ class MemeGeneratorAdapter:
         rng: random.Random | None = None,
         avatar_fetcher: Callable[[str], Awaitable[bytes]] | None = None,
         bot_name: str = "馒头",
+        repos: MemeRepoManager | None = None,
     ):
         self.backend = backend if backend is not None else _load_backend()
         self.rng = rng or random.Random()
         self.avatar_fetcher = avatar_fetcher or _fetch_avatar
         self.bot_name = bot_name
+        self.repos = repos
 
     @staticmethod
     def _kind(params: Any) -> str | None:
@@ -66,13 +80,17 @@ class MemeGeneratorAdapter:
         backend = self.backend
         if backend is None:
             raise MemeGenerationError("meme-generator 未安装")
+        if not hasattr(backend, "MemeParamsType"):
+            raise MemeGenerationError("meme-generator 版本不兼容，需要 0.1.x（如 0.1.14）")
+        if self.repos is not None:
+            self.repos.kickoff()
         try:
             available = backend.get_memes()
         except Exception as error:
             raise MemeGenerationError("读取表情列表失败") from error
         candidates = []
         for meme in available:
-            kind = self._kind(meme.info.params)
+            kind = self._kind(meme.params_type)
             if kind is not None:
                 candidates.append((meme, kind))
         if not candidates:
@@ -82,33 +100,52 @@ class MemeGeneratorAdapter:
         images = []
         if kind != "text":
             ids = [user_id] if kind == "single" else [str(bot.self_id), user_id]
-            for index, current_id in enumerate(ids):
+            for current_id in ids:
                 try:
                     data = await self.avatar_fetcher(current_id)
                 except Exception as error:
                     raise MemeGenerationError("头像下载失败") from error
-                name = nickname if kind == "single" or index == 1 else self.bot_name
-                images.append(backend.Image(name, data))
+                images.append(data)
         try:
-            result = await run_sync(meme.generate)(images, texts, {})
+            result = await run_sync(meme)(images=images, texts=texts, args={})
+        except FileNotFoundError as error:
+            raise MemeAssetMissing(str(error)) from error
+        except MemeGenerationError:
+            raise
         except Exception as error:
             raise MemeGenerationError("表情生成失败") from error
         if isinstance(result, bytes):
             return result
-        asset_error = getattr(backend, "ImageAssetMissing", None)
-        if asset_error is not None and isinstance(result, asset_error):
-            raise MemeAssetMissing(str(getattr(result, "path", "未知素材")))
-        detail = getattr(result, "error", None) or getattr(result, "feedback", None)
-        raise MemeGenerationError(str(detail or type(result).__name__))
+        getvalue = getattr(result, "getvalue", None)
+        if callable(getvalue):
+            return getvalue()
+        raise MemeGenerationError(f"表情结果格式异常: {type(result).__name__}")
 
 
 def _load_resource_check() -> Callable[[], None] | None:
     try:
-        module = importlib.import_module("meme_generator.resources")
-        return module.check_resources_in_background
+        module = importlib.import_module("meme_generator.download")
+        coroutine = module.check_resources
     except (ImportError, AttributeError, OSError) as error:
         logger.warning(f"[mantou-affection] memes 素材检查不可用: {error}")
         return None
+
+    async def runner() -> None:
+        try:
+            await coroutine()
+        except Exception:
+            logger.exception("[mantou-affection] memes 素材检查失败")
+
+    def schedule() -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            threading.Thread(target=lambda: asyncio.run(runner()), daemon=True).start()
+        else:
+            task = loop.create_task(runner())
+            task.add_done_callback(lambda _task: None)
+
+    return schedule
 
 
 class MemeResourceManager:
@@ -150,3 +187,126 @@ class MemeResourceManager:
         if self._last_check is not None and now - self._last_check < self.retry_seconds:
             return False
         return self._start_check()
+
+
+@dataclass(frozen=True)
+class ExtraMemeRepo:
+    name: str
+    slug: str
+    subdir: str
+
+
+EXTRA_MEME_REPOS: tuple[ExtraMemeRepo, ...] = (
+    ExtraMemeRepo("meme-generator-contrib", "MemeCrafters/meme-generator-contrib", "memes"),
+    ExtraMemeRepo("meme_emoji", "anyliew/meme_emoji", "emoji"),
+    ExtraMemeRepo("tudou-meme", "LRZ9712/tudou-meme", "meme"),
+)
+
+
+def repo_download_urls(slug: str) -> list[str]:
+    archive = f"https://github.com/{slug}/archive/refs/heads/main.zip"
+    return [
+        f"https://codeload.github.com/{slug}/zip/refs/heads/main",
+        f"https://ghproxy.net/{archive}",
+        f"https://gh-proxy.com/{archive}",
+        f"https://ghfast.top/{archive}",
+    ]
+
+
+class MemeRepoManager:
+    """外部表情仓库的自检测与自下载，下载完成后通过 load_memes 挂载。"""
+
+    def __init__(
+        self,
+        *,
+        backend: Any | None = None,
+        base_dir: Path | None = None,
+        repos: Iterable[ExtraMemeRepo] = EXTRA_MEME_REPOS,
+        enabled: bool = True,
+        opener: Callable[..., Any] | None = None,
+    ):
+        self.backend = backend if backend is not None else _load_backend()
+        self.base_dir = Path(base_dir) if base_dir is not None else None
+        self.repos = tuple(repos)
+        self.enabled = enabled
+        self.opener = opener or urllib.request.urlopen
+        self._started = False
+        self._loaded = False
+        self._task: asyncio.Task | None = None
+
+    def repo_dir(self, repo: ExtraMemeRepo) -> Path:
+        if self.base_dir is None:
+            raise MemeGenerationError("表情仓库目录未配置")
+        return self.base_dir / repo.name
+
+    def memes_dir(self, repo: ExtraMemeRepo) -> Path:
+        return self.repo_dir(repo) / repo.subdir
+
+    def _repo_ready(self, repo: ExtraMemeRepo) -> bool:
+        directory = self.memes_dir(repo)
+        return directory.is_dir() and any(directory.iterdir())
+
+    def _download_repo(self, repo: ExtraMemeRepo) -> None:
+        data: bytes | None = None
+        last_error: Exception | None = None
+        for url in repo_download_urls(repo.slug):
+            try:
+                with self.opener(url, timeout=60) as response:
+                    data = response.read()
+                break
+            except Exception as error:
+                last_error = error
+                logger.warning(f"[mantou-affection] 表情仓库 {repo.name} 下载源不可用: {error}")
+        if data is None:
+            raise MemeGenerationError(f"表情仓库 {repo.name} 下载失败: {last_error}")
+        self._extract_repo(repo, data)
+
+    def _extract_repo(self, repo: ExtraMemeRepo, data: bytes) -> None:
+        target = self.repo_dir(repo)
+        staging = target.parent / f".{target.name}.staging"
+        shutil.rmtree(staging, ignore_errors=True)
+        staging.mkdir(parents=True, exist_ok=True)
+        try:
+            with zipfile.ZipFile(BytesIO(data)) as archive:
+                archive.extractall(staging)
+            entries = list(staging.iterdir())
+            shutil.rmtree(target, ignore_errors=True)
+            if len(entries) == 1 and entries[0].is_dir():
+                entries[0].rename(target)
+                shutil.rmtree(staging, ignore_errors=True)
+            else:
+                staging.rename(target)
+        except Exception:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise
+
+    async def ensure_loaded(self) -> None:
+        if self._loaded or not self.enabled or self.backend is None or self.base_dir is None:
+            return
+        self.base_dir.mkdir(parents=True, exist_ok=True)
+        for repo in self.repos:
+            try:
+                if not self._repo_ready(repo):
+                    logger.info(
+                        f"[mantou-affection] 开始下载表情仓库 {repo.name}（文件较大，请耐心等待）"
+                    )
+                    await run_sync(self._download_repo)(repo)
+                    logger.info(f"[mantou-affection] 表情仓库 {repo.name} 下载完成")
+                await run_sync(self.backend.load_memes)(self.memes_dir(repo))
+                logger.info(f"[mantou-affection] 表情仓库 {repo.name} 已加载")
+            except Exception:
+                logger.exception(f"[mantou-affection] 表情仓库 {repo.name} 加载失败")
+        self._loaded = True
+
+    def kickoff(self) -> None:
+        """调度一次后台同步，重复调用安全。"""
+
+        if self._started or not self.enabled or self.backend is None or self.base_dir is None:
+            return
+        self._started = True
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            threading.Thread(target=lambda: asyncio.run(self.ensure_loaded()), daemon=True).start()
+        else:
+            self._task = loop.create_task(self.ensure_loaded())

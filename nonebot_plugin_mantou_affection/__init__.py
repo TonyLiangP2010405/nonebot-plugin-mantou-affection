@@ -41,7 +41,7 @@ from .pk import BUNDLED_PK_PATH, PkCoordinator, PkQuestionLibrary
 from .service import AffectionService
 from .storage import AffectionStore
 from .wheel import WheelCoordinator
-from .wheel_memes import MemeGeneratorAdapter, MemeResourceManager
+from .wheel_memes import MemeGeneratorAdapter, MemeRepoManager, MemeResourceManager
 
 plugin_config = get_plugin_config(Config)
 data_file = Path(get_plugin_data_dir()) / "affection.json"
@@ -74,8 +74,14 @@ pk_coordinator = PkCoordinator(
 )
 event_coordinator.attach_pk(pk_coordinator)
 meme_generator_adapter = MemeGeneratorAdapter(
-    bot_name=plugin_config.mantou_affection_bot_name
+    bot_name=plugin_config.mantou_affection_bot_name,
 )
+meme_repo_manager = MemeRepoManager(
+    backend=meme_generator_adapter.backend,
+    base_dir=Path(get_plugin_data_dir()) / "meme_repos",
+    enabled=plugin_config.mantou_affection_memes_extra_repos,
+)
+meme_generator_adapter.repos = meme_repo_manager
 meme_resources = MemeResourceManager()
 wheel_coordinator = WheelCoordinator(
     service,
@@ -120,14 +126,15 @@ def _startup_flag_enabled(value: object) -> bool:
 
 
 @driver.on_startup
-def _check_meme_resources_on_startup() -> None:
-    """启动时只发起一次后台素材检查，不阻塞启动，也不调用同步 check_resources。"""
+async def _check_meme_resources_on_startup() -> None:
+    """启动时发起一次后台素材检查与外部表情仓库同步，不阻塞启动。"""
 
     memes_plugin = get_plugin("nonebot_plugin_memes")
     handled = memes_plugin is not None and _startup_flag_enabled(
         getattr(driver.config, "memes_check_resources_on_startup", True)
     )
     meme_resources.check_on_startup(handled_by_memes_plugin=handled)
+    meme_repo_manager.kickoff()
 
 
 async def add_affection(

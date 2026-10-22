@@ -1,25 +1,30 @@
+import asyncio
 import random
+import zipfile
+from io import BytesIO
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from nonebot_plugin_mantou_affection.wheel_memes import (
+    EXTRA_MEME_REPOS,
+    ExtraMemeRepo,
     MemeAssetMissing,
     MemeGenerationError,
     MemeGeneratorAdapter,
+    MemeRepoManager,
     MemeResourceManager,
+    repo_download_urls,
 )
 
 
-class FakeAssetMissing:
-    def __init__(self, path: str = "petpet/base.png"):
-        self.path = path
-
-
-class FakeImage:
-    def __init__(self, name: str, data: bytes):
-        self.name = name
-        self.data = data
+class FakeParams:
+    def __init__(self, minimum: int, maximum: int, min_texts: int = 0, max_texts: int = 0):
+        self.min_images = minimum
+        self.max_images = maximum
+        self.min_texts = min_texts
+        self.max_texts = max_texts
 
 
 class FakeMeme:
@@ -27,40 +32,47 @@ class FakeMeme:
         self, key: str, minimum: int, maximum: int, min_texts: int = 0, max_texts: int = 0
     ):
         self.key = key
-        self.info = SimpleNamespace(
-            params=SimpleNamespace(
-                min_images=minimum,
-                max_images=maximum,
-                min_texts=min_texts,
-                max_texts=max_texts,
-            )
-        )
-        self.result = b"generated"
+        self.params_type = FakeParams(minimum, maximum, min_texts, max_texts)
+        self.result: object = BytesIO(b"generated")
+        self.error: Exception | None = None
         self.calls = []
 
-    def generate(self, images, texts, options):
-        self.calls.append((images, texts, options))
+    def __call__(self, *, images=(), texts=(), args=None):
+        self.calls.append((list(images), list(texts), args))
+        if self.error is not None:
+            raise self.error
         return self.result
 
 
 class FakeBackend:
-    Image = FakeImage
-    ImageAssetMissing = FakeAssetMissing
+    MemeParamsType = FakeParams
 
-    def __init__(self, memes):
-        self.memes = memes
+    def __init__(self, memes=()):
+        self.memes = list(memes)
+        self.loaded_dirs = []
 
     def get_memes(self):
         return self.memes
+
+    def load_memes(self, directory):
+        self.loaded_dirs.append(Path(directory))
+
+
+class FakeRepos:
+    def __init__(self):
+        self.kickoffs = 0
+
+    def kickoff(self) -> None:
+        self.kickoffs += 1
 
 
 async def avatars(user_id: str) -> bytes:
     return f"avatar:{user_id}".encode()
 
 
-def adapter_for(meme: FakeMeme) -> MemeGeneratorAdapter:
+def adapter_for(meme: FakeMeme, **kwargs) -> MemeGeneratorAdapter:
     return MemeGeneratorAdapter(
-        backend=FakeBackend([meme]), rng=random.Random(0), avatar_fetcher=avatars
+        backend=FakeBackend([meme]), rng=random.Random(0), avatar_fetcher=avatars, **kwargs
     )
 
 
@@ -70,10 +82,10 @@ async def test_text_meme_uses_group_nickname() -> None:
         bot=SimpleNamespace(self_id=999), user_id="123", nickname="群昵称"
     )
     assert result == b"generated"
-    images, texts, options = meme.calls[0]
+    images, texts, args = meme.calls[0]
     assert images == []
     assert texts == ["群昵称"]
-    assert options == {}
+    assert args == {}
 
 
 async def test_single_meme_uses_user_avatar() -> None:
@@ -82,7 +94,7 @@ async def test_single_meme_uses_user_avatar() -> None:
         bot=SimpleNamespace(self_id=999), user_id="123", nickname="群昵称"
     )
     images, texts, _ = meme.calls[0]
-    assert [(image.name, image.data) for image in images] == [("群昵称", b"avatar:123")]
+    assert images == [b"avatar:123"]
     assert texts == []
 
 
@@ -92,10 +104,7 @@ async def test_double_meme_uses_bot_then_user_avatar() -> None:
         bot=SimpleNamespace(self_id=999), user_id="123", nickname="群昵称"
     )
     images, _, _ = meme.calls[0]
-    assert [(image.name, image.data) for image in images] == [
-        ("馒头", b"avatar:999"),
-        ("群昵称", b"avatar:123"),
-    ]
+    assert images == [b"avatar:999", b"avatar:123"]
 
 
 async def test_incompatible_templates_are_not_candidates() -> None:
@@ -110,10 +119,31 @@ async def test_incompatible_templates_are_not_candidates() -> None:
         )
 
 
+async def test_incompatible_backend_version_is_rejected() -> None:
+    class RustStyleBackend:
+        def get_memes(self):
+            return []
+
+    adapter = MemeGeneratorAdapter(backend=RustStyleBackend(), avatar_fetcher=avatars)
+    with pytest.raises(MemeGenerationError, match="版本不兼容"):
+        await adapter.generate(
+            bot=SimpleNamespace(self_id=999), user_id="123", nickname="群昵称"
+        )
+
+
 async def test_asset_missing_has_distinct_exception() -> None:
     meme = FakeMeme("single", 1, 1)
-    meme.result = FakeAssetMissing()
+    meme.error = FileNotFoundError("petpet/base.png")
     with pytest.raises(MemeAssetMissing):
+        await adapter_for(meme).generate(
+            bot=SimpleNamespace(self_id=999), user_id="123", nickname="群昵称"
+        )
+
+
+async def test_generate_failure_is_wrapped() -> None:
+    meme = FakeMeme("single", 1, 1)
+    meme.error = RuntimeError("boom")
+    with pytest.raises(MemeGenerationError, match="表情生成失败"):
         await adapter_for(meme).generate(
             bot=SimpleNamespace(self_id=999), user_id="123", nickname="群昵称"
         )
@@ -124,13 +154,19 @@ async def test_avatar_failure_is_wrapped() -> None:
         raise OSError("offline")
 
     meme = FakeMeme("single", 1, 1)
-    adapter = MemeGeneratorAdapter(
-        backend=FakeBackend([meme]), avatar_fetcher=broken
-    )
+    adapter = MemeGeneratorAdapter(backend=FakeBackend([meme]), avatar_fetcher=broken)
     with pytest.raises(MemeGenerationError, match="头像"):
         await adapter.generate(
             bot=SimpleNamespace(self_id=999), user_id="123", nickname="群昵称"
         )
+
+
+async def test_generate_kickstarts_repo_sync() -> None:
+    repos = FakeRepos()
+    meme = FakeMeme("text", 0, 0, min_texts=1, max_texts=1)
+    adapter = adapter_for(meme, repos=repos)
+    await adapter.generate(bot=SimpleNamespace(self_id=999), user_id="123", nickname="群昵称")
+    assert repos.kickoffs == 1
 
 
 def test_resource_startup_check_runs_once_and_skips_memes_owned_check() -> None:
@@ -159,3 +195,131 @@ def test_resource_missing_recheck_is_throttled() -> None:
     current[0] += 601
     assert manager.check_after_missing() is True
     assert calls == ["check", "check"]
+
+
+def make_zip(files: dict[str, bytes]) -> bytes:
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        for name, data in files.items():
+            archive.writestr(name, data)
+    return buffer.getvalue()
+
+
+class FakeResponse:
+    def __init__(self, data: bytes):
+        self.data = data
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args) -> bool:
+        return False
+
+    def read(self) -> bytes:
+        return self.data
+
+
+REPO = ExtraMemeRepo("demo", "owner/demo", "emoji")
+DEMO_ZIP = make_zip({"demo-main/emoji/meme1/__init__.py": b"# meme"})
+
+
+def repo_manager(tmp_path: Path, backend=None, **kwargs) -> MemeRepoManager:
+    return MemeRepoManager(
+        backend=backend if backend is not None else FakeBackend(),
+        base_dir=tmp_path / "repos",
+        repos=(REPO,),
+        **kwargs,
+    )
+
+
+async def test_ready_repo_skips_download_and_loads(tmp_path: Path) -> None:
+    backend = FakeBackend()
+    manager = repo_manager(tmp_path, backend, opener=lambda *a, **k: pytest.fail("不应下载"))
+    ready = manager.memes_dir(REPO)
+    ready.mkdir(parents=True)
+    (ready / "meme1").mkdir()
+
+    await manager.ensure_loaded()
+
+    assert backend.loaded_dirs == [ready]
+
+
+async def test_missing_repo_is_downloaded_extracted_and_loaded(tmp_path: Path) -> None:
+    backend = FakeBackend()
+    requested = []
+
+    def opener(url, timeout):
+        requested.append(url)
+        return FakeResponse(DEMO_ZIP)
+
+    manager = repo_manager(tmp_path, backend, opener=opener)
+    await manager.ensure_loaded()
+
+    assert requested == [repo_download_urls(REPO.slug)[0]]
+    assert (manager.memes_dir(REPO) / "meme1" / "__init__.py").is_file()
+    assert backend.loaded_dirs == [manager.memes_dir(REPO)]
+    assert not (manager.repo_dir(REPO).parent / f".{REPO.name}.staging").exists()
+
+
+async def test_download_falls_back_to_next_mirror(tmp_path: Path) -> None:
+    backend = FakeBackend()
+    requested = []
+
+    def opener(url, timeout):
+        requested.append(url)
+        if len(requested) == 1:
+            raise OSError("mirror down")
+        return FakeResponse(DEMO_ZIP)
+
+    manager = repo_manager(tmp_path, backend, opener=opener)
+    await manager.ensure_loaded()
+
+    assert requested == repo_download_urls(REPO.slug)[:2]
+    assert backend.loaded_dirs == [manager.memes_dir(REPO)]
+
+
+async def test_all_mirrors_failing_keeps_builtin_memes(tmp_path: Path) -> None:
+    backend = FakeBackend()
+
+    def opener(url, timeout):
+        raise OSError("offline")
+
+    manager = repo_manager(tmp_path, backend, opener=opener)
+    await manager.ensure_loaded()
+
+    assert backend.loaded_dirs == []
+    assert manager._loaded is True
+
+
+async def test_disabled_or_unconfigured_manager_is_noop(tmp_path: Path) -> None:
+    backend = FakeBackend()
+    disabled = repo_manager(tmp_path, backend, enabled=False)
+    await disabled.ensure_loaded()
+    no_dir = MemeRepoManager(backend=backend, base_dir=None, repos=(REPO,))
+    await no_dir.ensure_loaded()
+    no_backend = MemeRepoManager(backend=None, base_dir=tmp_path, repos=(REPO,))
+    no_backend.backend = None
+    await no_backend.ensure_loaded()
+    assert backend.loaded_dirs == []
+
+
+async def test_kickoff_runs_only_once(tmp_path: Path) -> None:
+    backend = FakeBackend()
+    manager = repo_manager(tmp_path, backend, opener=lambda url, timeout: FakeResponse(DEMO_ZIP))
+    manager.kickoff()
+    manager.kickoff()
+    await asyncio.sleep(0.05)
+    assert manager._started is True
+    assert manager._loaded is True
+    assert backend.loaded_dirs == [manager.memes_dir(REPO)]
+
+
+def test_extra_repo_registry_matches_requested_repos() -> None:
+    assert [(repo.slug, repo.subdir) for repo in EXTRA_MEME_REPOS] == [
+        ("MemeCrafters/meme-generator-contrib", "memes"),
+        ("anyliew/meme_emoji", "emoji"),
+        ("LRZ9712/tudou-meme", "meme"),
+    ]
+    urls = repo_download_urls("owner/demo")
+    assert urls[0] == "https://codeload.github.com/owner/demo/zip/refs/heads/main"
+    assert len(urls) >= 2

@@ -9,7 +9,7 @@ def test_wheel_is_wired_without_new_public_affection_api() -> None:
     assert plugin.wheel_coordinator.resources is plugin.meme_resources
 
 
-def test_meme_startup_hook_delegates_to_resource_manager(monkeypatch) -> None:
+async def test_meme_startup_hook_delegates_to_resource_manager(monkeypatch) -> None:
     import nonebot_plugin_mantou_affection as plugin
 
     calls = []
@@ -19,11 +19,11 @@ def test_meme_startup_hook_delegates_to_resource_manager(monkeypatch) -> None:
         "check_on_startup",
         lambda **kwargs: calls.append(kwargs),
     )
-    plugin._check_meme_resources_on_startup()
+    await plugin._check_meme_resources_on_startup()
     assert calls == [{"handled_by_memes_plugin": False}]
 
 
-def test_meme_startup_hook_coerces_string_false_config(monkeypatch) -> None:
+async def test_meme_startup_hook_coerces_string_false_config(monkeypatch) -> None:
     from types import SimpleNamespace
 
     import nonebot_plugin_mantou_affection as plugin
@@ -40,7 +40,7 @@ def test_meme_startup_hook_coerces_string_false_config(monkeypatch) -> None:
         "check_on_startup",
         lambda **kwargs: calls.append(kwargs),
     )
-    plugin._check_meme_resources_on_startup()
+    await plugin._check_meme_resources_on_startup()
     assert calls == [{"handled_by_memes_plugin": False}]
 
 
