@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -75,12 +76,21 @@ def format_wheel_rules(timeout: int) -> str:
         f"含触发者最多 {WHEEL_TOTAL_SEATS} 人。\n"
         f"触发者请在 {timeout} 秒内发送“运作”或“不运作”"
         "（不运作：1/3 概率好感 +2，2/3 概率好感 -2）；"
-        "其他群友发送“参与”即可加入，运作时每人独立抽取一次。\n"
+        "发送“运作”后还需在倒计时内回复“确认”才会开转。\n"
+        "其他群友发送“参与”即可加入，触发者确认后立即截止，运作时每人独立抽取一次。\n"
         "转盘各项概率：\n"
         f"· 馒头制作随机表情 {meme_weight}%\n"
         f"· 馒头主动戳一戳：{join(pokes, '×')}\n"
         f"· 好感增加：{join(gains, '+')}\n"
         f"· 好感减少：{join(losses, '-')}"
+    )
+
+
+def format_wheel_confirm(remaining: int) -> str:
+    return (
+        " 二次确认：回复“确认”后立即开转，一旦确认其他群友就无法再参与了；"
+        f"请赶在倒计时结束前（剩余约 {max(remaining, 0)} 秒）回复，"
+        "超时本轮自动取消，不会运作。要确认吗？（回复 确认 / 不运作）"
     )
 
 
@@ -98,6 +108,8 @@ class PendingWheel:
         self.bot = bot
         self.send = send
         self.accepting = True
+        self.awaiting_confirm = False
+        self.started_at = time.monotonic()
         self.task: asyncio.Task | None = None
 
 
@@ -161,7 +173,7 @@ class WheelCoordinator:
         pending = self.pending.get(str(group_id))
         keyword = text.strip()
         user = str(user_id)
-        if pending is None or keyword not in {"参与", "运作", "不运作"}:
+        if pending is None or keyword not in {"参与", "运作", "不运作", "确认"}:
             return False
         if keyword == "参与":
             return await self._join(pending, user, nickname)
@@ -172,13 +184,32 @@ class WheelCoordinator:
         async with self._lock:
             if self.pending.get(pending.group_id) is not pending or not pending.accepting:
                 return True
-            pending.accepting = False
-            if pending.task is not None:
-                pending.task.cancel()
-            if keyword == "运作":
-                pending.task = asyncio.create_task(self._run_operation(pending))
-            else:
-                pending.task = asyncio.create_task(self._run_not_operate(pending))
+            if pending.awaiting_confirm:
+                if keyword == "运作":
+                    await pending.send("正在等待你的二次确认：回复“确认”开转，或“不运作”放弃。")
+                    return True
+                return self._settle(pending, operate=keyword == "确认")
+            if keyword == "确认":
+                await pending.send("请先发送“运作”或“不运作”。")
+                return True
+            if keyword == "不运作":
+                return self._settle(pending, operate=False)
+            pending.awaiting_confirm = True
+            remaining = int(self.choice_timeout - (time.monotonic() - pending.started_at))
+            await pending.send(
+                MessageSegment.at(pending.trigger.user_id)
+                + MessageSegment.text(format_wheel_confirm(remaining))
+            )
+            return True
+
+    def _settle(self, pending: PendingWheel, *, operate: bool) -> bool:
+        pending.accepting = False
+        if pending.task is not None:
+            pending.task.cancel()
+        if operate:
+            pending.task = asyncio.create_task(self._run_operation(pending))
+        else:
+            pending.task = asyncio.create_task(self._run_not_operate(pending))
         return True
 
     async def _join(self, pending: PendingWheel, user_id: str, nickname: str) -> bool:
@@ -212,7 +243,10 @@ class WheelCoordinator:
                 return
             pending.accepting = False
         try:
-            await pending.send("馒头命运齿轮转盘超时取消。")
+            if pending.awaiting_confirm:
+                await pending.send("馒头命运齿轮转盘超时未确认，本轮取消，不会运作。")
+            else:
+                await pending.send("馒头命运齿轮转盘超时取消。")
         finally:
             self.discard(pending)
 
