@@ -331,9 +331,6 @@ class MemeRepoManager:
             if child.is_dir()
         )
 
-    def _repo_ready(self, repo: ExtraMemeRepo) -> bool:
-        return self._template_count(repo) > 0
-
     def _download_repo(self, repo: ExtraMemeRepo) -> None:
         data: bytes | None = None
         last_error: Exception | None = None
@@ -407,7 +404,7 @@ class MemeRepoManager:
             except Exception:
                 failed.append(repo.name)
                 logger.exception(
-                    f"[mantou-affection] {progress} 表情仓库 {repo.name} 加载失败"
+                    f"[mantou-affection] {progress} 表情仓库 {repo.name} 处理失败"
                 )
         if failed:
             logger.warning(

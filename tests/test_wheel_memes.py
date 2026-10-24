@@ -475,7 +475,7 @@ async def test_downloaded_repo_without_templates_is_not_loaded(tmp_path: Path) -
     await manager.ensure_loaded()
 
     assert backend.loaded_dirs == []
-    assert manager._repo_ready(REPO) is False
+    assert manager._template_count(REPO) == 0
 
 
 async def test_repo_progress_logs_template_counts(tmp_path: Path) -> None:
@@ -500,6 +500,21 @@ async def test_repo_progress_logs_template_counts(tmp_path: Path) -> None:
     assert "[1/2] 表情仓库 demo：检测到 1 个模板" in output
     assert "[2/2] 表情仓库 second：检测到 2 个模板" in output
     assert "表情仓库检查完成：可用 2/2" in output
+
+
+async def test_download_progress_logs_template_counts(tmp_path: Path) -> None:
+    backend = FakeBackend()
+    manager = repo_manager(
+        tmp_path, backend, opener=lambda url, timeout: FakeResponse(DEMO_ZIP)
+    )
+
+    with captured_plugin_logs() as logs:
+        await manager.ensure_loaded()
+    output = "\n".join(logs)
+
+    assert "[1/1] 表情仓库 demo：未检测到有效模板，开始下载" in output
+    assert "[1/1] 表情仓库 demo：下载完成，检测到 1 个模板" in output
+    assert "表情仓库检查完成：可用 1/1" in output
 
 
 async def test_startup_summary_reports_failed_repository_and_continues(
