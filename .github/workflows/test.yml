@@ -18,6 +18,8 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - uses: snok/install-poetry@v1
+        with:
+          version: "2.2.1"
       - run: poetry install --no-interaction
       - run: poetry run python -m compileall nonebot_plugin_mantou_affection
       - run: poetry run pytest
