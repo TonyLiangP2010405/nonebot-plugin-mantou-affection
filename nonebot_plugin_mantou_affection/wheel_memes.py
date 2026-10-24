@@ -321,9 +321,18 @@ class MemeRepoManager:
     def memes_dir(self, repo: ExtraMemeRepo) -> Path:
         return self.repo_dir(repo) / repo.subdir
 
-    def _repo_ready(self, repo: ExtraMemeRepo) -> bool:
+    def _template_count(self, repo: ExtraMemeRepo) -> int:
         directory = self.memes_dir(repo)
-        return directory.is_dir() and any(directory.iterdir())
+        if not directory.is_dir():
+            return 0
+        return sum(
+            (child / "__init__.py").is_file()
+            for child in directory.iterdir()
+            if child.is_dir()
+        )
+
+    def _repo_ready(self, repo: ExtraMemeRepo) -> bool:
+        return self._template_count(repo) > 0
 
     def _download_repo(self, repo: ExtraMemeRepo) -> None:
         data: bytes | None = None
@@ -363,18 +372,52 @@ class MemeRepoManager:
         if self._loaded or not self.enabled or self.backend is None or self.base_dir is None:
             return
         self.base_dir.mkdir(parents=True, exist_ok=True)
-        for repo in self.repos:
+        total = len(self.repos)
+        loaded: list[str] = []
+        failed: list[str] = []
+        for index, repo in enumerate(self.repos, start=1):
+            progress = f"[{index}/{total}]"
             try:
-                if not self._repo_ready(repo):
+                template_count = self._template_count(repo)
+                if template_count:
                     logger.info(
-                        f"[mantou-affection] 开始下载表情仓库 {repo.name}（文件较大，请耐心等待）"
+                        f"[mantou-affection] {progress} 表情仓库 {repo.name}："
+                        f"检测到 {template_count} 个模板"
+                    )
+                else:
+                    logger.info(
+                        f"[mantou-affection] {progress} 表情仓库 {repo.name}："
+                        "未检测到有效模板，开始下载（文件较大，请耐心等待）"
                     )
                     await run_sync(self._download_repo)(repo)
-                    logger.info(f"[mantou-affection] 表情仓库 {repo.name} 下载完成")
+                    template_count = self._template_count(repo)
+                    if template_count == 0:
+                        raise MemeGenerationError(
+                            f"表情仓库 {repo.name} 下载完成后没有可用模板"
+                        )
+                    logger.info(
+                        f"[mantou-affection] {progress} 表情仓库 {repo.name}："
+                        f"下载完成，检测到 {template_count} 个模板"
+                    )
                 await run_sync(self.backend.load_memes)(self.memes_dir(repo))
-                logger.info(f"[mantou-affection] 表情仓库 {repo.name} 已加载")
+                logger.info(
+                    f"[mantou-affection] {progress} 表情仓库 {repo.name} 已加载"
+                )
+                loaded.append(repo.name)
             except Exception:
-                logger.exception(f"[mantou-affection] 表情仓库 {repo.name} 加载失败")
+                failed.append(repo.name)
+                logger.exception(
+                    f"[mantou-affection] {progress} 表情仓库 {repo.name} 加载失败"
+                )
+        if failed:
+            logger.warning(
+                f"[mantou-affection] 表情仓库检查完成：可用 {len(loaded)}/{total}，"
+                f"失败：{', '.join(failed)}"
+            )
+        else:
+            logger.info(
+                f"[mantou-affection] 表情仓库检查完成：可用 {len(loaded)}/{total}"
+            )
         self._loaded = True
 
     def kickoff(self) -> None:

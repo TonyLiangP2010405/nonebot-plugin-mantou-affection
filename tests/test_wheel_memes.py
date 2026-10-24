@@ -1,11 +1,14 @@
 import asyncio
 import random
 import zipfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from nonebot import logger
 
 from nonebot_plugin_mantou_affection.wheel_memes import (
     DEFAULT_BLOCKED_MEME_TERMS,
@@ -77,6 +80,16 @@ class FakeRepos:
 
 async def avatars(user_id: str) -> bytes:
     return f"avatar:{user_id}".encode()
+
+
+@contextmanager
+def captured_plugin_logs() -> Iterator[list[str]]:
+    messages: list[str] = []
+    handler_id = logger.add(messages.append, format="{message}", level="INFO")
+    try:
+        yield messages
+    finally:
+        logger.remove(handler_id)
 
 
 def adapter_for(meme: FakeMeme, **kwargs) -> MemeGeneratorAdapter:
@@ -412,12 +425,104 @@ async def test_ready_repo_skips_download_and_loads(tmp_path: Path) -> None:
     backend = FakeBackend()
     manager = repo_manager(tmp_path, backend, opener=lambda *a, **k: pytest.fail("不应下载"))
     ready = manager.memes_dir(REPO)
-    ready.mkdir(parents=True)
-    (ready / "meme1").mkdir()
+    (ready / "meme1").mkdir(parents=True)
+    (ready / "meme1" / "__init__.py").touch()
 
     await manager.ensure_loaded()
 
     assert backend.loaded_dirs == [ready]
+
+
+def test_template_count_requires_direct_child_init(tmp_path: Path) -> None:
+    manager = repo_manager(tmp_path)
+    ready = manager.memes_dir(REPO)
+    for name in ("meme1", "meme2"):
+        (ready / name).mkdir(parents=True)
+        (ready / name / "__init__.py").touch()
+    (ready / "not-a-template").mkdir()
+    (ready / "not-a-template" / "nested").mkdir()
+    (ready / "not-a-template" / "nested" / "__init__.py").touch()
+
+    assert manager._template_count(REPO) == 2
+
+
+async def test_invalid_repo_is_downloaded_again(tmp_path: Path) -> None:
+    backend = FakeBackend()
+    requested = []
+
+    def opener(url, timeout):
+        requested.append(url)
+        return FakeResponse(DEMO_ZIP)
+
+    manager = repo_manager(tmp_path, backend, opener=opener)
+    ready = manager.memes_dir(REPO)
+    ready.mkdir(parents=True)
+    (ready / "README.txt").write_text("not a template", encoding="utf-8")
+
+    await manager.ensure_loaded()
+
+    assert requested == [repo_download_urls(REPO.slug)[0]]
+    assert backend.loaded_dirs == [ready]
+
+
+async def test_downloaded_repo_without_templates_is_not_loaded(tmp_path: Path) -> None:
+    backend = FakeBackend()
+    invalid_zip = make_zip({"demo-main/emoji/README.txt": b"not a template"})
+    manager = repo_manager(
+        tmp_path, backend, opener=lambda url, timeout: FakeResponse(invalid_zip)
+    )
+
+    await manager.ensure_loaded()
+
+    assert backend.loaded_dirs == []
+    assert manager._repo_ready(REPO) is False
+
+
+async def test_repo_progress_logs_template_counts(tmp_path: Path) -> None:
+    backend = FakeBackend()
+    second = ExtraMemeRepo("second", "owner/second", "memes")
+    manager = MemeRepoManager(
+        backend=backend,
+        base_dir=tmp_path / "repos",
+        repos=(REPO, second),
+        opener=lambda *a, **k: pytest.fail("不应下载"),
+    )
+    for repo, count in ((REPO, 1), (second, 2)):
+        for index in range(count):
+            directory = manager.memes_dir(repo) / f"meme{index}"
+            directory.mkdir(parents=True)
+            (directory / "__init__.py").touch()
+
+    with captured_plugin_logs() as logs:
+        await manager.ensure_loaded()
+    output = "\n".join(logs)
+
+    assert "[1/2] 表情仓库 demo：检测到 1 个模板" in output
+    assert "[2/2] 表情仓库 second：检测到 2 个模板" in output
+    assert "表情仓库检查完成：可用 2/2" in output
+
+
+async def test_startup_summary_reports_failed_repository_and_continues(
+    tmp_path: Path,
+) -> None:
+    backend = FakeBackend()
+    working = ExtraMemeRepo("working", "owner/working", "memes")
+    manager = MemeRepoManager(
+        backend=backend,
+        base_dir=tmp_path / "repos",
+        repos=(REPO, working),
+        opener=lambda url, timeout: (_ for _ in ()).throw(OSError("offline")),
+    )
+    template = manager.memes_dir(working) / "meme1"
+    template.mkdir(parents=True)
+    (template / "__init__.py").touch()
+
+    with captured_plugin_logs() as logs:
+        await manager.ensure_loaded()
+    output = "\n".join(logs)
+
+    assert backend.loaded_dirs == [manager.memes_dir(working)]
+    assert "表情仓库检查完成：可用 1/2，失败：demo" in output
 
 
 async def test_missing_repo_is_downloaded_extracted_and_loaded(tmp_path: Path) -> None:

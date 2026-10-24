@@ -151,7 +151,10 @@ SUPERUSER 手动增减不受这个上限限制，`/馒头好感` 会显示当天
 好感度大于 0 的群友发言时按触发概率独立掷一次，命中就 @ 他开一轮转盘；概率可以用 `/馒头转盘概率`
 在运行时覆盖并持久化，与其它活动的概率互不影响。`MANTOU_AFFECTION_MEMES_EXTRA_REPOS` 控制是否自动下载
 并挂载 mantou-memes、meme-generator-contrib、meme_emoji、tudou-meme 四个外部表情仓库（默认 true，仅在安装了
-`[memes]` 扩展时生效）。
+`[memes]` 扩展时生效）。每次启动都会在后台逐个检查这些仓库：只有目录里存在有效模板（直接子目录含
+`__init__.py`）才跳过下载，缺失或内容无效的仓库会重新下载，不会阻塞插件加载。日志会按 `[当前/总数]`
+逐项显示检测结果、模板数量、下载与加载结果，最后输出 `表情仓库检查完成：可用 X/Y` 汇总，
+有失败的仓库会在汇总里点名。
 
 `MANTOU_AFFECTION_AMBIENT_EVENT_RATIO` 是小动作命中后升级为随机事件的比例（默认 0.333，也就是约 1/3）。
 `MANTOU_AFFECTION_EVENT_TIMEOUT` 是普通答题时限（秒，默认 20），`MANTOU_AFFECTION_UPSET_EVENT_TIMEOUT`
