@@ -446,6 +446,44 @@ def test_template_count_requires_direct_child_init(tmp_path: Path) -> None:
     assert manager._template_count(REPO) == 2
 
 
+async def test_mantou_cache_without_new_batch_is_refreshed_once(tmp_path: Path) -> None:
+    repo = EXTRA_MEME_REPOS[0]
+    backend = FakeBackend()
+    requests = []
+    archive = make_zip(
+        {
+            "mantou-main/memes/mantou_actions/__init__.py": b"# previous batch",
+            "mantou-main/memes/mantou_actions_next/__init__.py": b"# new batch",
+        }
+    )
+
+    def opener(url, timeout):
+        requests.append(url)
+        return FakeResponse(archive)
+
+    manager = MemeRepoManager(
+        backend=backend, base_dir=tmp_path, repos=(repo,), opener=opener
+    )
+    old_module = manager.memes_dir(repo) / "mantou_actions"
+    old_module.mkdir(parents=True)
+    (old_module / "__init__.py").touch()
+    assert manager._template_count(repo) == 0
+
+    await manager.ensure_loaded()
+    assert len(requests) == 1
+    assert manager._template_count(repo) == 2
+    assert backend.loaded_dirs == [manager.memes_dir(repo)]
+
+    cached = MemeRepoManager(
+        backend=backend,
+        base_dir=tmp_path,
+        repos=(repo,),
+        opener=lambda *args, **kwargs: pytest.fail("新模板已缓存，不应再次下载"),
+    )
+    await cached.ensure_loaded()
+    assert backend.loaded_dirs == [manager.memes_dir(repo), cached.memes_dir(repo)]
+
+
 async def test_invalid_repo_is_downloaded_again(tmp_path: Path) -> None:
     backend = FakeBackend()
     requested = []

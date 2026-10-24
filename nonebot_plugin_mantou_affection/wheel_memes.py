@@ -272,10 +272,13 @@ class ExtraMemeRepo:
     name: str
     slug: str
     subdir: str
+    required_subdir: str | None = None
 
 
 EXTRA_MEME_REPOS: tuple[ExtraMemeRepo, ...] = (
-    ExtraMemeRepo("mantou-memes", "TonyLiangP2010405/mantou-memes", "memes"),
+    ExtraMemeRepo(
+        "mantou-memes", "TonyLiangP2010405/mantou-memes", "memes", "mantou_actions_next"
+    ),
     ExtraMemeRepo("meme-generator-contrib", "MemeCrafters/meme-generator-contrib", "memes"),
     ExtraMemeRepo("meme_emoji", "anyliew/meme_emoji", "emoji"),
     ExtraMemeRepo("tudou-meme", "LRZ9712/tudou-meme", "meme"),
@@ -324,6 +327,11 @@ class MemeRepoManager:
     def _template_count(self, repo: ExtraMemeRepo) -> int:
         directory = self.memes_dir(repo)
         if not directory.is_dir():
+            return 0
+        if (
+            repo.required_subdir
+            and not (directory / repo.required_subdir / "__init__.py").is_file()
+        ):
             return 0
         return sum(
             (child / "__init__.py").is_file()
