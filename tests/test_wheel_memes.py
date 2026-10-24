@@ -492,6 +492,7 @@ async def test_kickoff_runs_only_once(tmp_path: Path) -> None:
 
 def test_extra_repo_registry_matches_requested_repos() -> None:
     assert [(repo.slug, repo.subdir) for repo in EXTRA_MEME_REPOS] == [
+        ("TonyLiangP2010405/mantou-memes", "memes"),
         ("MemeCrafters/meme-generator-contrib", "memes"),
         ("anyliew/meme_emoji", "emoji"),
         ("LRZ9712/tudou-meme", "meme"),

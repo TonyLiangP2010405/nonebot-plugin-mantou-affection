@@ -275,6 +275,7 @@ class ExtraMemeRepo:
 
 
 EXTRA_MEME_REPOS: tuple[ExtraMemeRepo, ...] = (
+    ExtraMemeRepo("mantou-memes", "TonyLiangP2010405/mantou-memes", "memes"),
     ExtraMemeRepo("meme-generator-contrib", "MemeCrafters/meme-generator-contrib", "memes"),
     ExtraMemeRepo("meme_emoji", "anyliew/meme_emoji", "emoji"),
     ExtraMemeRepo("tudou-meme", "LRZ9712/tudou-meme", "meme"),

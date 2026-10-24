@@ -23,6 +23,7 @@
 - 「馒头命运齿轮转盘」：好感度 > 0 的群友发言时默认 0.1% 概率开一轮，触发者 60 秒内选择
   运作或不运作；其他群友发送“参与”即可免费加入（含触发者最多 5 人，满员会提示），运作时每人独立
   抽取随机表情、主动戳一戳或好感变化；不在免确认白名单的群友抽中表情时要先确认，开场消息会列出每项概率
+- 转盘自动接入独立的 `mantou-memes` 模板库，共 620 个模板；新增 500 个单头像模板含 194 个动图
 - SUPERUSER 的 `/馒头强制事件 @群友`：发一次活动列表，发起者 20 秒内回复 1~7 强制开一场活动，
   绕过概率、好感门槛和功能开关，但保留群级互斥
 - 为其他插件提供好感上报与状态读取 API
@@ -149,7 +150,7 @@ SUPERUSER 手动增减不受这个上限限制，`/馒头好感` 会显示当天
 `MANTOU_AFFECTION_WHEEL_MEME_CONFIRM_TIMEOUT` 是抽中表情后等待本人确认的时限（秒，默认 30）。
 好感度大于 0 的群友发言时按触发概率独立掷一次，命中就 @ 他开一轮转盘；概率可以用 `/馒头转盘概率`
 在运行时覆盖并持久化，与其它活动的概率互不影响。`MANTOU_AFFECTION_MEMES_EXTRA_REPOS` 控制是否自动下载
-并挂载 meme-generator-contrib、meme_emoji、tudou-meme 三个外部表情仓库（默认 true，仅在安装了
+并挂载 mantou-memes、meme-generator-contrib、meme_emoji、tudou-meme 四个外部表情仓库（默认 true，仅在安装了
 `[memes]` 扩展时生效）。
 
 `MANTOU_AFFECTION_AMBIENT_EVENT_RATIO` 是小动作命中后升级为随机事件的比例（默认 0.333，也就是约 1/3）。
@@ -661,6 +662,12 @@ SUPERUSER 可以用 `/馒头转盘概率 0.1%` 查看或修改触发概率，设
 pip install "nonebot-plugin-mantou-affection[memes]"
 ```
 
+已安装旧版插件时，升级到包含馒头模板库的版本：
+
+```bash
+pip install --upgrade "nonebot-plugin-mantou-affection[memes]>=0.22.0"
+```
+
 > 注意：`[memes]` 扩展会把 `meme-generator` 固定到 0.1.x（外部表情仓库只兼容这个系列），已装 0.2.x
 > 的环境会被 pip 自动降级；如果你同时使用 `nonebot-plugin-memes`，请按 meme_emoji 仓库的要求使用
 > `nonebot-plugin-memes==0.7.12`。
@@ -672,11 +679,21 @@ pip install "nonebot-plugin-mantou-affection[memes]"
   启动时会发起一次后台 `meme_generator.download.check_resources()` 检查，只发起、
   不等待，不阻塞启动和事件处理；如果已加载的 `nonebot-plugin-memes` 自己会做启动检查，就复用它，不重复
   发起下载。
-- **外部表情仓库自检测、自下载**：除了内置表情，插件还会在启动时自动下载并挂载这三个扩展仓库
-  （与 `meme-generator` 官方 README 推荐的「其他表情仓库」一致）：
+- **外部表情仓库自检测、自下载**：除了内置表情，插件还会在启动时自动下载并挂载四个扩展仓库：
+  - [TonyLiangP2010405/mantou-memes](https://github.com/TonyLiangP2010405/mantou-memes)（`memes/` 目录，
+    620 个模板：417 个静态 PNG、203 个循环 GIF；含原有 120 个模板和新增 500 个单头像模板（其中 194 个为 GIF）；
+    [查看模板预览](https://github.com/TonyLiangP2010405/mantou-memes/blob/main/CATALOG.md)）
   - [MemeCrafters/meme-generator-contrib](https://github.com/MemeCrafters/meme-generator-contrib)（`memes/` 目录）
   - [anyliew/meme_emoji](https://github.com/anyliew/meme_emoji)（`emoji/` 目录，400+ 模板）
   - [LRZ9712/tudou-meme](https://github.com/LRZ9712/tudou-meme)（`meme/` 目录）
+
+  `mantou-memes` 优先加载，纯文字模板使用参与者昵称，单头像使用参与者头像，双头像依次使用机器人和
+  参与者头像；抽中后沿用表情确认和免确认白名单。该库自带 OFL 中文字体、绘制代码和裁切底图，下载后无需再
+  补背景素材。新增 500 个模板和此前新增的 100 个换头像模板只使用头像，不接受文字输入，也不叠加昵称或文案；逐图来源见模板库中的 `ASSET_SOURCES.md`。
+  其余三个仓库是 `meme-generator` 官方 README 推荐的扩展库。
+
+  已缓存旧版 `mantou-memes` 时，先停止机器人，删除本插件数据目录下的 `meme_repos/mantou-memes/`
+  缓存目录，再启动机器人即可重新下载当前版本。
 
   仓库以 zip 形式下载到本插件数据目录下的 `meme_repos/`，GitHub 直连失败时自动依次尝试多个镜像；
   文件总量较大（数百 MB），只在首次或目录缺失时下载，下载完成后通过 `load_memes` 挂载，重启后直接复用
