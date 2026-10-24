@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import pytest
 from nonebot.adapters.onebot.v11 import Message, MessageSegment
 
