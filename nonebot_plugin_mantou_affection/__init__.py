@@ -88,6 +88,7 @@ event_coordinator.attach_group_quiz(group_quiz_coordinator)
 meme_generator_adapter = MemeGeneratorAdapter(
     bot_name=plugin_config.mantou_affection_bot_name,
     blocked_terms=parse_blocked_terms(plugin_config.mantou_affection_memes_blocked_terms),
+    ranking_fetcher=service.ranking,
 )
 meme_repo_manager = MemeRepoManager(
     backend=meme_generator_adapter.backend,

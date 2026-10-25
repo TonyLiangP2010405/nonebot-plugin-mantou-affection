@@ -23,7 +23,7 @@
 - 「馒头命运齿轮转盘」：好感度 > 0 的群友发言时默认 0.1% 概率开一轮，触发者 60 秒内选择
   运作或不运作；其他群友发送“参与”即可免费加入（含触发者最多 5 人，满员会提示），运作时每人独立
   抽取随机表情、主动戳一戳或好感变化；不在免确认白名单的群友抽中表情时要先确认，开场消息会列出每项概率
-- 转盘自动接入独立的 `mantou-memes` 模板库，共 1120 个模板；本批再增加 500 个单头像模板（62 个动图、438 个静态图）
+- 转盘自动接入独立的 `mantou-memes` 模板库，共 1620 个模板；本批再增加 500 个双人、多人模板（434 个动图、66 个静态图）
 - SUPERUSER 的 `/馒头强制事件 @群友`：发一次活动列表，发起者 20 秒内回复 1~7 强制开一场活动，
   绕过概率、好感门槛和功能开关，但保留群级互斥
 - 为其他插件提供好感上报与状态读取 API
@@ -668,7 +668,7 @@ pip install "nonebot-plugin-mantou-affection[memes]"
 已安装旧版插件时，升级到包含馒头模板库的版本：
 
 ```bash
-pip install --upgrade "nonebot-plugin-mantou-affection[memes]>=0.24.0"
+pip install --upgrade "nonebot-plugin-mantou-affection[memes]>=0.25.0"
 ```
 
 > 注意：`[memes]` 扩展会把 `meme-generator` 固定到 0.1.x（外部表情仓库只兼容这个系列），已装 0.2.x
@@ -676,28 +676,32 @@ pip install --upgrade "nonebot-plugin-mantou-affection[memes]>=0.24.0"
 > `nonebot-plugin-memes==0.7.12`。
 
 - 生成时从 `get_memes()` 里筛选能由规定输入完整生成的模板：纯文字模板用群昵称，单人图片模板用参与者
-  头像，双人图片模板第一张用 bot 自己头像、第二张用参与者头像；需要更多图片或参数不兼容的模板不进候选
-  列表。每个参与者独立随机模板，图片生成在工作线程执行，不阻塞事件循环。
+  头像，双人图片模板第一张用 bot 自己头像、第二张用参与者头像；固定需要更多头像且不需要文字的
+  模板，在这两张头像后，从**本群好感榜**随机补齐不同成员，排除 bot、参与者和重复用户。榜单人数不足的
+  模板不进入本次候选列表；没有可用榜单时仍可使用单人和双人模板。每个参与者独立随机模板，图片生成在工作线程执行，不阻塞事件循环。
 - **素材不随 Python 包分发**：字体和图片素材首次使用前需要补齐，第一次启动可能在后台下载数百 MB。插件
   启动时会发起一次后台 `meme_generator.download.check_resources()` 检查，只发起、
   不等待，不阻塞启动和事件处理；如果已加载的 `nonebot-plugin-memes` 自己会做启动检查，就复用它，不重复
   发起下载。
 - **外部表情仓库自检测、自下载**：除了内置表情，插件还会在启动时自动下载并挂载四个扩展仓库：
   - [TonyLiangP2010405/mantou-memes](https://github.com/TonyLiangP2010405/mantou-memes)（`memes/` 目录，
-    1120 个模板：855 个静态 PNG、265 个循环 GIF；本批新增 500 个单头像模板（62 个 GIF、438 个 PNG），编号 501–1000；
+    1620 个模板：921 个静态 PNG、699 个循环 GIF；本批新增 500 个同框模板（434 个 GIF、66 个 PNG），其中 379 个双人、121 个三至十人模板；
     [查看模板预览](https://github.com/TonyLiangP2010405/mantou-memes/blob/main/CATALOG.md)）
   - [MemeCrafters/meme-generator-contrib](https://github.com/MemeCrafters/meme-generator-contrib)（`memes/` 目录）
   - [anyliew/meme_emoji](https://github.com/anyliew/meme_emoji)（`emoji/` 目录，400+ 模板）
   - [LRZ9712/tudou-meme](https://github.com/LRZ9712/tudou-meme)（`meme/` 目录）
 
   `mantou-memes` 优先加载，纯文字模板使用参与者昵称，单头像使用参与者头像，双头像依次使用机器人和
-  参与者头像；抽中后沿用表情确认和免确认白名单。该库自带 OFL 中文字体、绘制代码和裁切底图，下载后无需再
-  补背景素材。两批各 500 个模板和此前新增的 100 个换头像模板只使用头像，不接受文字输入，也不叠加昵称或文案；逐图来源见模板库中的 `ASSET_SOURCES.md`。
+  参与者头像，多人模板的其余位置从本群好感榜随机选人；抽中后沿用表情确认和免确认白名单。该库自带 OFL 中文字体、绘制代码和裁切底图，下载后无需再
+  补背景素材。三批各 500 个模板和此前新增的 100 个换头像模板只使用头像，不接受文字输入，也不叠加昵称或文案；逐图来源见模板库中的 `ASSET_SOURCES.md`。
   其余三个仓库是 `meme-generator` 官方 README 推荐的扩展库。
 
-  插件 0.24.0+ 启动时会检查 `mantou_actions_next` 模块；旧缓存缺少本批模板时自动更新一次，
-  已完整更新的缓存继续复用。新增模板关键词为 `馒头动作501`–`馒头动作1000`，
-  [查看本批预览和对齐记录](https://github.com/TonyLiangP2010405/mantou-memes/blob/main/ACTIONS_2_CATALOG.md)。
+  插件 0.25.0+ 启动时会检查 `mantou_groups` 模块；旧缓存缺少本批模板时自动更新一次，
+  已完整更新的缓存继续复用。新增模板关键词为 `馒头同框001`–`馒头同框500`，
+  [查看本批预览](https://github.com/TonyLiangP2010405/mantou-memes/blob/main/GROUPS_CATALOG.md) ·
+  [查看逐帧对齐记录](https://github.com/TonyLiangP2010405/mantou-memes/blob/main/docs/groups-review.md)。
+  bot 和触发者固定放在两个主要角色位置；其余角色只从本群榜单抽取。榜单范围沿用
+  `mantou_affection_ranking_size`（默认前 10 名）。确认期间若榜单人数减少，生成会明确失败，不重复使用同一个人补位，也不会重抽模板。
 
   仓库以 zip 形式下载到本插件数据目录下的 `meme_repos/`，GitHub 直连失败时自动依次尝试多个镜像；
   文件总量较大（数百 MB），每次启动都会在后台逐个校验：目录里存在有效模板（直接子目录含 `__init__.py`）

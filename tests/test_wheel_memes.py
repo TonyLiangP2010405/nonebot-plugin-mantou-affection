@@ -453,7 +453,8 @@ async def test_mantou_cache_without_new_batch_is_refreshed_once(tmp_path: Path) 
     archive = make_zip(
         {
             "mantou-main/memes/mantou_actions/__init__.py": b"# previous batch",
-            "mantou-main/memes/mantou_actions_next/__init__.py": b"# new batch",
+            "mantou-main/memes/mantou_actions_next/__init__.py": b"# previous 1120 templates",
+            "mantou-main/memes/mantou_groups/__init__.py": b"# new group batch",
         }
     )
 
@@ -464,14 +465,14 @@ async def test_mantou_cache_without_new_batch_is_refreshed_once(tmp_path: Path) 
     manager = MemeRepoManager(
         backend=backend, base_dir=tmp_path, repos=(repo,), opener=opener
     )
-    old_module = manager.memes_dir(repo) / "mantou_actions"
+    old_module = manager.memes_dir(repo) / "mantou_actions_next"
     old_module.mkdir(parents=True)
     (old_module / "__init__.py").touch()
     assert manager._template_count(repo) == 0
 
     await manager.ensure_loaded()
     assert len(requests) == 1
-    assert manager._template_count(repo) == 2
+    assert manager._template_count(repo) == 3
     assert backend.loaded_dirs == [manager.memes_dir(repo)]
 
     cached = MemeRepoManager(
@@ -658,3 +659,87 @@ def test_extra_repo_registry_matches_requested_repos() -> None:
     urls = repo_download_urls("owner/demo")
     assert urls[0] == "https://codeload.github.com/owner/demo/zip/refs/heads/main"
     assert len(urls) >= 2
+
+
+def ranked(*ids):
+    return [SimpleNamespace(profile=SimpleNamespace(user_id=user_id)) for user_id in ids]
+
+
+async def test_multi_meme_uses_bot_user_and_distinct_same_group_ranked_people() -> None:
+    meme = FakeMeme("group", 5, 5)
+    groups = []
+
+    async def ranking(group_id):
+        groups.append(group_id)
+        return ranked("999", "123", "201", "201", "202", "203", "204")
+
+    adapter = adapter_for(meme, ranking_fetcher=ranking)
+    await adapter.generate(
+        bot=SimpleNamespace(self_id=999), user_id="123", nickname="触发者", group_id="group-a"
+    )
+    images, texts, _ = meme.calls[0]
+    assert images[:2] == [b"avatar:999", b"avatar:123"]
+    assert len(images) == len(set(images)) == 5
+    assert set(images[2:]) <= {b"avatar:201", b"avatar:202", b"avatar:203", b"avatar:204"}
+    assert groups == ["group-a", "group-a"]
+    assert texts == []
+
+
+async def test_group_draw_skips_templates_when_ranking_cannot_fill_unique_people() -> None:
+    async def ranking(group_id):
+        assert group_id == "this-group"
+        return ranked("999", "123", "201", "201")
+
+    double = FakeMeme("double", 2, 2)
+    triple = FakeMeme("triple", 3, 3)
+    four = FakeMeme("four", 4, 4)
+    adapter = MemeGeneratorAdapter(
+        backend=FakeBackend([double, triple, four]),
+        ranking_fetcher=ranking,
+        avatar_fetcher=avatars,
+        rng=random.Random(3),
+    )
+    for _ in range(20):
+        meme, kind = await adapter.draw_for_group(
+            group_id="this-group", bot=SimpleNamespace(self_id=999), user_id="123"
+        )
+        assert meme in [double, triple]
+        assert kind in ["double", "multi"]
+    assert four.calls == []
+
+
+async def test_multi_generation_without_enough_ranked_people_does_not_repeat_or_fetch() -> None:
+    async def ranking(group_id):
+        return ranked("999", "123", "201", "201")
+
+    fetched = []
+
+    async def fetch(user_id):
+        fetched.append(user_id)
+        return b"avatar"
+
+    meme = FakeMeme("group", 4, 4)
+    adapter = adapter_for(meme, ranking_fetcher=ranking)
+    adapter.avatar_fetcher = fetch
+    with pytest.raises(MemeGenerationError, match="好感榜人数不足"):
+        await adapter.generate_with(
+            meme, "multi", bot=SimpleNamespace(self_id=999), user_id="123",
+            nickname="触发者", group_id="group-a",
+        )
+    assert meme.calls == []
+    assert fetched == []
+
+
+async def test_ranking_failure_keeps_double_templates_available() -> None:
+    async def ranking(group_id):
+        raise OSError("store unavailable")
+
+    double = FakeMeme("double", 2, 2)
+    adapter = MemeGeneratorAdapter(
+        backend=FakeBackend([double, FakeMeme("group", 3, 3)]),
+        avatar_fetcher=avatars, ranking_fetcher=ranking,
+    )
+    await adapter.generate(
+        bot=SimpleNamespace(self_id=999), user_id="123", nickname="触发者", group_id="group-a"
+    )
+    assert double.calls[0][0] == [b"avatar:999", b"avatar:123"]

@@ -18,6 +18,8 @@ from typing import Any
 from nonebot import logger
 from nonebot.utils import run_sync
 
+from .models import RankingEntry
+
 
 class MemeGenerationError(RuntimeError):
     pass
@@ -97,6 +99,7 @@ class MemeGeneratorAdapter:
         bot_name: str = "馒头",
         repos: MemeRepoManager | None = None,
         blocked_terms: Iterable[str] | None = None,
+        ranking_fetcher: Callable[[str], Awaitable[Iterable[RankingEntry]]] | None = None,
     ):
         self.backend = backend if backend is not None else _load_backend()
         self.rng = rng or random.Random()
@@ -107,6 +110,7 @@ class MemeGeneratorAdapter:
             parse_blocked_terms(None) if blocked_terms is None else tuple(blocked_terms)
         )
         self._blocked_logged = False
+        self.ranking_fetcher = ranking_fetcher
 
     def _is_blocked(self, meme: Any) -> bool:
         key = str(getattr(meme, "key", "") or "").lower()
@@ -125,9 +129,11 @@ class MemeGeneratorAdapter:
             return "single"
         if params.min_images == params.max_images == 2 and params.min_texts == 0:
             return "double"
+        if params.min_images == params.max_images >= 3 and params.min_texts == 0:
+            return "multi"
         return None
 
-    def draw(self) -> tuple[Any, str]:
+    def draw(self, *, max_images: int = 2) -> tuple[Any, str]:
         """从非屏蔽候选里随机抽一个模板，返回 (meme, kind)。"""
 
         backend = self.backend
@@ -148,7 +154,7 @@ class MemeGeneratorAdapter:
                 blocked_count += 1
                 continue
             kind = self._kind(meme.params_type)
-            if kind is not None:
+            if kind is not None and meme.params_type.min_images <= max_images:
                 candidates.append((meme, kind))
         if blocked_count and not self._blocked_logged:
             self._blocked_logged = True
@@ -156,6 +162,24 @@ class MemeGeneratorAdapter:
         if not candidates:
             raise MemeGenerationError("没有兼容的表情模板")
         return self.rng.choice(candidates)
+
+    async def _ranked_ids(self, group_id: str | None, bot: Any, user_id: str) -> list[str]:
+        if group_id is None or self.ranking_fetcher is None:
+            return []
+        try:
+            entries = await self.ranking_fetcher(str(group_id))
+        except Exception:
+            logger.exception("[mantou-affection] 读取多人表情好感榜失败")
+            return []
+        excluded = {str(bot.self_id), str(user_id)}
+        ids = dict.fromkeys(str(entry.profile.user_id) for entry in entries)
+        return [ident for ident in ids if ident and ident not in excluded]
+
+    async def draw_for_group(
+        self, *, group_id: str, bot: Any, user_id: str
+    ) -> tuple[Any, str]:
+        ids = await self._ranked_ids(group_id, bot, user_id)
+        return self.draw(max_images=2 + len(ids))
 
     async def generate_with(
         self,
@@ -165,6 +189,7 @@ class MemeGeneratorAdapter:
         bot: Any,
         user_id: str,
         nickname: str,
+        group_id: str | None = None,
     ) -> bytes:
         """用指定模板生成表情。"""
 
@@ -172,6 +197,12 @@ class MemeGeneratorAdapter:
         images = []
         if kind != "text":
             ids = [user_id] if kind == "single" else [str(bot.self_id), user_id]
+            if kind == "multi":
+                candidates = await self._ranked_ids(group_id, bot, user_id)
+                needed = meme.params_type.min_images - 2
+                if len(candidates) < needed:
+                    raise MemeGenerationError("本群好感榜人数不足，无法制作这张多人表情")
+                ids.extend(self.rng.sample(candidates, needed))
             for current_id in ids:
                 try:
                     data = await self.avatar_fetcher(current_id)
@@ -193,10 +224,17 @@ class MemeGeneratorAdapter:
             return getvalue()
         raise MemeGenerationError(f"表情结果格式异常: {type(result).__name__}")
 
-    async def generate(self, *, bot: Any, user_id: str, nickname: str) -> bytes:
-        meme, kind = self.draw()
+    async def generate(
+        self, *, bot: Any, user_id: str, nickname: str, group_id: str | None = None
+    ) -> bytes:
+        if group_id is None:
+            meme, kind = self.draw()
+        else:
+            meme, kind = await self.draw_for_group(
+                group_id=group_id, bot=bot, user_id=user_id
+            )
         return await self.generate_with(
-            meme, kind, bot=bot, user_id=user_id, nickname=nickname
+            meme, kind, bot=bot, user_id=user_id, nickname=nickname, group_id=group_id
         )
 
 
@@ -277,7 +315,7 @@ class ExtraMemeRepo:
 
 EXTRA_MEME_REPOS: tuple[ExtraMemeRepo, ...] = (
     ExtraMemeRepo(
-        "mantou-memes", "TonyLiangP2010405/mantou-memes", "memes", "mantou_actions_next"
+        "mantou-memes", "TonyLiangP2010405/mantou-memes", "memes", "mantou_groups"
     ),
     ExtraMemeRepo("meme-generator-contrib", "MemeCrafters/meme-generator-contrib", "memes"),
     ExtraMemeRepo("meme_emoji", "anyliew/meme_emoji", "emoji"),

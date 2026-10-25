@@ -6,6 +6,7 @@ def test_wheel_is_wired_without_new_public_affection_api() -> None:
 
     assert plugin.event_coordinator.wheel is plugin.wheel_coordinator
     assert plugin.wheel_coordinator.memes is plugin.meme_generator_adapter
+    assert plugin.meme_generator_adapter.ranking_fetcher == plugin.service.ranking
     assert plugin.wheel_coordinator.resources is plugin.meme_resources
 
 

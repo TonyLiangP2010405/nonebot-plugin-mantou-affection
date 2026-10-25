@@ -94,6 +94,8 @@ class FakeMemes:
         self.draw_calls = 0
         self.generate_calls = 0
         self.generated: list[tuple[object, str, str]] = []
+        self.drawn_groups: list[str] = []
+        self.generated_groups: list[str] = []
 
     def draw(self) -> tuple[FakeMemeTemplate, str]:
         self.draw_calls += 1
@@ -101,7 +103,12 @@ class FakeMemes:
             raise self.draw_error
         return self.template, "single"
 
-    async def generate(self, *, bot, user_id: str, nickname: str) -> bytes:
+    async def draw_for_group(self, *, group_id: str, bot, user_id: str):
+        self.drawn_groups.append(group_id)
+        return self.draw()
+
+    async def generate(self, *, bot, user_id: str, nickname: str, group_id=None) -> bytes:
+        self.generated_groups.append(group_id)
         self.generate_calls += 1
         if self.generate_error is not None:
             raise self.generate_error
@@ -110,9 +117,10 @@ class FakeMemes:
         return f"image:{user_id}".encode()
 
     async def generate_with(
-        self, meme, kind: str, *, bot, user_id: str, nickname: str
+        self, meme, kind: str, *, bot, user_id: str, nickname: str, group_id=None
     ) -> bytes:
         self.generated.append((meme, kind, user_id))
+        self.generated_groups.append(group_id)
         if self.generate_error is not None:
             raise self.generate_error
         if user_id in self.missing_users:
@@ -680,6 +688,7 @@ async def test_wheel_meme_whitelisted_user_gets_image_without_confirm(
     assert "馒头为你做了一张随机表情" in sent_text(sent)
     assert memes.generate_calls == 1
     assert memes.draw_calls == 0
+    assert memes.generated_groups == [GROUP]
 
 
 async def test_wheel_meme_confirm_generates_with_drawn_template(tmp_path: Path) -> None:
@@ -696,6 +705,8 @@ async def test_wheel_meme_confirm_generates_with_drawn_template(tmp_path: Path) 
             await confirm.task
 
     assert memes.generated == [(confirm.meme, "single", TRIGGER)]
+    assert memes.drawn_groups == [GROUP]
+    assert memes.generated_groups == [GROUP]
     assert (GROUP, TRIGGER) not in coordinator.meme_confirms
     assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 10
     assert any(segment.type == "image" for message in sent for segment in message)

@@ -412,7 +412,9 @@ class WheelCoordinator:
         try:
             if self.memes is None:
                 raise MemeGenerationError("meme-generator 未安装")
-            meme, kind = self.memes.draw()
+            meme, kind = await self.memes.draw_for_group(
+                group_id=pending.group_id, bot=pending.bot, user_id=participant.user_id
+            )
         except MemeGenerationError as error:
             await self._report_meme_error(participant.user_id, pending.send, error)
             return
@@ -485,6 +487,7 @@ class WheelCoordinator:
                 bot=confirm.bot,
                 user_id=confirm.user_id,
                 nickname=confirm.nickname,
+                group_id=confirm.group_id,
             )
         except MemeGenerationError as error:
             await self._report_meme_error(confirm.user_id, confirm.send, error)
@@ -548,6 +551,7 @@ class WheelCoordinator:
                 bot=pending.bot,
                 user_id=participant.user_id,
                 nickname=participant.nickname,
+                group_id=pending.group_id,
             )
         except MemeGenerationError as error:
             await self._report_meme_error(participant.user_id, pending.send, error)
