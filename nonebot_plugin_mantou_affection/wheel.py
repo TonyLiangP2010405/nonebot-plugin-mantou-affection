@@ -11,6 +11,7 @@ from nonebot.adapters.onebot.v11 import MessageSegment
 
 from .service import normalize_nickname
 from .wheel_memes import MemeAssetMissing, MemeGenerationError
+from .wheel_stickers import StickerAssetMissing, StickerError
 
 if TYPE_CHECKING:
     from .ambient import EventCoordinator
@@ -119,6 +120,23 @@ WHEEL_JOIN_COST_REPLY = (
 WHEEL_JOIN_POOR_REPLY = " 好感度不足 {cost} 点，暂时无法参与本轮转盘（当前 {affection}）。"
 WHEEL_JOIN_REFUND_REPLY = " 本轮没有开转，参与费 {amount:+d} 已退回，当前 {affection}"
 
+WHEEL_TAOZI_PROMPT_REPLY = (
+    " 你抽中了「桃子表情包」！花 {cost} 点好感可以换一张随机桃子表情包图片，"
+    "当前 {affection}。要换吗？请在 {timeout} 秒内回复「要」或「不要」。"
+)
+WHEEL_TAOZI_CONFIRMED_REPLY = " 已扣除 {cost} 点好感，桃子的表情包「{caption}」来啦："
+WHEEL_TAOZI_DECLINED_REPLY = " 已放弃兑换桃子的表情包，好感不变"
+WHEEL_TAOZI_TIMEOUT_REPLY = " 桃子表情包确认超时，本次没有兑换，好感不变"
+WHEEL_TAOZI_POOR_REPLY = " 好感不足 {cost} 点，本次没有兑换，当前 {affection}"
+WHEEL_TAOZI_MISSING_REPLY = " 桃子表情包素材还没准备好，本次不重抽"
+WHEEL_TAOZI_FAILED_REPLY = " 本次桃子表情包发送失败，不重抽"
+
+
+def format_sticker_prompt(affection: int, timeout: int) -> str:
+    return WHEEL_TAOZI_PROMPT_REPLY.format(
+        cost=WHEEL_TAOZI_COST, affection=affection, timeout=timeout
+    )
+
 
 def _meme_name(meme: Any) -> str:
     for keyword in getattr(meme, "keywords", None) or ():
@@ -185,6 +203,17 @@ class PendingMemeConfirm:
         self.task: asyncio.Task | None = None
 
 
+class PendingStickerConfirm:
+    def __init__(self, group_id: str, user_id: str, nickname: str, *, bot, send):
+        self.group_id = group_id
+        self.user_id = user_id
+        self.nickname = nickname
+        self.bot = bot
+        self.send = send
+        self.accepting = True
+        self.task: asyncio.Task | None = None
+
+
 class WheelCoordinator:
     def __init__(
         self,
@@ -195,6 +224,7 @@ class WheelCoordinator:
         rng: random.Random | None = None,
         memes=None,
         resources=None,
+        stickers=None,
         poke_delay: float = 0.2,
     ):
         self.service = service
@@ -203,13 +233,18 @@ class WheelCoordinator:
         self.rng = rng or random.Random()
         self.memes = memes
         self.resources = resources
+        self.stickers = stickers
         self.poke_delay = poke_delay
         self.choice_timeout = float(config.mantou_affection_wheel_timeout)
         self.meme_confirm_timeout = float(
             config.mantou_affection_wheel_meme_confirm_timeout
         )
+        self.sticker_confirm_timeout = float(
+            config.mantou_affection_wheel_taozi_timeout
+        )
         self.pending: dict[str, PendingWheel] = {}
         self.meme_confirms: dict[tuple[str, str], PendingMemeConfirm] = {}
+        self.sticker_confirms: dict[tuple[str, str], PendingStickerConfirm] = {}
         self._lock = asyncio.Lock()
 
     def busy(self, group_id: str) -> bool:
@@ -255,6 +290,17 @@ class WheelCoordinator:
             and keyword in {"确认", "不确认"}
         ):
             await self._answer_meme_confirm(meme_confirm, accepted=keyword == "确认")
+            return True
+
+        sticker_confirm = self.sticker_confirms.get((str(group_id), user))
+        if (
+            sticker_confirm is not None
+            and sticker_confirm.accepting
+            and keyword in {"要", "不要"}
+        ):
+            await self._answer_sticker_confirm(
+                sticker_confirm, accepted=keyword == "要"
+            )
             return True
 
         pending = self.pending.get(str(group_id))
@@ -431,6 +477,8 @@ class WheelCoordinator:
                         )
                     elif outcome.kind == "poke":
                         await self._run_poke(pending, participant, outcome.value)
+                    elif outcome.kind == "taozi":
+                        await self._run_sticker_outcome(pending, participant)
                     else:
                         await self._run_meme_outcome(pending, participant)
                 except Exception:
@@ -642,4 +690,174 @@ class WheelCoordinator:
         logger.warning(f"[mantou-affection] memes 结果生成失败: {error}")
         await send(
             MessageSegment.at(user_id) + MessageSegment.text(WHEEL_MEME_FAILED_REPLY)
+        )
+
+    async def _run_sticker_outcome(
+        self, pending: PendingWheel, participant: WheelParticipant
+    ) -> None:
+        current = (await self.service.profile(pending.group_id, participant.user_id)).affection
+        if current < WHEEL_TAOZI_COST:
+            await pending.send(
+                MessageSegment.at(participant.user_id)
+                + MessageSegment.text(
+                    WHEEL_TAOZI_POOR_REPLY.format(
+                        cost=WHEEL_TAOZI_COST, affection=current
+                    )
+                )
+            )
+            return
+        await self._request_sticker_confirm(pending, participant)
+
+    async def _request_sticker_confirm(
+        self, pending: PendingWheel, participant: WheelParticipant
+    ) -> None:
+        key = (pending.group_id, participant.user_id)
+        old = self.sticker_confirms.pop(key, None)
+        if old is not None:
+            old.accepting = False
+            if old.task is not None:
+                old.task.cancel()
+        confirm = PendingStickerConfirm(
+            pending.group_id,
+            participant.user_id,
+            participant.nickname,
+            bot=pending.bot,
+            send=pending.send,
+        )
+        self.sticker_confirms[key] = confirm
+        current = (await self.service.profile(pending.group_id, participant.user_id)).affection
+        try:
+            await pending.send(
+                MessageSegment.at(participant.user_id)
+                + MessageSegment.text(
+                    format_sticker_prompt(current, int(self.sticker_confirm_timeout))
+                )
+            )
+        except Exception:
+            confirm.accepting = False
+            if self.sticker_confirms.get(key) is confirm:
+                self.sticker_confirms.pop(key, None)
+            raise
+        if self.sticker_confirms.get(key) is confirm and confirm.accepting:
+            confirm.task = asyncio.create_task(self._expire_sticker_confirm(confirm))
+
+    async def _expire_sticker_confirm(self, confirm: PendingStickerConfirm) -> None:
+        try:
+            await asyncio.sleep(self.sticker_confirm_timeout)
+        except asyncio.CancelledError:
+            return
+        await self._settle_sticker_confirm(confirm, declined=False)
+
+    async def _answer_sticker_confirm(
+        self, confirm: PendingStickerConfirm, *, accepted: bool
+    ) -> None:
+        if (
+            not confirm.accepting
+            or self.sticker_confirms.get((confirm.group_id, confirm.user_id)) is not confirm
+        ):
+            return
+        if not accepted:
+            await self._settle_sticker_confirm(confirm, declined=True)
+            return
+
+        self._cancel_sticker_confirm(confirm)
+        try:
+            if self.stickers is None:
+                raise StickerAssetMissing("桃子表情包素材库未启用")
+            image, caption = await self.stickers.pick()
+        except StickerAssetMissing as error:
+            await self._report_sticker_error(confirm.user_id, confirm.send, error)
+            return
+        except Exception:
+            logger.exception("[mantou-affection] 转盘桃子表情包取图失败")
+            await confirm.send(
+                MessageSegment.at(confirm.user_id)
+                + MessageSegment.text(WHEEL_TAOZI_FAILED_REPLY)
+            )
+            return
+
+        try:
+            current = (
+                await self.service.profile(confirm.group_id, confirm.user_id)
+            ).affection
+            if current < WHEEL_TAOZI_COST:
+                await confirm.send(
+                    MessageSegment.at(confirm.user_id)
+                    + MessageSegment.text(
+                        WHEEL_TAOZI_POOR_REPLY.format(
+                            cost=WHEEL_TAOZI_COST, affection=current
+                        )
+                    )
+                )
+                return
+            applied, _profile = await self.service.adjust(
+                confirm.group_id,
+                confirm.user_id,
+                confirm.nickname,
+                -WHEEL_TAOZI_COST,
+            )
+        except Exception:
+            logger.exception(
+                f"[mantou-affection] 转盘桃子表情包扣费失败 group={confirm.group_id} "
+                f"user={confirm.user_id}"
+            )
+            await confirm.send(
+                MessageSegment.at(confirm.user_id)
+                + MessageSegment.text(WHEEL_TAOZI_FAILED_REPLY)
+            )
+            return
+        await confirm.send(
+            MessageSegment.at(confirm.user_id)
+            + MessageSegment.text(
+                WHEEL_TAOZI_CONFIRMED_REPLY.format(cost=-applied, caption=caption)
+            )
+            + MessageSegment.image(image)
+        )
+
+    async def _settle_sticker_confirm(
+        self, confirm: PendingStickerConfirm, *, declined: bool
+    ) -> None:
+        if (
+            not confirm.accepting
+            or self.sticker_confirms.get((confirm.group_id, confirm.user_id)) is not confirm
+        ):
+            return
+        self._cancel_sticker_confirm(confirm)
+        template = (
+            WHEEL_TAOZI_DECLINED_REPLY if declined else WHEEL_TAOZI_TIMEOUT_REPLY
+        )
+        try:
+            await confirm.send(
+                MessageSegment.at(confirm.user_id) + MessageSegment.text(template)
+            )
+        except Exception:
+            logger.exception(
+                f"[mantou-affection] 转盘桃子表情包放弃提示发送失败 "
+                f"group={confirm.group_id} user={confirm.user_id}"
+            )
+
+    def _cancel_sticker_confirm(self, confirm: PendingStickerConfirm) -> None:
+        confirm.accepting = False
+        key = (confirm.group_id, confirm.user_id)
+        if self.sticker_confirms.get(key) is confirm:
+            self.sticker_confirms.pop(key, None)
+        task = confirm.task
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+
+    async def _report_sticker_error(
+        self, user_id: str, send, error: StickerError
+    ) -> None:
+        if isinstance(error, StickerAssetMissing):
+            logger.warning(f"[mantou-affection] 桃子表情包素材尚未就绪: {error}")
+            if self.stickers is not None:
+                self.stickers.check_after_missing()
+            await send(
+                MessageSegment.at(user_id)
+                + MessageSegment.text(WHEEL_TAOZI_MISSING_REPLY)
+            )
+            return
+        logger.warning(f"[mantou-affection] 桃子表情包取图失败: {error}")
+        await send(
+            MessageSegment.at(user_id) + MessageSegment.text(WHEEL_TAOZI_FAILED_REPLY)
         )

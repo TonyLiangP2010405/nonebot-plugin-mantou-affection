@@ -22,6 +22,7 @@ from nonebot_plugin_mantou_affection.wheel import (
     format_wheel_rules,
 )
 from nonebot_plugin_mantou_affection.wheel_memes import MemeAssetMissing, MemeGenerationError
+from nonebot_plugin_mantou_affection.wheel_stickers import StickerAssetMissing, StickerError
 
 GROUP = "94001"
 TRIGGER = "94002"
@@ -137,7 +138,31 @@ class FakeResources:
         return True
 
 
-def make_coordinator(tmp_path: Path, rng=None, memes=None, resources=None):
+class FakeStickers:
+    def __init__(
+        self,
+        image: bytes = b"taozi:001",
+        caption: str = "头部主播",
+        error: Exception | None = None,
+    ):
+        self.image = image
+        self.caption = caption
+        self.error = error
+        self.picks = 0
+        self.rechecks = 0
+
+    async def pick(self) -> tuple[bytes, str]:
+        self.picks += 1
+        if self.error is not None:
+            raise self.error
+        return self.image, self.caption
+
+    def check_after_missing(self) -> bool:
+        self.rechecks += 1
+        return True
+
+
+def make_coordinator(tmp_path: Path, rng=None, memes=None, resources=None, stickers=None):
     config = Config()
     service = AffectionService(AffectionStore(tmp_path / "affection.json"), config)
     coordinator = WheelCoordinator(
@@ -146,6 +171,7 @@ def make_coordinator(tmp_path: Path, rng=None, memes=None, resources=None):
         rng=rng or random.Random(0),
         memes=memes,
         resources=resources,
+        stickers=stickers,
         poke_delay=0,
     )
     coordinator.choice_timeout = 30
@@ -897,3 +923,203 @@ async def test_wheel_meme_confirmed_generation_failure_reports(tmp_path: Path) -
     assert "本次表情生成失败，不重抽" in sent_text(sent)
     assert not any(segment.type == "image" for message in sent for segment in message)
     assert coordinator.meme_confirms == {}
+
+
+async def test_wheel_taozi_asks_before_charging(tmp_path: Path) -> None:
+    stickers = FakeStickers()
+    coordinator = make_coordinator(tmp_path, rng=SequenceRng([19]), stickers=stickers)
+    await give(coordinator.service, TRIGGER, 20)
+    pending, sent, _ = await start(coordinator)
+
+    await operate(coordinator, pending)
+
+    assert (GROUP, TRIGGER) in coordinator.sticker_confirms
+    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 20
+    body = sent_text(sent)
+    assert "「桃子表情包」" in body
+    assert "花 10 点好感" in body
+    assert "当前 20" in body
+    assert "回复「要」或「不要」" in body
+    assert "30 秒" in body
+    assert not any(segment.type == "image" for message in sent for segment in message)
+    assert stickers.picks == 0
+    assert coordinator.sticker_confirm_timeout == 30
+
+
+async def test_wheel_taozi_confirm_charges_and_sends_image(tmp_path: Path) -> None:
+    stickers = FakeStickers()
+    coordinator = make_coordinator(tmp_path, rng=SequenceRng([19]), stickers=stickers)
+    await give(coordinator.service, TRIGGER, 20)
+    pending, sent, _ = await start(coordinator)
+    await operate(coordinator, pending)
+
+    assert await coordinator.answer(GROUP, TRIGGER, "触发者", "要") is True
+
+    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 10
+    assert (GROUP, TRIGGER) not in coordinator.sticker_confirms
+    assert stickers.picks == 1
+    assert any(segment.type == "image" for message in sent for segment in message)
+    body = sent_text(sent)
+    assert "已扣除 10 点好感" in body
+    assert "「头部主播」" in body
+
+
+async def test_wheel_taozi_confirm_at_exactly_ten_points_reaches_zero(
+    tmp_path: Path,
+) -> None:
+    coordinator = make_coordinator(
+        tmp_path, rng=SequenceRng([19]), stickers=FakeStickers()
+    )
+    await give(coordinator.service, TRIGGER, 10)
+    pending, sent, _ = await start(coordinator)
+    await operate(coordinator, pending)
+
+    assert await coordinator.answer(GROUP, TRIGGER, "触发者", "要") is True
+
+    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 0
+    assert any(segment.type == "image" for message in sent for segment in message)
+
+
+async def test_wheel_taozi_decline_keeps_affection(tmp_path: Path) -> None:
+    coordinator = make_coordinator(
+        tmp_path, rng=SequenceRng([19]), stickers=FakeStickers()
+    )
+    await give(coordinator.service, TRIGGER, 20)
+    pending, sent, _ = await start(coordinator)
+    await operate(coordinator, pending)
+
+    assert await coordinator.answer(GROUP, TRIGGER, "触发者", "不要") is True
+
+    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 20
+    assert (GROUP, TRIGGER) not in coordinator.sticker_confirms
+    assert "已放弃兑换桃子的表情包" in sent_text(sent)
+    assert not any(segment.type == "image" for message in sent for segment in message)
+
+
+async def test_wheel_taozi_timeout_keeps_affection(tmp_path: Path) -> None:
+    coordinator = make_coordinator(
+        tmp_path, rng=SequenceRng([19]), stickers=FakeStickers()
+    )
+    coordinator.sticker_confirm_timeout = 0.02
+    await give(coordinator.service, TRIGGER, 20)
+    pending, sent, _ = await start(coordinator)
+    await operate(coordinator, pending)
+    confirm = coordinator.sticker_confirms[(GROUP, TRIGGER)]
+    assert confirm.task is not None
+
+    await asyncio.wait_for(confirm.task, 2)
+
+    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 20
+    assert coordinator.sticker_confirms == {}
+    assert "桃子表情包确认超时" in sent_text(sent)
+
+
+async def test_wheel_taozi_insufficient_at_prompt_does_not_ask(tmp_path: Path) -> None:
+    coordinator = make_coordinator(
+        tmp_path, rng=SequenceRng([19]), stickers=FakeStickers()
+    )
+    await give(coordinator.service, TRIGGER, 5)
+    pending, sent, _ = await start(coordinator)
+
+    await operate(coordinator, pending)
+
+    assert coordinator.sticker_confirms == {}
+    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 5
+    assert "好感不足 10 点" in sent_text(sent)
+
+
+async def test_wheel_taozi_insufficient_after_prompt_does_not_charge(
+    tmp_path: Path,
+) -> None:
+    stickers = FakeStickers()
+    coordinator = make_coordinator(tmp_path, rng=SequenceRng([19]), stickers=stickers)
+    await give(coordinator.service, TRIGGER, 20)
+    pending, sent, _ = await start(coordinator)
+    await operate(coordinator, pending)
+    await give(coordinator.service, TRIGGER, 3)
+
+    assert await coordinator.answer(GROUP, TRIGGER, "触发者", "要") is True
+
+    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 3
+    assert "好感不足 10 点" in sent_text(sent)
+    assert not any(segment.type == "image" for message in sent for segment in message)
+    assert coordinator.sticker_confirms == {}
+
+
+async def test_wheel_taozi_missing_assets_does_not_charge(tmp_path: Path) -> None:
+    stickers = FakeStickers(error=StickerAssetMissing("catalog.json"))
+    coordinator = make_coordinator(tmp_path, rng=SequenceRng([19]), stickers=stickers)
+    await give(coordinator.service, TRIGGER, 20)
+    pending, sent, _ = await start(coordinator)
+    await operate(coordinator, pending)
+
+    assert await coordinator.answer(GROUP, TRIGGER, "触发者", "要") is True
+
+    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 20
+    assert "桃子表情包素材还没准备好" in sent_text(sent)
+    assert stickers.rechecks == 1
+    assert not any(segment.type == "image" for message in sent for segment in message)
+
+
+async def test_wheel_taozi_pick_failure_does_not_charge(tmp_path: Path) -> None:
+    stickers = FakeStickers(error=StickerError("boom"))
+    coordinator = make_coordinator(tmp_path, rng=SequenceRng([19]), stickers=stickers)
+    await give(coordinator.service, TRIGGER, 20)
+    pending, sent, _ = await start(coordinator)
+    await operate(coordinator, pending)
+
+    assert await coordinator.answer(GROUP, TRIGGER, "触发者", "要") is True
+
+    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 20
+    assert "本次桃子表情包发送失败，不重抽" in sent_text(sent)
+    assert not any(segment.type == "image" for message in sent for segment in message)
+
+
+async def test_wheel_taozi_confirm_replaced_by_new_draw(tmp_path: Path) -> None:
+    coordinator = make_coordinator(
+        tmp_path, rng=SequenceRng([19, 19, 19]), stickers=FakeStickers()
+    )
+    coordinator.sticker_confirm_timeout = 5
+    await give(coordinator.service, TRIGGER, 100)
+    await give(coordinator.service, OTHER, 100)
+    pending, _, _ = await start(coordinator)
+    await operate(coordinator, pending)
+    old = coordinator.sticker_confirms[(GROUP, TRIGGER)]
+    assert old.task is not None
+
+    pending2, _, _ = await start(coordinator, user_id=OTHER, nickname="路人")
+    await coordinator.answer(GROUP, TRIGGER, "触发者", "参与")
+    await operate(coordinator, pending2, user_id=OTHER)
+
+    new = coordinator.sticker_confirms[(GROUP, TRIGGER)]
+    assert new is not old
+    assert old.accepting is False
+    with suppress(asyncio.CancelledError):
+        await old.task
+    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 98
+    new.task.cancel()
+
+
+async def test_wheel_taozi_and_meme_confirms_coexist(tmp_path: Path) -> None:
+    memes = FakeMemes()
+    stickers = FakeStickers()
+    coordinator = make_coordinator(
+        tmp_path, rng=SequenceRng([0, 50, 19]), memes=memes, stickers=stickers
+    )
+    await give(coordinator.service, TRIGGER, 20)
+    await give(coordinator.service, OTHER, 20)
+    pending, _, _ = await start(coordinator)
+    await operate(coordinator, pending)
+    assert (GROUP, TRIGGER) in coordinator.meme_confirms
+
+    pending2, _, _ = await start(coordinator, user_id=OTHER, nickname="路人")
+    await coordinator.answer(GROUP, TRIGGER, "触发者", "参与")
+    await operate(coordinator, pending2, user_id=OTHER)
+    assert (GROUP, TRIGGER) in coordinator.sticker_confirms
+
+    assert await coordinator.answer(GROUP, TRIGGER, "触发者", "要") is True
+
+    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 8
+    assert (GROUP, TRIGGER) in coordinator.meme_confirms
+    assert (GROUP, TRIGGER) not in coordinator.sticker_confirms
+    await cancel_meme_confirm(coordinator)
