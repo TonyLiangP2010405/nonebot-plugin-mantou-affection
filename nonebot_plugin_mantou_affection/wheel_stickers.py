@@ -9,7 +9,6 @@ import time
 import urllib.request
 import zipfile
 from dataclasses import dataclass
-from io import BytesIO
 from pathlib import Path
 from typing import Any, Callable
 
@@ -38,6 +37,7 @@ CATALOG_NAME = "catalog.json"
 TAOZI_STICKERS_SLUG = "TonyLiangP2010405/taozi-stickers"
 STICKERS_SUBDIR = "stickers/"
 STAGING_NAME = ".taozi_stickers.staging"
+ARCHIVE_NAME = ".taozi_stickers.zip"
 
 
 def load_catalog(base_dir: Path) -> list[TaoziSticker]:
@@ -116,18 +116,31 @@ class TaoziStickerLibrary:
         self._task: asyncio.Task | None = None
         self._last_check: float | None = None
 
-    def _download(self) -> bytes:
+    def _download(self) -> Path:
+        """边下边写到临时文件，并逐源校验确实是 zip；坏包换下一个源。"""
+
+        base = self.base_dir
+        if base is None:
+            raise StickerError("桃子表情包目录未配置")
+        base.parent.mkdir(parents=True, exist_ok=True)
+        archive = base.parent / ARCHIVE_NAME
         last_error: Exception | None = None
         for url in repo_download_urls(TAOZI_STICKERS_SLUG):
             try:
-                with self.opener(url, timeout=60) as response:
-                    return response.read()
+                with self.opener(url, timeout=60) as response, archive.open(
+                    "wb"
+                ) as sink:
+                    shutil.copyfileobj(response, sink)
+                with zipfile.ZipFile(archive):
+                    pass
+                return archive
             except Exception as error:
                 last_error = error
+                archive.unlink(missing_ok=True)
                 logger.warning(f"[mantou-affection] 桃子表情包下载源不可用: {error}")
         raise StickerError(f"桃子表情包下载失败: {last_error}")
 
-    def _extract(self, data: bytes) -> None:
+    def _extract(self, archive: Path) -> None:
         base = self.base_dir
         if base is None:
             raise StickerError("桃子表情包目录未配置")
@@ -135,18 +148,18 @@ class TaoziStickerLibrary:
         shutil.rmtree(staging, ignore_errors=True)
         staging.mkdir(parents=True, exist_ok=True)
         try:
-            with zipfile.ZipFile(BytesIO(data)) as archive:
-                for info in archive.infolist():
+            with zipfile.ZipFile(archive) as bundle:
+                for info in bundle.infolist():
                     if info.is_dir():
                         continue
                     rel = _strip_root(info.filename)
-                    if rel is None:
+                    if rel is None or ".." in Path(rel).parts:
                         continue
                     if rel != CATALOG_NAME and not rel.startswith(STICKERS_SUBDIR):
                         continue
                     target = staging / rel
                     target.parent.mkdir(parents=True, exist_ok=True)
-                    with archive.open(info) as source, target.open("wb") as sink:
+                    with bundle.open(info) as source, target.open("wb") as sink:
                         shutil.copyfileobj(source, sink)
             shutil.rmtree(base, ignore_errors=True)
             staging.rename(base)
@@ -155,11 +168,11 @@ class TaoziStickerLibrary:
             raise
 
     def _download_and_extract(self) -> None:
-        base = self.base_dir
-        if base is None:
-            raise StickerError("桃子表情包目录未配置")
-        base.parent.mkdir(parents=True, exist_ok=True)
-        self._extract(self._download())
+        archive = self._download()
+        try:
+            self._extract(archive)
+        finally:
+            archive.unlink(missing_ok=True)
 
     async def ensure_loaded(self) -> None:
         if not self.enabled or self.base_dir is None or self._loaded:

@@ -98,9 +98,15 @@ def test_catalog_ready_requires_every_listed_file(tmp_path: Path) -> None:
 class FakeResponse:
     def __init__(self, data: bytes):
         self.data = data
+        self.offset = 0
 
-    def read(self) -> bytes:
-        return self.data
+    def read(self, size: int = -1) -> bytes:
+        if size is None or size < 0:
+            chunk = self.data[self.offset :]
+        else:
+            chunk = self.data[self.offset : self.offset + size]
+        self.offset += len(chunk)
+        return chunk
 
     def __enter__(self) -> FakeResponse:
         return self
@@ -138,7 +144,9 @@ class FakeOpener:
         result = self.responses.pop(0)
         if isinstance(result, Exception):
             raise result
-        return FakeResponse(result)
+        if isinstance(result, (bytes, bytearray)):
+            return FakeResponse(bytes(result))
+        return result
 
 
 def make_library(tmp_path: Path, opener, **kwargs) -> TaoziStickerLibrary:
@@ -272,3 +280,57 @@ def test_check_after_missing_is_throttled_by_clock(tmp_path: Path) -> None:
     now[0] += 600
     assert library.check_after_missing() is True
     assert calls == [100.0, 800.0]
+
+
+class ChunkedResponse:
+    """只支持分块读取的响应，用来证明下载没有整包读进内存。"""
+
+    def __init__(self, data: bytes):
+        self._buffer = io.BytesIO(data)
+
+    def read(self, size: int = -1) -> bytes:
+        if size is None or size < 0:
+            raise AssertionError("不允许整包读取响应体")
+        return self._buffer.read(size)
+
+    def __enter__(self) -> ChunkedResponse:
+        return self
+
+    def __exit__(self, *exc) -> bool:
+        return False
+
+
+async def test_ensure_loaded_skips_mirror_returning_html_page(tmp_path: Path) -> None:
+    archive = repo_zip({"catalog.json": catalog_payload(), "stickers/001.png": b"png"})
+    opener = FakeOpener([b"<html>rate limited</html>", archive])
+    library = make_library(tmp_path, opener)
+
+    await library.ensure_loaded()
+
+    assert len(opener.urls) == 2
+    assert (tmp_path / "taozi_stickers" / "catalog.json").is_file()
+
+
+async def test_ensure_loaded_streams_download_to_disk(tmp_path: Path) -> None:
+    archive = repo_zip({"catalog.json": catalog_payload(), "stickers/001.png": b"png"})
+    library = make_library(tmp_path, FakeOpener([ChunkedResponse(archive)]))
+
+    await library.ensure_loaded()
+
+    assert (tmp_path / "taozi_stickers" / "stickers" / "001.png").is_file()
+
+
+async def test_ensure_loaded_rejects_entries_escaping_target(tmp_path: Path) -> None:
+    archive = repo_zip(
+        {
+            "catalog.json": catalog_payload(),
+            "stickers/001.png": b"png",
+            "stickers/../../evil.txt": b"x",
+        }
+    )
+    library = make_library(tmp_path, FakeOpener([archive]))
+
+    await library.ensure_loaded()
+
+    assert not (tmp_path / "evil.txt").exists()
+    assert (tmp_path / "taozi_stickers" / "stickers" / "001.png").is_file()
