@@ -23,7 +23,8 @@ class WheelOutcome:
 
 
 WHEEL_OUTCOMES: tuple[tuple[WheelOutcome, int], ...] = (
-    (WheelOutcome("meme"), 20),
+    (WheelOutcome("meme"), 19),
+    (WheelOutcome("taozi"), 1),
     (WheelOutcome("poke", 1), 12),
     (WheelOutcome("poke", 3), 8),
     (WheelOutcome("poke", 5), 5),
@@ -61,10 +62,12 @@ def draw_not_operate_delta(rng: random.Random) -> int:
 WHEEL_MAX_PARTICIPANTS = 4
 WHEEL_TOTAL_SEATS = WHEEL_MAX_PARTICIPANTS + 1
 WHEEL_JOIN_COST = 2
+WHEEL_TAOZI_COST = 10
 
 
 def format_wheel_rules(timeout: int) -> str:
     meme_weight = sum(weight for outcome, weight in WHEEL_OUTCOMES if outcome.kind == "meme")
+    taozi_weight = sum(weight for outcome, weight in WHEEL_OUTCOMES if outcome.kind == "taozi")
     pokes = [(o.value, w) for o, w in WHEEL_OUTCOMES if o.kind == "poke"]
     gains = [(o.value, w) for o, w in WHEEL_OUTCOMES if o.kind == "affection" and o.value > 0]
     losses = [(-o.value, w) for o, w in WHEEL_OUTCOMES if o.kind == "affection" and o.value < 0]
@@ -82,6 +85,7 @@ def format_wheel_rules(timeout: int) -> str:
         "本轮取消或触发者选择“不运作”时，参与费会全额退回。\n"
         "转盘各项概率：\n"
         f"· 馒头制作随机表情 {meme_weight}%\n"
+        f"· 桃子表情包 {taozi_weight}%（换一张需 {WHEEL_TAOZI_COST} 点好感）\n"
         f"· 馒头主动戳一戳：{join(pokes, '×')}\n"
         f"· 好感增加：{join(gains, '+')}\n"
         f"· 好感减少：{join(losses, '-')}"

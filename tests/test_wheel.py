@@ -201,7 +201,8 @@ async def cancel_meme_confirm(coordinator: WheelCoordinator, user_id: str = TRIG
 def test_wheel_weights_match_approved_table() -> None:
     weighted = [((outcome.kind, outcome.value), weight) for outcome, weight in WHEEL_OUTCOMES]
     assert weighted == [
-        (("meme", 0), 20),
+        (("meme", 0), 19),
+        (("taozi", 0), 1),
         (("poke", 1), 12),
         (("poke", 3), 8),
         (("poke", 5), 5),
@@ -224,8 +225,8 @@ def test_wheel_weights_match_approved_table() -> None:
 
 
 def test_wheel_draw_uses_independent_integer_ranges() -> None:
-    assert draw_wheel_outcome(FixedRollRng(0)).kind == "meme"
-    assert draw_wheel_outcome(FixedRollRng(19)).kind == "meme"
+    assert draw_wheel_outcome(FixedRollRng(18)).kind == "meme"
+    assert draw_wheel_outcome(FixedRollRng(19)).kind == "taozi"
     assert draw_wheel_outcome(FixedRollRng(20)).value == 1
     assert draw_wheel_outcome(FixedRollRng(49)).value == 20
     assert draw_wheel_outcome(FixedRollRng(50)).value == 1
@@ -248,7 +249,8 @@ def test_rules_message_lists_every_probability() -> None:
     assert "不运作：1/3 概率好感 +2，2/3 概率好感 -2" in rules
     assert "回复“确认”才会开转" in rules
     assert "确认后立即截止" in rules
-    assert "馒头制作随机表情 20%" in rules
+    assert "馒头制作随机表情 19%" in rules
+    assert "桃子表情包 1%（换一张需 10 点好感）" in rules
     assert "×1 12%" in rules and "×20 1%" in rules
     assert "+1 7%" in rules and "+20 1%" in rules
     assert "-1 7%" in rules and "-20 1%" in rules
@@ -259,7 +261,7 @@ async def test_start_message_shows_probability_table(tmp_path: Path) -> None:
     _, sent, _ = await start(coordinator)
     body = sent[0].extract_plain_text()
     assert "转盘各项概率" in body
-    assert "馒头制作随机表情 20%" in body
+    assert "馒头制作随机表情 19%" in body
     assert "参与需要扣除 2 点好感度" in body
     coordinator.pending[GROUP].task.cancel()
 
