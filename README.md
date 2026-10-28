@@ -91,6 +91,7 @@ MANTOU_AFFECTION_GROUP_QUIZ_TIMEOUT=60
 MANTOU_AFFECTION_WHEEL_CHANCE=0.001
 MANTOU_AFFECTION_WHEEL_TIMEOUT=60
 MANTOU_AFFECTION_WHEEL_MEME_CONFIRM_TIMEOUT=30
+MANTOU_AFFECTION_WHEEL_TAOZI_TIMEOUT=30
 MANTOU_AFFECTION_MEMES_EXTRA_REPOS=true
 MANTOU_AFFECTION_MEMES_BLOCKED_TERMS=
 ```
@@ -740,7 +741,7 @@ pip install --upgrade "nonebot-plugin-mantou-affection[memes]>=0.25.0"
 #### 桃子表情包素材
 
 转盘的桃子表情包来自另一个公开仓库 [TonyLiangP2010405/taozi-stickers](https://github.com/TonyLiangP2010405/taozi-stickers)
-（透明 PNG，每张约 1.8 MB，目前 197 张、计划 500 张）。它不依赖 `meme-generator`，装了 `[memes]` 扩展与否都能用：
+（透明 PNG，每张约 1.8 MB，上游仍在分批补齐到 500 张）。它不依赖 `meme-generator`，装了 `[memes]` 扩展与否都能用：
 
 - **下载方式**：启动时在后台把仓库 main 分支的 zip 下到数据目录下的 `taozi_stickers/`，先直连
   `codeload.github.com`，失败依次换 `ghproxy.net`、`gh-proxy.com`、`ghfast.top`——bot 所在网络访问不了
