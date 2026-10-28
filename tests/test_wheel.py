@@ -241,7 +241,8 @@ def test_not_operate_delta_is_one_third_positive() -> None:
 
 def test_rules_message_lists_every_probability() -> None:
     rules = format_wheel_rules(60)
-    assert "参与完全免费" in rules
+    assert "参与需要扣除 2 点好感度" in rules
+    assert "参与费会全额退回" in rules
     assert "含触发者最多 5 人" in rules
     assert "60 秒" in rules
     assert "不运作：1/3 概率好感 +2，2/3 概率好感 -2" in rules
@@ -259,7 +260,7 @@ async def test_start_message_shows_probability_table(tmp_path: Path) -> None:
     body = sent[0].extract_plain_text()
     assert "转盘各项概率" in body
     assert "馒头制作随机表情 20%" in body
-    assert "参与完全免费" in body
+    assert "参与需要扣除 2 点好感度" in body
     coordinator.pending[GROUP].task.cancel()
 
 
@@ -269,15 +270,29 @@ async def test_wheel_answer_ignores_unrelated_text(tmp_path: Path) -> None:
     assert await coordinator.answer(GROUP, OTHER, "路人", "1") is False
 
 
-async def test_wheel_join_is_free_and_confirms(tmp_path: Path) -> None:
+async def test_wheel_join_charges_two_points(tmp_path: Path) -> None:
     coordinator = make_coordinator(tmp_path)
     await give(coordinator.service, OTHER, 10)
     pending, sent, _ = await start(coordinator)
 
     assert await coordinator.answer(GROUP, OTHER, "路人", "参与") is True
     assert len(pending.participants) == 1
-    assert (await coordinator.service.profile(GROUP, OTHER)).affection == 10
-    assert "参与成功" in sent[-1].extract_plain_text()
+    assert (await coordinator.service.profile(GROUP, OTHER)).affection == 8
+    body = sent[-1].extract_plain_text()
+    assert "参与成功" in body
+    assert "已扣除 2 点好感度，当前 8" in body
+    pending.task.cancel()
+
+
+async def test_wheel_join_requires_enough_affection(tmp_path: Path) -> None:
+    coordinator = make_coordinator(tmp_path)
+    await give(coordinator.service, OTHER, 1)
+    pending, sent, _ = await start(coordinator)
+
+    assert await coordinator.answer(GROUP, OTHER, "路人", "参与") is True
+    assert pending.participants == []
+    assert (await coordinator.service.profile(GROUP, OTHER)).affection == 1
+    assert "好感度不足 2 点" in sent[-1].extract_plain_text()
     pending.task.cancel()
 
 
@@ -287,12 +302,18 @@ async def test_wheel_join_cap_duplicate_and_trigger_notices(tmp_path: Path) -> N
     pending, sent, _ = await start(coordinator)
 
     for user_id in user_ids[:4]:
+        await give(coordinator.service, user_id, 10)
         await coordinator.answer(GROUP, user_id, "路人", "参与")
     await coordinator.answer(GROUP, user_ids[0], "路人", "参与")
     await coordinator.answer(GROUP, user_ids[4], "路人", "参与")
     await coordinator.answer(GROUP, TRIGGER, "触发者", "参与")
 
     assert len(pending.participants) == 4
+    scores = [
+        (await coordinator.service.profile(GROUP, user_id)).affection
+        for user_id in user_ids[:4]
+    ]
+    assert scores == [8, 8, 8, 8]
     texts = [message.extract_plain_text() for message in sent]
     assert any("你已经参与本轮转盘了" in text for text in texts)
     assert any("名额已满（含触发者最多 5 人）" in text for text in texts)
@@ -322,17 +343,19 @@ async def test_wheel_operate_asks_for_second_confirmation(tmp_path: Path) -> Non
     await coordinator.answer(GROUP, TRIGGER, "触发者", "确认")
     await wait_for_choice(pending)
     assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 11
-    assert (await coordinator.service.profile(GROUP, OTHER)).affection == 11
+    assert (await coordinator.service.profile(GROUP, OTHER)).affection == 9
 
 
 async def test_wheel_confirm_closes_joins(tmp_path: Path) -> None:
     coordinator = make_coordinator(tmp_path, rng=SequenceRng([50, 50]))
+    await give(coordinator.service, OTHER, 10)
     pending, _, _ = await start(coordinator)
     await coordinator.answer(GROUP, TRIGGER, "触发者", "运作")
     await coordinator.answer(GROUP, TRIGGER, "触发者", "确认")
 
     await coordinator.answer(GROUP, OTHER, "路人", "参与")
     assert pending.participants == []
+    assert (await coordinator.service.profile(GROUP, OTHER)).affection == 10
     await wait_for_choice(pending)
 
 
@@ -389,20 +412,25 @@ async def test_wheel_timeout_cancels_without_affection_change(tmp_path: Path) ->
     await asyncio.wait_for(pending.task, 2)
     assert (await coordinator.service.profile(GROUP, OTHER)).affection == 10
     assert GROUP not in coordinator.pending
-    assert any("超时取消" in message.extract_plain_text() for message in sent)
+    texts = [message.extract_plain_text() for message in sent]
+    assert any("超时取消" in text for text in texts)
+    assert any("参与费 +2 已退回，当前 10" in text for text in texts)
 
 
 async def test_wheel_not_operate_only_changes_trigger(tmp_path: Path) -> None:
     coordinator = make_coordinator(tmp_path, rng=FixedRollRng(0, 0.9))
     await give(coordinator.service, TRIGGER, 10)
     await give(coordinator.service, OTHER, 10)
-    pending, _, _ = await start(coordinator)
+    pending, sent, _ = await start(coordinator)
     await coordinator.answer(GROUP, OTHER, "路人", "参与")
 
     assert await coordinator.answer(GROUP, TRIGGER, "触发者", "不运作") is True
     await wait_for_choice(pending)
     assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 8
     assert (await coordinator.service.profile(GROUP, OTHER)).affection == 10
+    assert any(
+        "参与费 +2 已退回，当前 10" in message.extract_plain_text() for message in sent
+    )
 
 
 async def test_wheel_choice_and_timeout_settle_once(tmp_path: Path) -> None:
@@ -419,7 +447,7 @@ async def test_wheel_choice_and_timeout_settle_once(tmp_path: Path) -> None:
     await wait_for_choice(pending)
     await asyncio.sleep(0.02)
     assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 11
-    assert (await coordinator.service.profile(GROUP, OTHER)).affection == 11
+    assert (await coordinator.service.profile(GROUP, OTHER)).affection == 9
     assert timeout_task.cancelled() or timeout_task.done()
 
 
@@ -434,8 +462,8 @@ async def test_wheel_operation_draws_each_person_independently(tmp_path: Path) -
     await coordinator.answer(GROUP, TRIGGER, "触发者", "确认")
     await wait_for_choice(pending)
     assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 11
-    assert (await coordinator.service.profile(GROUP, OTHER)).affection == 30
-    assert any("转盘好感 +20，当前 30" in message.extract_plain_text() for message in sent)
+    assert (await coordinator.service.profile(GROUP, OTHER)).affection == 28
+    assert any("转盘好感 +20，当前 28" in message.extract_plain_text() for message in sent)
 
 
 async def test_wheel_poke_failure_reports_without_calling_incoming_poke(
@@ -457,7 +485,7 @@ async def test_wheel_poke_failure_reports_without_calling_incoming_poke(
     await wait_for_choice(pending)
 
     assert bot.calls == [{"group_id": int(GROUP), "user_id": int(OTHER)}]
-    assert (await coordinator.service.profile(GROUP, OTHER)).affection == 10
+    assert (await coordinator.service.profile(GROUP, OTHER)).affection == 8
     failure = "\n".join(message.extract_plain_text() for message in sent)
     assert "馒头主动戳你失败" in failure
     assert "不用你回戳" in failure
@@ -479,7 +507,7 @@ async def test_wheel_meme_missing_requests_throttled_recheck(tmp_path: Path) -> 
     await wait_for_choice(pending)
 
     assert resources.calls == 1
-    assert (await coordinator.service.profile(GROUP, OTHER)).affection == 10
+    assert (await coordinator.service.profile(GROUP, OTHER)).affection == 8
     assert any(segment.type == "image" for message in sent for segment in message)
 
 
@@ -536,7 +564,7 @@ async def test_wheel_poke_message_clearly_says_mantou_pokes_you(tmp_path: Path) 
 async def test_wheel_uses_actual_applied_delta_at_bounds(tmp_path: Path) -> None:
     coordinator = make_coordinator(tmp_path, rng=SequenceRng([75, 99]))
     await give(coordinator.service, TRIGGER, 999)
-    await give(coordinator.service, OTHER, 2)
+    await give(coordinator.service, OTHER, 4)
     pending, sent, _ = await start(coordinator)
     await coordinator.answer(GROUP, OTHER, "路人", "参与")
     await coordinator.answer(GROUP, TRIGGER, "触发者", "运作")
@@ -557,7 +585,7 @@ async def test_wheel_meme_unavailable_does_not_redraw(tmp_path: Path) -> None:
     await coordinator.answer(GROUP, TRIGGER, "触发者", "确认")
     await wait_for_choice(pending)
 
-    assert (await coordinator.service.profile(GROUP, OTHER)).affection == 10
+    assert (await coordinator.service.profile(GROUP, OTHER)).affection == 8
     assert any("本次表情生成失败" in message.extract_plain_text() for message in sent)
 
 
@@ -622,7 +650,7 @@ async def test_wheel_operation_continues_after_participant_adjust_failure(
     await coordinator.answer(GROUP, TRIGGER, "触发者", "确认")
     await wait_for_choice(pending)
     assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 10
-    assert (await coordinator.service.profile(GROUP, OTHER)).affection == 11
+    assert (await coordinator.service.profile(GROUP, OTHER)).affection == 9
     assert GROUP not in coordinator.pending
     assert any("转盘好感 +1" in message.extract_plain_text() for message in sent)
 
@@ -780,10 +808,10 @@ async def test_wheel_meme_confirms_run_in_parallel(tmp_path: Path) -> None:
     assert await coordinator.answer(GROUP, OTHER, "路人", "不确认") is True
 
     assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 10
-    assert (await coordinator.service.profile(GROUP, OTHER)).affection == 12
+    assert (await coordinator.service.profile(GROUP, OTHER)).affection == 10
     body = sent_text(sent)
     assert "已确认，馒头为你做了一张表情" in body
-    assert "已放弃制作表情，好感 +2，当前 12" in body
+    assert "已放弃制作表情，好感 +2，当前 10" in body
     assert coordinator.meme_confirms == {}
     assert any(segment.type == "image" for message in sent for segment in message)
 
@@ -811,7 +839,7 @@ async def test_wheel_meme_confirm_replaced_by_new_draw(tmp_path: Path) -> None:
     with suppress(asyncio.CancelledError):
         await old.task
     assert old.task.done()
-    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 10
+    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 8
     assert (await coordinator.service.profile(GROUP, OTHER)).affection == 11
     await cancel_meme_confirm(coordinator)
 

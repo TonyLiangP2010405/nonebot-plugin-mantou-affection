@@ -60,6 +60,7 @@ def draw_not_operate_delta(rng: random.Random) -> int:
 
 WHEEL_MAX_PARTICIPANTS = 4
 WHEEL_TOTAL_SEATS = WHEEL_MAX_PARTICIPANTS + 1
+WHEEL_JOIN_COST = 2
 
 
 def format_wheel_rules(timeout: int) -> str:
@@ -72,12 +73,13 @@ def format_wheel_rules(timeout: int) -> str:
         return "、".join(f"{prefix}{value} {weight}%" for value, weight in items)
 
     return (
-        " 馒头命运齿轮转盘出现了！参与完全免费，"
-        f"含触发者最多 {WHEEL_TOTAL_SEATS} 人。\n"
+        " 馒头命运齿轮转盘出现了！"
+        f"含触发者最多 {WHEEL_TOTAL_SEATS} 人，参与需要扣除 {WHEEL_JOIN_COST} 点好感度。\n"
         f"触发者请在 {timeout} 秒内发送“运作”或“不运作”"
         "（不运作：1/3 概率好感 +2，2/3 概率好感 -2）；"
         "发送“运作”后还需在倒计时内回复“确认”才会开转。\n"
         "其他群友发送“参与”即可加入，触发者确认后立即截止，运作时每人独立抽取一次。\n"
+        "本轮取消或触发者选择“不运作”时，参与费会全额退回。\n"
         "转盘各项概率：\n"
         f"· 馒头制作随机表情 {meme_weight}%\n"
         f"· 馒头主动戳一戳：{join(pokes, '×')}\n"
@@ -105,6 +107,13 @@ WHEEL_MEME_DECLINED_REPLY = " 已放弃制作表情，好感 {delta:+d}，当前
 WHEEL_MEME_TIMEOUT_REPLY = " 表情确认超时，已放弃制作，好感 {delta:+d}，当前 {affection}"
 WHEEL_MEME_ASSET_MISSING_REPLY = " 表情素材尚未下载完成，本次不重抽"
 WHEEL_MEME_FAILED_REPLY = " 本次表情生成失败，不重抽"
+
+WHEEL_JOIN_COST_REPLY = (
+    " 参与成功，已扣除 {cost} 点好感度，当前 {affection}，"
+    "已加入本轮转盘，等待触发者选择是否运作。"
+)
+WHEEL_JOIN_POOR_REPLY = " 好感度不足 {cost} 点，暂时无法参与本轮转盘（当前 {affection}）。"
+WHEEL_JOIN_REFUND_REPLY = " 本轮没有开转，参与费 {amount:+d} 已退回，当前 {affection}"
 
 
 def _meme_name(meme: Any) -> str:
@@ -298,12 +307,60 @@ class WheelCoordinator:
                 await pending.send(f"本轮转盘名额已满（含触发者最多 {WHEEL_TOTAL_SEATS} 人）。")
                 return True
             name = normalize_nickname(nickname, user_id)
+            current = (await self.service.profile(pending.group_id, user_id)).affection
+            if current < WHEEL_JOIN_COST:
+                await pending.send(
+                    MessageSegment.at(user_id)
+                    + MessageSegment.text(
+                        WHEEL_JOIN_POOR_REPLY.format(
+                            cost=WHEEL_JOIN_COST, affection=current
+                        )
+                    )
+                )
+                return True
+            applied, profile = await self.service.adjust(
+                pending.group_id, user_id, name, -WHEEL_JOIN_COST
+            )
             pending.participants.append(WheelParticipant(user_id, name))
             await pending.send(
                 MessageSegment.at(user_id)
-                + MessageSegment.text(" 参与成功，已加入本轮转盘，等待触发者选择是否运作。")
+                + MessageSegment.text(
+                    WHEEL_JOIN_COST_REPLY.format(
+                        cost=-applied, affection=profile.affection
+                    )
+                )
             )
         return True
+
+    async def _refund_participants(self, pending: PendingWheel) -> None:
+        """本轮没有开转时把参与费退回，每人一条提示；退款失败只记日志。"""
+
+        for participant in pending.participants:
+            try:
+                applied, profile = await self.service.adjust(
+                    pending.group_id,
+                    participant.user_id,
+                    participant.nickname,
+                    WHEEL_JOIN_COST,
+                )
+            except Exception:
+                logger.exception(
+                    f"[mantou-affection] 转盘参与费退款失败 group={pending.group_id} "
+                    f"user={participant.user_id}"
+                )
+                continue
+            try:
+                await pending.send(
+                    MessageSegment.at(participant.user_id)
+                    + MessageSegment.text(
+                        WHEEL_JOIN_REFUND_REPLY.format(
+                            amount=applied, affection=profile.affection
+                        )
+                    )
+                )
+            except Exception:
+                logger.exception("[mantou-affection] 发送转盘退款提示失败")
+        pending.participants.clear()
 
     async def _expire(self, pending: PendingWheel) -> None:
         try:
@@ -320,7 +377,10 @@ class WheelCoordinator:
             else:
                 await pending.send("馒头命运齿轮转盘超时取消。")
         finally:
-            self.discard(pending)
+            try:
+                await self._refund_participants(pending)
+            finally:
+                self.discard(pending)
 
     async def _run_not_operate(self, pending: PendingWheel) -> None:
         try:
@@ -342,7 +402,10 @@ class WheelCoordinator:
                     f"user={trigger.user_id}"
                 )
         finally:
-            self.discard(pending)
+            try:
+                await self._refund_participants(pending)
+            finally:
+                self.discard(pending)
 
     async def _run_operation(self, pending: PendingWheel) -> None:
         try:
