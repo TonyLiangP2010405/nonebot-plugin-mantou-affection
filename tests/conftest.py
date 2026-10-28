@@ -19,6 +19,10 @@ def pytest_configure() -> None:
     plugin = nonebot.load_plugin("nonebot_plugin_mantou_affection")
     if plugin is None:
         raise RuntimeError("nonebot_plugin_mantou_affection 加载失败")
+    # 测试会话会跑一次启动钩子, 关掉素材库, 避免每次跑测试都去下载数百 MB。
+    import nonebot_plugin_mantou_affection as mantou_affection
+
+    mantou_affection.taozi_stickers.enabled = False
 
 
 @pytest.fixture()

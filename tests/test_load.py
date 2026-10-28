@@ -20,6 +20,7 @@ async def test_meme_startup_hook_delegates_to_resource_manager(monkeypatch) -> N
         "check_on_startup",
         lambda **kwargs: calls.append(kwargs),
     )
+    monkeypatch.setattr(plugin.taozi_stickers, "kickoff", lambda: None)
     await plugin._check_meme_resources_on_startup()
     assert calls == [{"handled_by_memes_plugin": False}]
 
@@ -41,6 +42,7 @@ async def test_meme_startup_hook_coerces_string_false_config(monkeypatch) -> Non
         "check_on_startup",
         lambda **kwargs: calls.append(kwargs),
     )
+    monkeypatch.setattr(plugin.taozi_stickers, "kickoff", lambda: None)
     await plugin._check_meme_resources_on_startup()
     assert calls == [{"handled_by_memes_plugin": False}]
 
@@ -98,3 +100,21 @@ async def test_public_read_api_returns_shared_snapshot() -> None:
     )
     assert response.affection == daily_gain_limit
     assert response.text
+
+
+async def test_taozi_stickers_are_wired_and_kicked_off(monkeypatch) -> None:
+    import nonebot_plugin_mantou_affection as plugin
+
+    assert plugin.wheel_coordinator.stickers is plugin.taozi_stickers
+    assert plugin.taozi_stickers.base_dir is not None
+    assert plugin.taozi_stickers.base_dir.name == "taozi_stickers"
+
+    calls = []
+    monkeypatch.setattr(plugin, "get_plugin", lambda _name: None)
+    monkeypatch.setattr(plugin.meme_resources, "check_on_startup", lambda **kwargs: None)
+    monkeypatch.setattr(plugin.meme_repo_manager, "kickoff", lambda: None)
+    monkeypatch.setattr(plugin.taozi_stickers, "kickoff", lambda: calls.append(True))
+
+    await plugin._check_meme_resources_on_startup()
+
+    assert calls == [True]

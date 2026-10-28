@@ -49,6 +49,7 @@ from .wheel_memes import (
     MemeResourceManager,
     parse_blocked_terms,
 )
+from .wheel_stickers import TaoziStickerLibrary
 
 plugin_config = get_plugin_config(Config)
 data_file = Path(get_plugin_data_dir()) / "affection.json"
@@ -97,12 +98,16 @@ meme_repo_manager = MemeRepoManager(
 )
 meme_generator_adapter.repos = meme_repo_manager
 meme_resources = MemeResourceManager()
+taozi_stickers = TaoziStickerLibrary(
+    base_dir=Path(get_plugin_data_dir()) / "taozi_stickers"
+)
 wheel_coordinator = WheelCoordinator(
     service,
     plugin_config,
     events=event_coordinator,
     memes=meme_generator_adapter,
     resources=meme_resources,
+    stickers=taozi_stickers,
 )
 event_coordinator.attach_wheel(wheel_coordinator)
 matchers = register_commands(service, plugin_config, pk_coordinator)
@@ -151,6 +156,7 @@ async def _check_meme_resources_on_startup() -> None:
     )
     meme_resources.check_on_startup(handled_by_memes_plugin=handled)
     meme_repo_manager.kickoff()
+    taozi_stickers.kickoff()
 
 
 async def add_affection(
