@@ -464,3 +464,16 @@ async def test_devil_corpus_floors_affection_at_zero(tmp_path: Path) -> None:
     await give(coordinator.service, TRIGGER, 3)
     await devil_auto(coordinator)
     assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 0
+
+
+async def test_devil_meme_receipt_shows_actual_deduction(tmp_path: Path) -> None:
+    coordinator = make_coordinator(tmp_path, rng=FixedRollRng(roll=0), memes=FakeMemes())
+    coordinator.choice_timeout = 0.01
+    pending, sent = await devil_start(coordinator)
+    await give(coordinator.service, OTHER, 5)
+    await coordinator.answer(GROUP, OTHER, "群友", "参与")
+    await asyncio.wait_for(pending.task, 2)
+    body = sent[-1].extract_plain_text()
+    assert "已扣除 0 点好感" in body
+    assert "当前 0" in body
+    assert (await coordinator.service.profile(GROUP, OTHER)).affection == 0

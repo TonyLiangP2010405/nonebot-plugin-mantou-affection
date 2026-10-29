@@ -218,7 +218,7 @@ WHEEL_MEME_ASSET_MISSING_REPLY = " 表情素材尚未下载完成，本次不重
 WHEEL_MEME_FAILED_REPLY = " 本次表情生成失败，不重抽"
 
 WHEEL_MEME_PICK_REPLY = (
-    " 你抽中了「随机表情」，已扣除 {cost} 点好感。"
+    " 你抽中了「随机表情」，已扣除 {cost} 点好感，当前 {affection}。"
     "回复「选1」到「选{count}」挑一个，{timeout} 秒内有效：\n{options}"
 )
 WHEEL_MEME_PICK_CONFIRMED_REPLY = " 馒头为你做了这张表情："
@@ -291,7 +291,7 @@ def format_meme_confirm(meme: Any, timeout: int) -> str:
 
 
 def format_meme_pick(
-    candidates: list[tuple[Any, str]], timeout: int, cost: int
+    candidates: list[tuple[Any, str]], timeout: int, cost: int, affection: int
 ) -> str:
     options = "\n".join(
         f"选{index}. {_meme_name(meme)}（种类：{_meme_tags(meme)}，"
@@ -299,7 +299,11 @@ def format_meme_pick(
         for index, (meme, _kind) in enumerate(candidates, start=1)
     )
     return WHEEL_MEME_PICK_REPLY.format(
-        cost=cost, count=len(candidates), timeout=timeout, options=options
+        cost=cost,
+        affection=affection,
+        count=len(candidates),
+        timeout=timeout,
+        options=options,
     )
 
 
@@ -837,14 +841,19 @@ class WheelCoordinator:
             return
 
         cost = pending.spec.meme_cost
+        applied = 0
+        affection = (
+            await self.service.profile(pending.group_id, participant.user_id)
+        ).affection
         if cost > 0:
             try:
-                await self.service.adjust(
+                applied, profile = await self.service.adjust(
                     pending.group_id,
                     participant.user_id,
                     participant.nickname,
                     -cost,
                 )
+                affection = profile.affection
             except Exception:
                 logger.exception(
                     f"[mantou-affection] 转盘表情扣费失败 group={pending.group_id} "
@@ -873,7 +882,9 @@ class WheelCoordinator:
                 group_id=pending.group_id,
             )
             return
-        await self._request_meme_pick(pending, participant, candidates, cost)
+        await self._request_meme_pick(
+            pending, participant, candidates, -applied, affection
+        )
 
     async def _send_chosen_meme(
         self, user_id: str, send, meme: Any, kind: str, *, bot, nickname: str, group_id: str
@@ -911,6 +922,7 @@ class WheelCoordinator:
         participant: WheelParticipant,
         candidates: list[tuple[Any, str]],
         cost: int,
+        affection: int,
     ) -> None:
         key = (pending.group_id, participant.user_id)
         old = self.meme_picks.pop(key, None)
@@ -933,7 +945,7 @@ class WheelCoordinator:
                 MessageSegment.at(participant.user_id)
                 + MessageSegment.text(
                     format_meme_pick(
-                        candidates, int(self.meme_confirm_timeout), cost
+                        candidates, int(self.meme_confirm_timeout), cost, affection
                     )
                 )
             )
