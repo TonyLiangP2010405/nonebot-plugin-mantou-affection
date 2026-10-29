@@ -45,11 +45,31 @@ WHEEL_OUTCOMES: tuple[tuple[WheelOutcome, int], ...] = (
     (WheelOutcome("affection", -20), 1),
 )
 
+DEVIL_WHEEL_OUTCOMES: tuple[tuple[WheelOutcome, int], ...] = (
+    (WheelOutcome("meme"), 10),
+    (WheelOutcome("taozi"), 25),
+    (WheelOutcome("corpus"), 10),
+    (WheelOutcome("affection", 4), 4),
+    (WheelOutcome("affection", 8), 2),
+    (WheelOutcome("affection", 12), 2),
+    (WheelOutcome("affection", 20), 1),
+    (WheelOutcome("affection", 40), 1),
+    (WheelOutcome("affection", -4), 13),
+    (WheelOutcome("affection", -8), 11),
+    (WheelOutcome("affection", -12), 8),
+    (WheelOutcome("affection", -20), 7),
+    (WheelOutcome("affection", -40), 4),
+    (WheelOutcome("affection", -60), 2),
+)
 
-def draw_wheel_outcome(rng: random.Random) -> WheelOutcome:
+
+def draw_wheel_outcome(
+    rng: random.Random,
+    outcomes: tuple[tuple[WheelOutcome, int], ...] = WHEEL_OUTCOMES,
+) -> WheelOutcome:
     roll = rng.randrange(100)
     cursor = 0
-    for outcome, weight in WHEEL_OUTCOMES:
+    for outcome, weight in outcomes:
         cursor += weight
         if roll < cursor:
             return outcome
@@ -66,15 +86,59 @@ WHEEL_JOIN_COST = 2
 WHEEL_TAOZI_COST = 10
 
 
+@dataclass(frozen=True)
+class WheelSpec:
+    """一张转盘表的权重与流程开关；普通表和恶魔表只在这份数据上不同。"""
+
+    name: str
+    outcomes: tuple[tuple[WheelOutcome, int], ...]
+    join_cost: int
+    max_participants: int | None
+    auto_start: bool
+    refund: bool
+    meme_cost: int
+    meme_candidates: int
+    corpus_cost: int
+    taozi_cost: int
+
+
+NORMAL_SPEC = WheelSpec(
+    name="normal",
+    outcomes=WHEEL_OUTCOMES,
+    join_cost=WHEEL_JOIN_COST,
+    max_participants=WHEEL_MAX_PARTICIPANTS,
+    auto_start=False,
+    refund=True,
+    meme_cost=0,
+    meme_candidates=1,
+    corpus_cost=0,
+    taozi_cost=WHEEL_TAOZI_COST,
+)
+
+DEVIL_SPEC = WheelSpec(
+    name="devil",
+    outcomes=DEVIL_WHEEL_OUTCOMES,
+    join_cost=5,
+    max_participants=None,
+    auto_start=True,
+    refund=False,
+    meme_cost=5,
+    meme_candidates=5,
+    corpus_cost=5,
+    taozi_cost=30,
+)
+
+
+def _join_weights(items: list[tuple[int, int]], prefix: str) -> str:
+    return "、".join(f"{prefix}{value} {weight}%" for value, weight in items)
+
+
 def format_wheel_rules(timeout: int) -> str:
     meme_weight = sum(weight for outcome, weight in WHEEL_OUTCOMES if outcome.kind == "meme")
     taozi_weight = sum(weight for outcome, weight in WHEEL_OUTCOMES if outcome.kind == "taozi")
     pokes = [(o.value, w) for o, w in WHEEL_OUTCOMES if o.kind == "poke"]
     gains = [(o.value, w) for o, w in WHEEL_OUTCOMES if o.kind == "affection" and o.value > 0]
     losses = [(-o.value, w) for o, w in WHEEL_OUTCOMES if o.kind == "affection" and o.value < 0]
-
-    def join(items: list[tuple[int, int]], prefix: str) -> str:
-        return "、".join(f"{prefix}{value} {weight}%" for value, weight in items)
 
     return (
         " 馒头命运齿轮转盘出现了！"
@@ -87,9 +151,47 @@ def format_wheel_rules(timeout: int) -> str:
         "转盘各项概率：\n"
         f"· 馒头制作随机表情 {meme_weight}%\n"
         f"· 桃子表情包 {taozi_weight}%（换一张需 {WHEEL_TAOZI_COST} 点好感）\n"
-        f"· 馒头主动戳一戳：{join(pokes, '×')}\n"
-        f"· 好感增加：{join(gains, '+')}\n"
-        f"· 好感减少：{join(losses, '-')}"
+        f"· 馒头主动戳一戳：{_join_weights(pokes, '×')}\n"
+        f"· 好感增加：{_join_weights(gains, '+')}\n"
+        f"· 好感减少：{_join_weights(losses, '-')}"
+    )
+
+
+def format_devil_wheel_rules(timeout: int, min_affection: int) -> str:
+    meme_weight = sum(
+        weight for outcome, weight in DEVIL_WHEEL_OUTCOMES if outcome.kind == "meme"
+    )
+    taozi_weight = sum(
+        weight for outcome, weight in DEVIL_WHEEL_OUTCOMES if outcome.kind == "taozi"
+    )
+    corpus_weight = sum(
+        weight for outcome, weight in DEVIL_WHEEL_OUTCOMES if outcome.kind == "corpus"
+    )
+    gains = [
+        (o.value, w)
+        for o, w in DEVIL_WHEEL_OUTCOMES
+        if o.kind == "affection" and o.value > 0
+    ]
+    losses = [
+        (-o.value, w)
+        for o, w in DEVIL_WHEEL_OUTCOMES
+        if o.kind == "affection" and o.value < 0
+    ]
+
+    return (
+        " 馒头小恶魔转盘出现了！\n"
+        f"只有好感度大于 {min_affection} 的群友才会抽到恶魔转盘。\n"
+        "含触发者不限人数，其他群友发送“参与”即可加入，"
+        f"参与一次扣 {DEVIL_SPEC.join_cost} 点好感度。\n"
+        f"本轮不需要“运作”或“确认”，{timeout} 秒后自动开转，"
+        "每人独立抽取一次；开转后不退款。\n"
+        "恶魔转盘各项概率：\n"
+        f"· 馒头制作随机表情 {meme_weight}%（抽中扣 {DEVIL_SPEC.meme_cost} 点好感，"
+        f"从 {DEVIL_SPEC.meme_candidates} 个模板里选 1 个）\n"
+        f"· 桃子表情包 {taozi_weight}%（换一张需 {DEVIL_SPEC.taozi_cost} 点好感）\n"
+        f"· 群友语料库 {corpus_weight}%（抽中扣 {DEVIL_SPEC.corpus_cost} 点好感）\n"
+        f"· 好感增加：{_join_weights(gains, '+')}\n"
+        f"· 好感减少：{_join_weights(losses, '-')}"
     )
 
 
@@ -252,6 +354,16 @@ class WheelCoordinator:
         if key in self.pending:
             return True
         return self.events is not None and self.events.busy(key)
+
+    def pick_mode(self, affection: int) -> bool:
+        """按好感门槛与 2/3 概率决定这一轮是否走恶魔表。"""
+
+        if affection <= self.config.mantou_affection_wheel_devil_min_affection:
+            return False
+        chance = float(self.config.mantou_affection_wheel_devil_chance)
+        if chance <= 0:
+            return False
+        return self.rng.random() < chance
 
     def discard(self, pending: PendingWheel) -> None:
         if self.pending.get(pending.group_id) is pending:
