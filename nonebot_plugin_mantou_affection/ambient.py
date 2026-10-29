@@ -635,12 +635,19 @@ def register_ambient(
             wheel_ready = False
         if wheel_ready:
             try:
+                affection = (await service.profile(group_id, user_id)).affection
+            except Exception:
+                logger.exception("[mantou-affection] 读取转盘触发者好感度失败")
+                affection = 0
+            devil = wheel_coordinator.pick_mode(affection)
+            try:
                 started = await wheel_coordinator.start(
                     group_id=group_id,
                     user_id=user_id,
                     nickname=nickname,
                     bot=get_bot(),
                     send=ambient.send,
+                    devil=devil,
                 )
             except Exception:
                 logger.exception("[mantou-affection] 发起命运齿轮转盘失败")

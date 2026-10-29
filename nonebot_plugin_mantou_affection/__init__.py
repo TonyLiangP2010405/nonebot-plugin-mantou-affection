@@ -43,6 +43,7 @@ from .pk import BUNDLED_PK_PATH, PkCoordinator, PkQuestionLibrary
 from .service import AffectionService
 from .storage import AffectionStore
 from .wheel import WheelCoordinator
+from .wheel_corpus import BUNDLED_CORPUS_PATH, GroupCorpus
 from .wheel_memes import (
     MemeGeneratorAdapter,
     MemeRepoManager,
@@ -101,6 +102,7 @@ meme_resources = MemeResourceManager()
 taozi_stickers = TaoziStickerLibrary(
     base_dir=Path(get_plugin_data_dir()) / "taozi_stickers"
 )
+group_corpus = GroupCorpus(BUNDLED_CORPUS_PATH)
 wheel_coordinator = WheelCoordinator(
     service,
     plugin_config,
@@ -108,6 +110,7 @@ wheel_coordinator = WheelCoordinator(
     memes=meme_generator_adapter,
     resources=meme_resources,
     stickers=taozi_stickers,
+    corpus=group_corpus,
 )
 event_coordinator.attach_wheel(wheel_coordinator)
 matchers = register_commands(service, plugin_config, pk_coordinator)

@@ -290,6 +290,33 @@ async def test_ambient_handler_starts_wheel(tmp_path: Path, monkeypatch) -> None
     wheel.pending[GROUP_ID].task.cancel()
 
 
+async def test_ambient_starts_devil_wheel_above_threshold(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config = Config(
+        mantou_affection_find_char_chance=0.0,
+        mantou_affection_bet_chance=0.0,
+        mantou_affection_pk_chance=0.0,
+        mantou_affection_ambient_enabled=False,
+        mantou_affection_wheel_chance=1.0,
+        mantou_affection_wheel_devil_chance=1.0,
+    )
+    service = _service(tmp_path, config=config)
+    events = EventCoordinator(service, config)
+    wheel = WheelCoordinator(service, config, events=events, rng=random.Random(0))
+    ambient, _ = register_ambient(service, config, events, wheel=wheel)
+    sent = _capture_send(ambient, monkeypatch)
+    monkeypatch.setattr(
+        "nonebot_plugin_mantou_affection.ambient.get_bot", lambda: SimpleNamespace(self_id=999)
+    )
+    await _give_affection(service, 201)
+
+    await ambient.handlers[0].call(_event())
+
+    assert "小恶魔转盘" in sent[-1].extract_plain_text()
+    wheel.pending[GROUP_ID].task.cancel()
+
+
 async def test_event_coordinator_includes_wheel_in_group_busy(tmp_path: Path) -> None:
     service = _service(tmp_path)
     events = EventCoordinator(service, Config())

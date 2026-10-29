@@ -33,6 +33,7 @@ FORCE_ACTIVITY_BET = "bet"
 FORCE_ACTIVITY_PK = "pk"
 FORCE_ACTIVITY_GROUP_QUIZ = "group_quiz"
 FORCE_ACTIVITY_WHEEL = "wheel"
+FORCE_ACTIVITY_DEVIL = "devil"
 
 FORCE_CHOICES: dict[str, str] = {
     "1": FORCE_ACTIVITY_AMBIENT,
@@ -42,6 +43,7 @@ FORCE_CHOICES: dict[str, str] = {
     "5": FORCE_ACTIVITY_PK,
     "6": FORCE_ACTIVITY_GROUP_QUIZ,
     "7": FORCE_ACTIVITY_WHEEL,
+    "8": FORCE_ACTIVITY_DEVIL,
 }
 FORCE_ACTIVITY_LINES: tuple[str, ...] = (
     "1. 馒头小动作",
@@ -51,6 +53,7 @@ FORCE_ACTIVITY_LINES: tuple[str, ...] = (
     "5. 桃子问答",
     "6. 群友问答",
     "7. 命运齿轮转盘",
+    "8. 小恶魔转盘",
 )
 FORCE_PROMPT = (
     "🎛️ 馒头强制事件（目标：{target}）\n"
@@ -207,6 +210,8 @@ class ForceCoordinator:
             return await self._start_group_quiz(pending, send)
         if choice == FORCE_ACTIVITY_WHEEL:
             return await self._start_wheel(pending, send)
+        if choice == FORCE_ACTIVITY_DEVIL:
+            return await self._start_wheel(pending, send, devil=True)
         return FORCE_FAIL_REPLY
 
     async def _send_ambient(self, pending: PendingForce, send: Send) -> str | None:
@@ -298,13 +303,16 @@ class ForceCoordinator:
         )
         return None if started else FORCE_FAIL_REPLY
 
-    async def _start_wheel(self, pending: PendingForce, send: Send) -> str | None:
+    async def _start_wheel(
+        self, pending: PendingForce, send: Send, *, devil: bool = False
+    ) -> str | None:
         started = await self.wheel.start(
             group_id=pending.group_id,
             user_id=pending.target_id,
             nickname=pending.target_name,
             bot=_current_bot(),
             send=send,
+            devil=devil,
         )
         return None if started else FORCE_FAIL_REPLY
 
