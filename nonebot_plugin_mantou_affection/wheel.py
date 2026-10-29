@@ -233,6 +233,9 @@ WHEEL_TAOZI_POOR_REPLY = " 好感不足 {cost} 点，本次没有兑换，当前
 WHEEL_TAOZI_MISSING_REPLY = " 桃子表情包素材还没准备好，本次不重抽"
 WHEEL_TAOZI_FAILED_REPLY = " 本次桃子表情包发送失败，不重抽"
 
+WHEEL_DEVIL_NO_CHOICE_REPLY = " 恶魔转盘不需要“运作”或“确认”，60 秒后会自动开转。"
+WHEEL_DEVIL_AUTO_START_REPLY = " 60 秒到，恶魔转盘自动开转。"
+
 
 def format_sticker_prompt(affection: int, timeout: int) -> str:
     return WHEEL_TAOZI_PROMPT_REPLY.format(
@@ -270,12 +273,22 @@ class WheelParticipant:
 
 
 class PendingWheel:
-    def __init__(self, group_id: str, user_id: str, nickname: str, *, bot, send):
+    def __init__(
+        self,
+        group_id: str,
+        user_id: str,
+        nickname: str,
+        *,
+        bot,
+        send,
+        spec: WheelSpec = NORMAL_SPEC,
+    ):
         self.group_id = group_id
         self.trigger = WheelParticipant(user_id, nickname)
         self.participants: list[WheelParticipant] = []
         self.bot = bot
         self.send = send
+        self.spec = spec
         self.accepting = True
         self.awaiting_confirm = False
         self.started_at = time.monotonic()
@@ -369,21 +382,34 @@ class WheelCoordinator:
         if self.pending.get(pending.group_id) is pending:
             self.pending.pop(pending.group_id, None)
 
-    async def start(self, *, group_id: str, user_id: str, nickname: str, bot, send) -> bool:
+    async def start(
+        self, *, group_id: str, user_id: str, nickname: str, bot, send, devil: bool = False
+    ) -> bool:
         group = str(group_id)
         user = str(user_id)
+        spec = DEVIL_SPEC if devil else NORMAL_SPEC
         async with self._lock:
             if self.busy(group):
                 return False
             pending = PendingWheel(
-                group, user, normalize_nickname(nickname, user), bot=bot, send=send
+                group,
+                user,
+                normalize_nickname(nickname, user),
+                bot=bot,
+                send=send,
+                spec=spec,
             )
             self.pending[group] = pending
         try:
-            await send(
-                MessageSegment.at(user)
-                + MessageSegment.text(format_wheel_rules(int(self.choice_timeout)))
+            rules = (
+                format_devil_wheel_rules(
+                    int(self.choice_timeout),
+                    self.config.mantou_affection_wheel_devil_min_affection,
+                )
+                if devil
+                else format_wheel_rules(int(self.choice_timeout))
             )
+            await send(MessageSegment.at(user) + MessageSegment.text(rules))
         except Exception:
             self.discard(pending)
             raise
@@ -420,6 +446,9 @@ class WheelCoordinator:
             return False
         if keyword == "参与":
             return await self._join(pending, user, nickname)
+        if pending.spec.auto_start:
+            await pending.send(WHEEL_DEVIL_NO_CHOICE_REPLY)
+            return True
         if user != pending.trigger.user_id:
             if pending.accepting:
                 await pending.send("只有被 @ 的触发者能选择是否运作。")
@@ -465,23 +494,25 @@ class WheelCoordinator:
             if any(item.user_id == user_id for item in pending.participants):
                 await pending.send("你已经参与本轮转盘了。")
                 return True
-            if len(pending.participants) >= WHEEL_MAX_PARTICIPANTS:
+            if (
+                pending.spec.max_participants is not None
+                and len(pending.participants) >= pending.spec.max_participants
+            ):
                 await pending.send(f"本轮转盘名额已满（含触发者最多 {WHEEL_TOTAL_SEATS} 人）。")
                 return True
             name = normalize_nickname(nickname, user_id)
+            cost = pending.spec.join_cost
             current = (await self.service.profile(pending.group_id, user_id)).affection
-            if current < WHEEL_JOIN_COST:
+            if current < cost:
                 await pending.send(
                     MessageSegment.at(user_id)
                     + MessageSegment.text(
-                        WHEEL_JOIN_POOR_REPLY.format(
-                            cost=WHEEL_JOIN_COST, affection=current
-                        )
+                        WHEEL_JOIN_POOR_REPLY.format(cost=cost, affection=current)
                     )
                 )
                 return True
             applied, profile = await self.service.adjust(
-                pending.group_id, user_id, name, -WHEEL_JOIN_COST
+                pending.group_id, user_id, name, -cost
             )
             pending.participants.append(WheelParticipant(user_id, name))
             await pending.send(
@@ -533,6 +564,12 @@ class WheelCoordinator:
             if self.pending.get(pending.group_id) is not pending or not pending.accepting:
                 return
             pending.accepting = False
+        if pending.spec.auto_start:
+            try:
+                await pending.send(WHEEL_DEVIL_AUTO_START_REPLY)
+            finally:
+                await self._run_operation(pending)
+            return
         try:
             if pending.awaiting_confirm:
                 await pending.send("馒头命运齿轮转盘超时未确认，本轮取消，不会运作。")
@@ -573,7 +610,7 @@ class WheelCoordinator:
         try:
             for participant in [pending.trigger, *pending.participants]:
                 try:
-                    outcome = draw_wheel_outcome(self.rng)
+                    outcome = draw_wheel_outcome(self.rng, pending.spec.outcomes)
                     if outcome.kind == "affection":
                         applied, profile = await self.service.adjust(
                             pending.group_id,

@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import random
+from pathlib import Path
 
 import pytest
+from nonebot.adapters.onebot.v11 import Message
 
 from nonebot_plugin_mantou_affection.config import Config
+from nonebot_plugin_mantou_affection.service import AffectionService
+from nonebot_plugin_mantou_affection.storage import AffectionStore
 from nonebot_plugin_mantou_affection.wheel import (
     DEVIL_SPEC,
     DEVIL_WHEEL_OUTCOMES,
@@ -13,6 +18,10 @@ from nonebot_plugin_mantou_affection.wheel import (
     draw_wheel_outcome,
     format_devil_wheel_rules,
 )
+
+GROUP = "94001"
+TRIGGER = "94002"
+OTHER = "94003"
 
 
 def test_devil_weights_match_approved_table() -> None:
@@ -99,3 +108,132 @@ def test_devil_draw_ranges(roll, kind) -> None:
             return roll
 
     assert draw_wheel_outcome(Fixed(0), DEVIL_WHEEL_OUTCOMES).kind == kind
+
+
+class FixedRollRng(random.Random):
+    def __init__(self, roll: int, value: float = 0.0):
+        super().__init__(0)
+        self.roll = roll
+        self.value = value
+
+    def randrange(self, stop: int) -> int:
+        assert stop == 100
+        return self.roll
+
+    def random(self) -> float:
+        return self.value
+
+
+class SequenceRng(FixedRollRng):
+    def __init__(self, rolls: list[int], value: float = 0.0):
+        super().__init__(0, value)
+        self.rolls = iter(rolls)
+
+    def randrange(self, stop: int) -> int:
+        assert stop == 100
+        return next(self.rolls)
+
+
+class FakeBot:
+    def __init__(self) -> None:
+        self.self_id = 999
+
+
+def make_coordinator(
+    tmp_path: Path, rng=None, memes=None, resources=None, stickers=None
+):
+    config = Config()
+    service = AffectionService(AffectionStore(tmp_path / "affection.json"), config)
+    coordinator = WheelCoordinator(
+        service,
+        config,
+        rng=rng or random.Random(0),
+        memes=memes,
+        resources=resources,
+        stickers=stickers,
+        poke_delay=0,
+    )
+    coordinator.choice_timeout = 30
+    return coordinator
+
+
+async def give(service: AffectionService, user_id: str, score: int) -> None:
+    def bump(profile) -> None:
+        profile.affection = score
+
+    await service.store.update_profile(GROUP, user_id, "测试员", bump)
+
+
+async def devil_start(coordinator, *, user_id: str = TRIGGER, nickname: str = "触发者"):
+    sent = []
+
+    async def send(message) -> None:
+        sent.append(Message(message) if isinstance(message, str) else message)
+
+    assert await coordinator.start(
+        group_id=GROUP,
+        user_id=user_id,
+        nickname=nickname,
+        bot=FakeBot(),
+        send=send,
+        devil=True,
+    )
+    return coordinator.pending[GROUP], sent
+
+
+async def devil_auto(coordinator, *, user_id: str = TRIGGER):
+    """开一轮恶魔转盘并等到点自动开转，返回 (pending, sent)。"""
+
+    coordinator.choice_timeout = 0.01
+    pending, sent = await devil_start(coordinator, user_id=user_id)
+    await asyncio.wait_for(pending.task, 2)
+    return pending, sent
+
+
+async def test_devil_join_charges_five_and_has_no_cap(tmp_path: Path) -> None:
+    coordinator = make_coordinator(tmp_path)
+    pending, sent = await devil_start(coordinator)
+    for index in range(10):
+        user = f"950{index}"
+        await give(coordinator.service, user, 50)
+        await coordinator.answer(GROUP, user, f"群友{index}", "参与")
+    assert len(pending.participants) == 10
+    assert (await coordinator.service.profile(GROUP, "9500")).affection == 45
+    assert all("名额已满" not in m.extract_plain_text() for m in sent)
+    pending.task.cancel()
+
+
+async def test_devil_join_rejects_below_five(tmp_path: Path) -> None:
+    coordinator = make_coordinator(tmp_path)
+    pending, sent = await devil_start(coordinator)
+    await give(coordinator.service, OTHER, 4)
+    await coordinator.answer(GROUP, OTHER, "群友", "参与")
+    assert "好感度不足" in sent[-1].extract_plain_text()
+    assert (await coordinator.service.profile(GROUP, OTHER)).affection == 4
+    pending.task.cancel()
+
+
+@pytest.mark.parametrize("keyword", ["运作", "不运作", "确认"])
+async def test_devil_ignores_choice_keywords(tmp_path: Path, keyword: str) -> None:
+    coordinator = make_coordinator(tmp_path)
+    pending, sent = await devil_start(coordinator)
+    await coordinator.answer(GROUP, TRIGGER, "触发者", keyword)
+    assert pending.accepting is True
+    assert pending.task is not None and not pending.task.done()
+    assert "不需要" in sent[-1].extract_plain_text()
+    pending.task.cancel()
+
+
+async def test_devil_auto_runs_at_timeout_without_refund(tmp_path: Path) -> None:
+    coordinator = make_coordinator(tmp_path, rng=SequenceRng([45, 45]))
+    coordinator.choice_timeout = 0.01
+    await give(coordinator.service, TRIGGER, 500)
+    pending, _sent = await devil_start(coordinator)
+    await give(coordinator.service, OTHER, 50)
+    await coordinator.answer(GROUP, OTHER, "群友", "参与")
+    assert (await coordinator.service.profile(GROUP, OTHER)).affection == 45
+    await asyncio.wait_for(pending.task, 2)
+    assert GROUP not in coordinator.pending
+    # 参与者 50 - 5 参与费 + 4 抽中 = 49, 没有退款, 结果确实结算了
+    assert (await coordinator.service.profile(GROUP, OTHER)).affection == 49
+    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 504
