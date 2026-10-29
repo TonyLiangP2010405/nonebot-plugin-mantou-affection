@@ -133,9 +133,7 @@ class MemeGeneratorAdapter:
             return "multi"
         return None
 
-    def draw(self, *, max_images: int = 2) -> tuple[Any, str]:
-        """从非屏蔽候选里随机抽一个模板，返回 (meme, kind)。"""
-
+    def _candidates(self, *, max_images: int) -> list[tuple[Any, str]]:
         backend = self.backend
         if backend is None:
             raise MemeGenerationError("meme-generator 未安装")
@@ -161,7 +159,20 @@ class MemeGeneratorAdapter:
             logger.info(f"[mantou-affection] 已按屏蔽词过滤 {blocked_count} 个表情模板")
         if not candidates:
             raise MemeGenerationError("没有兼容的表情模板")
-        return self.rng.choice(candidates)
+        return candidates
+
+    def draw(self, *, max_images: int = 2) -> tuple[Any, str]:
+        """从非屏蔽候选里随机抽一个模板，返回 (meme, kind)。"""
+
+        return self.rng.choice(self._candidates(max_images=max_images))
+
+    def draw_candidates(
+        self, count: int, *, max_images: int = 2
+    ) -> list[tuple[Any, str]]:
+        """抽 count 个互不重复的候选模板；可用模板不足时返回全部。"""
+
+        candidates = self._candidates(max_images=max_images)
+        return self.rng.sample(candidates, min(count, len(candidates)))
 
     async def _ranked_ids(self, group_id: str | None, bot: Any, user_id: str) -> list[str]:
         if group_id is None or self.ranking_fetcher is None:
@@ -180,6 +191,12 @@ class MemeGeneratorAdapter:
     ) -> tuple[Any, str]:
         ids = await self._ranked_ids(group_id, bot, user_id)
         return self.draw(max_images=2 + len(ids))
+
+    async def draw_candidates_for_group(
+        self, *, group_id: str, bot: Any, user_id: str, count: int
+    ) -> list[tuple[Any, str]]:
+        ids = await self._ranked_ids(group_id, bot, user_id)
+        return self.draw_candidates(count, max_images=2 + len(ids))
 
     async def generate_with(
         self,

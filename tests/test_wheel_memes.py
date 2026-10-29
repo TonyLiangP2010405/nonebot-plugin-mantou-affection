@@ -229,6 +229,31 @@ def test_draw_without_compatible_templates_raises() -> None:
         adapter.draw()
 
 
+def test_draw_candidates_returns_distinct_templates() -> None:
+    memes = [FakeMeme(f"m{index}", 1, 1) for index in range(8)]
+    adapter = MemeGeneratorAdapter(backend=FakeBackend(memes), rng=random.Random(0))
+    picked = adapter.draw_candidates(5)
+    assert len(picked) == 5
+    assert len({id(meme) for meme, _kind in picked}) == 5
+
+
+def test_draw_candidates_returns_fewer_when_pool_is_small() -> None:
+    memes = [FakeMeme(f"m{index}", 1, 1) for index in range(3)]
+    adapter = MemeGeneratorAdapter(backend=FakeBackend(memes), rng=random.Random(0))
+    assert len(adapter.draw_candidates(5)) == 3
+
+
+def test_draw_candidates_skips_blocked_and_incompatible() -> None:
+    memes = [
+        FakeMeme("petpet", 1, 1),
+        FakeMeme("camellya", 1, 1),
+        FakeMeme("needs-five", 5, 5),
+    ]
+    adapter = MemeGeneratorAdapter(backend=FakeBackend(memes), rng=random.Random(0))
+    picked = adapter.draw_candidates(5)
+    assert [meme.key for meme, _kind in picked] == ["petpet"]
+
+
 async def test_generate_with_uses_only_given_template() -> None:
     first = FakeMeme("first", 1, 1)
     second = FakeMeme("second", 1, 1)
