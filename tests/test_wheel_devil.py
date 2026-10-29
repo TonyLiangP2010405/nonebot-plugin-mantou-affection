@@ -307,3 +307,114 @@ async def test_devil_affection_outcomes(tmp_path: Path, roll: int, delta: int) -
     await give(coordinator.service, TRIGGER, 500)
     await devil_auto(coordinator)
     assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 500 + delta
+
+
+class FakeMemeTemplate:
+    def __init__(self, key: str, name: str) -> None:
+        self.key = key
+        self.keywords = [name]
+        self.tags = ["测试"]
+
+
+class FakeMemes:
+    def __init__(
+        self,
+        draw_error: Exception | None = None,
+        generate_error: Exception | None = None,
+    ):
+        self.candidates = [
+            FakeMemeTemplate(f"meme{index}", f"名字{index}") for index in range(5)
+        ]
+        self.draw_error = draw_error
+        self.generate_error = generate_error
+        self.generated: list[tuple[object, str, str]] = []
+
+    async def draw_candidates_for_group(
+        self, *, group_id: str, bot, user_id: str, count: int
+    ):
+        if self.draw_error is not None:
+            raise self.draw_error
+        return [(meme, "single") for meme in self.candidates[:count]]
+
+    async def generate_with(
+        self, meme, kind: str, *, bot, user_id: str, nickname: str, group_id=None
+    ) -> bytes:
+        self.generated.append((meme, kind, user_id))
+        if self.generate_error is not None:
+            raise self.generate_error
+        return f"image:{user_id}".encode()
+
+
+async def test_devil_meme_lists_five_and_sends_no_image(tmp_path: Path) -> None:
+    coordinator = make_coordinator(tmp_path, rng=FixedRollRng(roll=0), memes=FakeMemes())
+    await give(coordinator.service, TRIGGER, 50)
+    _pending, sent = await devil_auto(coordinator)
+    body = sent[-1].extract_plain_text()
+    assert "已扣除 5 点好感" in body
+    for index in range(1, 6):
+        assert f"选{index}." in body
+    assert "[CQ:image" not in str(sent[-1])
+    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 45
+
+
+async def test_devil_meme_pick_generates_chosen_template(tmp_path: Path) -> None:
+    memes = FakeMemes()
+    coordinator = make_coordinator(tmp_path, rng=FixedRollRng(roll=0), memes=memes)
+    await give(coordinator.service, TRIGGER, 50)
+    _pending, _sent = await devil_auto(coordinator)
+    await coordinator.answer(GROUP, TRIGGER, "触发者", "选3")
+    assert memes.generated[-1][0] is memes.candidates[2]
+    assert (GROUP, TRIGGER) not in coordinator.meme_picks
+
+
+async def test_devil_bare_digit_does_not_pick(tmp_path: Path) -> None:
+    coordinator = make_coordinator(tmp_path, rng=FixedRollRng(roll=0), memes=FakeMemes())
+    await give(coordinator.service, TRIGGER, 50)
+    _pending, _sent = await devil_auto(coordinator)
+    assert await coordinator.answer(GROUP, TRIGGER, "触发者", "3") is False
+    assert (GROUP, TRIGGER) in coordinator.meme_picks
+
+
+async def test_devil_meme_pick_timeout_drops_without_refund(tmp_path: Path) -> None:
+    coordinator = make_coordinator(tmp_path, rng=FixedRollRng(roll=0), memes=FakeMemes())
+    coordinator.meme_confirm_timeout = 0.01
+    await give(coordinator.service, TRIGGER, 50)
+    _pending, sent = await devil_auto(coordinator)
+    pick = coordinator.meme_picks[(GROUP, TRIGGER)]
+    await asyncio.wait_for(pick.task, 2)
+    assert "超时" in sent[-1].extract_plain_text()
+    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 45
+
+
+async def test_devil_meme_whitelisted_user_gets_image_without_prompt(
+    tmp_path: Path,
+) -> None:
+    memes = FakeMemes()
+    coordinator = make_coordinator(tmp_path, rng=FixedRollRng(roll=0), memes=memes)
+    await give(coordinator.service, TRIGGER, 50)
+    await coordinator.service.toggle_meme_confirm_whitelist(TRIGGER)
+    _pending, sent = await devil_auto(coordinator)
+    assert (GROUP, TRIGGER) not in coordinator.meme_picks
+    assert "[CQ:image" in str(sent[-1])
+
+
+async def test_devil_meme_pick_does_not_block_settlement_or_next_wheel(
+    tmp_path: Path,
+) -> None:
+    coordinator = make_coordinator(tmp_path, rng=FixedRollRng(roll=0), memes=FakeMemes())
+    await give(coordinator.service, TRIGGER, 50)
+    pending, _sent = await devil_auto(coordinator)
+    # 转盘任务已经结束, 但五选一还挂着
+    assert pending.task.done()
+    assert (GROUP, TRIGGER) in coordinator.meme_picks
+    # 五选一不占群席位: 另一人可以开新一轮转盘
+    await give(coordinator.service, OTHER, 300)
+    _next, _sent2 = await devil_start(coordinator, user_id=OTHER)
+    assert (GROUP, TRIGGER) in coordinator.meme_picks
+    # 「参与」不会被五选一当成选择吞掉
+    assert await coordinator.answer(GROUP, TRIGGER, "触发者", "参与") is True
+    assert (GROUP, TRIGGER) in coordinator.meme_picks
+    # 挂起期间仍然可以正常选择
+    assert await coordinator.answer(GROUP, TRIGGER, "触发者", "选1") is True
+    assert (GROUP, TRIGGER) not in coordinator.meme_picks
+    _next.task.cancel()

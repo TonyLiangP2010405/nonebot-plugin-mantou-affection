@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+import re
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -215,6 +216,16 @@ WHEEL_MEME_TIMEOUT_REPLY = " 表情确认超时，已放弃制作，好感 {delt
 WHEEL_MEME_ASSET_MISSING_REPLY = " 表情素材尚未下载完成，本次不重抽"
 WHEEL_MEME_FAILED_REPLY = " 本次表情生成失败，不重抽"
 
+WHEEL_MEME_PICK_REPLY = (
+    " 你抽中了「随机表情」，已扣除 {cost} 点好感。"
+    "回复「选1」到「选{count}」挑一个，{timeout} 秒内有效：\n{options}"
+)
+WHEEL_MEME_PICK_CONFIRMED_REPLY = " 馒头为你做了这张表情："
+WHEEL_MEME_PICK_TIMEOUT_REPLY = " 表情选择超时，本次不制作，已扣的好感不退。"
+WHEEL_MEME_PICK_INVALID_REPLY = " 只能回复「选1」到「选{count}」，或者等它超时放弃。"
+
+_MEME_PICK_PATTERN = re.compile(r"选([1-9])")
+
 WHEEL_JOIN_COST_REPLY = (
     " 参与成功，已扣除 {cost} 点好感度，当前 {affection}，"
     "已加入本轮转盘，等待触发者选择是否运作。"
@@ -265,6 +276,19 @@ def format_meme_confirm(meme: Any, timeout: int) -> str:
         tags=_meme_tags(meme),
         key=str(getattr(meme, "key", "") or "").strip() or "未知",
         timeout=timeout,
+    )
+
+
+def format_meme_pick(
+    candidates: list[tuple[Any, str]], timeout: int, cost: int
+) -> str:
+    options = "\n".join(
+        f"选{index}. {_meme_name(meme)}（种类：{_meme_tags(meme)}，"
+        f"键名：{str(getattr(meme, 'key', '') or '').strip() or '未知'}）"
+        for index, (meme, _kind) in enumerate(candidates, start=1)
+    )
+    return WHEEL_MEME_PICK_REPLY.format(
+        cost=cost, count=len(candidates), timeout=timeout, options=options
     )
 
 
@@ -341,6 +365,29 @@ class PendingStickerConfirm:
         self.task: asyncio.Task | None = None
 
 
+class PendingMemePick:
+    def __init__(
+        self,
+        group_id: str,
+        user_id: str,
+        nickname: str,
+        candidates: list[tuple[Any, str]],
+        *,
+        bot,
+        send,
+        cost: int,
+    ):
+        self.group_id = group_id
+        self.user_id = user_id
+        self.nickname = nickname
+        self.candidates = candidates
+        self.bot = bot
+        self.send = send
+        self.cost = cost
+        self.accepting = True
+        self.task: asyncio.Task | None = None
+
+
 class WheelCoordinator:
     def __init__(
         self,
@@ -371,6 +418,7 @@ class WheelCoordinator:
         )
         self.pending: dict[str, PendingWheel] = {}
         self.meme_confirms: dict[tuple[str, str], PendingMemeConfirm] = {}
+        self.meme_picks: dict[tuple[str, str], PendingMemePick] = {}
         self.sticker_confirms: dict[tuple[str, str], PendingStickerConfirm] = {}
         self._lock = asyncio.Lock()
 
@@ -452,6 +500,13 @@ class WheelCoordinator:
                 sticker_confirm, accepted=keyword == "要"
             )
             return True
+
+        meme_pick = self.meme_picks.get((str(group_id), user))
+        if meme_pick is not None and meme_pick.accepting:
+            pick_match = _MEME_PICK_PATTERN.fullmatch(keyword)
+            if pick_match is not None:
+                await self._answer_meme_pick(meme_pick, int(pick_match.group(1)))
+                return True
 
         pending = self.pending.get(str(group_id))
         if pending is None or keyword not in {"参与", "运作", "不运作", "确认"}:
@@ -677,6 +732,9 @@ class WheelCoordinator:
     async def _run_meme_outcome(
         self, pending: PendingWheel, participant: WheelParticipant
     ) -> None:
+        if pending.spec.meme_candidates > 1:
+            await self._run_meme_pick_outcome(pending, participant)
+            return
         try:
             whitelist = await self.service.meme_confirm_whitelist()
         except Exception:
@@ -695,6 +753,201 @@ class WheelCoordinator:
             await self._report_meme_error(participant.user_id, pending.send, error)
             return
         await self._request_meme_confirm(pending, participant, meme, kind)
+
+    async def _run_meme_pick_outcome(
+        self, pending: PendingWheel, participant: WheelParticipant
+    ) -> None:
+        try:
+            if self.memes is None:
+                raise MemeGenerationError("meme-generator 未安装")
+            candidates = await self.memes.draw_candidates_for_group(
+                group_id=pending.group_id,
+                bot=pending.bot,
+                user_id=participant.user_id,
+                count=pending.spec.meme_candidates,
+            )
+        except MemeGenerationError as error:
+            await self._report_meme_error(participant.user_id, pending.send, error)
+            return
+        except Exception:
+            logger.exception("[mantou-affection] 转盘表情候选抽取失败")
+            await pending.send(
+                MessageSegment.at(participant.user_id)
+                + MessageSegment.text(WHEEL_MEME_FAILED_REPLY)
+            )
+            return
+        if not candidates:
+            await pending.send(
+                MessageSegment.at(participant.user_id)
+                + MessageSegment.text(WHEEL_MEME_FAILED_REPLY)
+            )
+            return
+
+        cost = pending.spec.meme_cost
+        if cost > 0:
+            try:
+                await self.service.adjust(
+                    pending.group_id,
+                    participant.user_id,
+                    participant.nickname,
+                    -cost,
+                )
+            except Exception:
+                logger.exception(
+                    f"[mantou-affection] 转盘表情扣费失败 group={pending.group_id} "
+                    f"user={participant.user_id}"
+                )
+                await pending.send(
+                    MessageSegment.at(participant.user_id)
+                    + MessageSegment.text(WHEEL_MEME_FAILED_REPLY)
+                )
+                return
+
+        try:
+            whitelist = await self.service.meme_confirm_whitelist()
+        except Exception:
+            logger.exception("[mantou-affection] 读取表情免确认白名单失败")
+            whitelist = set()
+        if participant.user_id in whitelist:
+            meme, kind = self.rng.choice(candidates)
+            await self._send_chosen_meme(
+                participant.user_id,
+                pending.send,
+                meme,
+                kind,
+                bot=pending.bot,
+                nickname=participant.nickname,
+                group_id=pending.group_id,
+            )
+            return
+        await self._request_meme_pick(pending, participant, candidates, cost)
+
+    async def _send_chosen_meme(
+        self, user_id: str, send, meme: Any, kind: str, *, bot, nickname: str, group_id: str
+    ) -> None:
+        try:
+            if self.memes is None:
+                raise MemeGenerationError("meme-generator 未安装")
+            image = await self.memes.generate_with(
+                meme,
+                kind,
+                bot=bot,
+                user_id=user_id,
+                nickname=nickname,
+                group_id=group_id,
+            )
+        except MemeGenerationError as error:
+            await self._report_meme_error(user_id, send, error)
+            return
+        except Exception:
+            logger.exception("[mantou-affection] 转盘表情生成失败")
+            await send(
+                MessageSegment.at(user_id)
+                + MessageSegment.text(WHEEL_MEME_FAILED_REPLY)
+            )
+            return
+        await send(
+            MessageSegment.at(user_id)
+            + MessageSegment.text(WHEEL_MEME_PICK_CONFIRMED_REPLY)
+            + MessageSegment.image(image)
+        )
+
+    async def _request_meme_pick(
+        self,
+        pending: PendingWheel,
+        participant: WheelParticipant,
+        candidates: list[tuple[Any, str]],
+        cost: int,
+    ) -> None:
+        key = (pending.group_id, participant.user_id)
+        old = self.meme_picks.pop(key, None)
+        if old is not None:
+            old.accepting = False
+            if old.task is not None:
+                old.task.cancel()
+        pick = PendingMemePick(
+            pending.group_id,
+            participant.user_id,
+            participant.nickname,
+            candidates,
+            bot=pending.bot,
+            send=pending.send,
+            cost=cost,
+        )
+        self.meme_picks[key] = pick
+        try:
+            await pending.send(
+                MessageSegment.at(participant.user_id)
+                + MessageSegment.text(
+                    format_meme_pick(
+                        candidates, int(self.meme_confirm_timeout), cost
+                    )
+                )
+            )
+        except Exception:
+            pick.accepting = False
+            if self.meme_picks.get(key) is pick:
+                self.meme_picks.pop(key, None)
+            raise
+        if self.meme_picks.get(key) is pick and pick.accepting:
+            pick.task = asyncio.create_task(self._expire_meme_pick(pick))
+
+    async def _expire_meme_pick(self, pick: PendingMemePick) -> None:
+        try:
+            await asyncio.sleep(self.meme_confirm_timeout)
+        except asyncio.CancelledError:
+            return
+        if (
+            not pick.accepting
+            or self.meme_picks.get((pick.group_id, pick.user_id)) is not pick
+        ):
+            return
+        self._cancel_meme_pick(pick)
+        try:
+            await pick.send(
+                MessageSegment.at(pick.user_id)
+                + MessageSegment.text(WHEEL_MEME_PICK_TIMEOUT_REPLY)
+            )
+        except Exception:
+            logger.exception(
+                f"[mantou-affection] 转盘表情选择超时提示发送失败 "
+                f"group={pick.group_id} user={pick.user_id}"
+            )
+
+    async def _answer_meme_pick(self, pick: PendingMemePick, index: int) -> None:
+        if (
+            not pick.accepting
+            or self.meme_picks.get((pick.group_id, pick.user_id)) is not pick
+        ):
+            return
+        if index < 1 or index > len(pick.candidates):
+            await pick.send(
+                MessageSegment.at(pick.user_id)
+                + MessageSegment.text(
+                    WHEEL_MEME_PICK_INVALID_REPLY.format(count=len(pick.candidates))
+                )
+            )
+            return
+        meme, kind = pick.candidates[index - 1]
+        self._cancel_meme_pick(pick)
+        await self._send_chosen_meme(
+            pick.user_id,
+            pick.send,
+            meme,
+            kind,
+            bot=pick.bot,
+            nickname=pick.nickname,
+            group_id=pick.group_id,
+        )
+
+    def _cancel_meme_pick(self, pick: PendingMemePick) -> None:
+        pick.accepting = False
+        key = (pick.group_id, pick.user_id)
+        if self.meme_picks.get(key) is pick:
+            self.meme_picks.pop(key, None)
+        task = pick.task
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
 
     async def _request_meme_confirm(
         self,
