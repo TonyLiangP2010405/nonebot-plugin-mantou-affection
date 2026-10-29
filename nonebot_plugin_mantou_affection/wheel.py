@@ -237,9 +237,11 @@ WHEEL_DEVIL_NO_CHOICE_REPLY = " 恶魔转盘不需要“运作”或“确认”
 WHEEL_DEVIL_AUTO_START_REPLY = " 60 秒到，恶魔转盘自动开转。"
 
 
-def format_sticker_prompt(affection: int, timeout: int) -> str:
+def format_sticker_prompt(
+    affection: int, timeout: int, cost: int = WHEEL_TAOZI_COST
+) -> str:
     return WHEEL_TAOZI_PROMPT_REPLY.format(
-        cost=WHEEL_TAOZI_COST, affection=affection, timeout=timeout
+        cost=cost, affection=affection, timeout=timeout
     )
 
 
@@ -319,12 +321,22 @@ class PendingMemeConfirm:
 
 
 class PendingStickerConfirm:
-    def __init__(self, group_id: str, user_id: str, nickname: str, *, bot, send):
+    def __init__(
+        self,
+        group_id: str,
+        user_id: str,
+        nickname: str,
+        *,
+        bot,
+        send,
+        cost: int = WHEEL_TAOZI_COST,
+    ):
         self.group_id = group_id
         self.user_id = user_id
         self.nickname = nickname
         self.bot = bot
         self.send = send
+        self.cost = cost
         self.accepting = True
         self.task: asyncio.Task | None = None
 
@@ -844,14 +856,13 @@ class WheelCoordinator:
     async def _run_sticker_outcome(
         self, pending: PendingWheel, participant: WheelParticipant
     ) -> None:
+        cost = pending.spec.taozi_cost
         current = (await self.service.profile(pending.group_id, participant.user_id)).affection
-        if current < WHEEL_TAOZI_COST:
+        if current < cost:
             await pending.send(
                 MessageSegment.at(participant.user_id)
                 + MessageSegment.text(
-                    WHEEL_TAOZI_POOR_REPLY.format(
-                        cost=WHEEL_TAOZI_COST, affection=current
-                    )
+                    WHEEL_TAOZI_POOR_REPLY.format(cost=cost, affection=current)
                 )
             )
             return
@@ -872,6 +883,7 @@ class WheelCoordinator:
             participant.nickname,
             bot=pending.bot,
             send=pending.send,
+            cost=pending.spec.taozi_cost,
         )
         self.sticker_confirms[key] = confirm
         current = (await self.service.profile(pending.group_id, participant.user_id)).affection
@@ -879,7 +891,11 @@ class WheelCoordinator:
             await pending.send(
                 MessageSegment.at(participant.user_id)
                 + MessageSegment.text(
-                    format_sticker_prompt(current, int(self.sticker_confirm_timeout))
+                    format_sticker_prompt(
+                        current,
+                        int(self.sticker_confirm_timeout),
+                        pending.spec.taozi_cost,
+                    )
                 )
             )
         except Exception:
@@ -929,12 +945,12 @@ class WheelCoordinator:
             current = (
                 await self.service.profile(confirm.group_id, confirm.user_id)
             ).affection
-            if current < WHEEL_TAOZI_COST:
+            if current < confirm.cost:
                 await confirm.send(
                     MessageSegment.at(confirm.user_id)
                     + MessageSegment.text(
                         WHEEL_TAOZI_POOR_REPLY.format(
-                            cost=WHEEL_TAOZI_COST, affection=current
+                            cost=confirm.cost, affection=current
                         )
                     )
                 )
@@ -943,7 +959,7 @@ class WheelCoordinator:
                 confirm.group_id,
                 confirm.user_id,
                 confirm.nickname,
-                -WHEEL_TAOZI_COST,
+                -confirm.cost,
             )
         except Exception:
             logger.exception(

@@ -139,6 +139,30 @@ class FakeBot:
         self.self_id = 999
 
 
+class FakeStickers:
+    def __init__(
+        self,
+        image: bytes = b"taozi:001",
+        caption: str = "头部主播",
+        error: Exception | None = None,
+    ):
+        self.image = image
+        self.caption = caption
+        self.error = error
+        self.picks = 0
+        self.rechecks = 0
+
+    async def pick(self) -> tuple[bytes, str]:
+        self.picks += 1
+        if self.error is not None:
+            raise self.error
+        return self.image, self.caption
+
+    def check_after_missing(self) -> bool:
+        self.rechecks += 1
+        return True
+
+
 def make_coordinator(
     tmp_path: Path, rng=None, memes=None, resources=None, stickers=None
 ):
@@ -237,3 +261,49 @@ async def test_devil_auto_runs_at_timeout_without_refund(tmp_path: Path) -> None
     # 参与者 50 - 5 参与费 + 4 抽中 = 49, 没有退款, 结果确实结算了
     assert (await coordinator.service.profile(GROUP, OTHER)).affection == 49
     assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 504
+
+
+async def test_devil_taozi_asks_thirty_and_charges_thirty(tmp_path: Path) -> None:
+    coordinator = make_coordinator(
+        tmp_path, rng=FixedRollRng(roll=10), stickers=FakeStickers()
+    )
+    await give(coordinator.service, TRIGGER, 100)
+    _pending, sent = await devil_auto(coordinator)
+    prompt = sent[-1].extract_plain_text()
+    assert "30 点好感" in prompt
+    await coordinator.answer(GROUP, TRIGGER, "触发者", "要")
+    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 70
+    assert "[CQ:image" in str(sent[-1])
+
+
+async def test_devil_taozi_needs_thirty_to_ask(tmp_path: Path) -> None:
+    coordinator = make_coordinator(
+        tmp_path, rng=FixedRollRng(roll=10), stickers=FakeStickers()
+    )
+    await give(coordinator.service, TRIGGER, 29)
+    _pending, sent = await devil_auto(coordinator)
+    assert "好感不足" in sent[-1].extract_plain_text()
+    assert (GROUP, TRIGGER) not in coordinator.sticker_confirms
+
+
+@pytest.mark.parametrize(
+    ("roll", "delta"),
+    [
+        (45, 4),
+        (49, 8),
+        (51, 12),
+        (53, 20),
+        (54, 40),
+        (55, -4),
+        (68, -8),
+        (79, -12),
+        (87, -20),
+        (94, -40),
+        (98, -60),
+    ],
+)
+async def test_devil_affection_outcomes(tmp_path: Path, roll: int, delta: int) -> None:
+    coordinator = make_coordinator(tmp_path, rng=FixedRollRng(roll=roll))
+    await give(coordinator.service, TRIGGER, 500)
+    await devil_auto(coordinator)
+    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 500 + delta
