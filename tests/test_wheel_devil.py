@@ -18,6 +18,7 @@ from nonebot_plugin_mantou_affection.wheel import (
     draw_wheel_outcome,
     format_devil_wheel_rules,
 )
+from nonebot_plugin_mantou_affection.wheel_corpus import CorpusAssetMissing
 
 GROUP = "94001"
 TRIGGER = "94002"
@@ -164,7 +165,7 @@ class FakeStickers:
 
 
 def make_coordinator(
-    tmp_path: Path, rng=None, memes=None, resources=None, stickers=None
+    tmp_path: Path, rng=None, memes=None, resources=None, stickers=None, corpus=None
 ):
     config = Config()
     service = AffectionService(AffectionStore(tmp_path / "affection.json"), config)
@@ -175,6 +176,7 @@ def make_coordinator(
         memes=memes,
         resources=resources,
         stickers=stickers,
+        corpus=corpus,
         poke_delay=0,
     )
     coordinator.choice_timeout = 30
@@ -418,3 +420,47 @@ async def test_devil_meme_pick_does_not_block_settlement_or_next_wheel(
     assert await coordinator.answer(GROUP, TRIGGER, "触发者", "选1") is True
     assert (GROUP, TRIGGER) not in coordinator.meme_picks
     _next.task.cancel()
+
+
+class FakeCorpus:
+    def __init__(self, line: str = "今天也是摆烂的一天", error: Exception | None = None):
+        self.line = line
+        self.error = error
+
+    def pick(self) -> str:
+        if self.error is not None:
+            raise self.error
+        return self.line
+
+
+async def test_devil_corpus_charges_five_and_quotes_a_line(tmp_path: Path) -> None:
+    coordinator = make_coordinator(
+        tmp_path, rng=FixedRollRng(roll=35), corpus=FakeCorpus()
+    )
+    await give(coordinator.service, TRIGGER, 50)
+    _pending, sent = await devil_auto(coordinator)
+    body = sent[-1].extract_plain_text()
+    assert "今天也是摆烂的一天" in body
+    assert "5 点好感" in body
+    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 45
+
+
+async def test_devil_corpus_missing_does_not_charge(tmp_path: Path) -> None:
+    coordinator = make_coordinator(
+        tmp_path,
+        rng=FixedRollRng(roll=35),
+        corpus=FakeCorpus(error=CorpusAssetMissing("空")),
+    )
+    await give(coordinator.service, TRIGGER, 50)
+    _pending, sent = await devil_auto(coordinator)
+    assert "语料库" in sent[-1].extract_plain_text()
+    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 50
+
+
+async def test_devil_corpus_floors_affection_at_zero(tmp_path: Path) -> None:
+    coordinator = make_coordinator(
+        tmp_path, rng=FixedRollRng(roll=35), corpus=FakeCorpus()
+    )
+    await give(coordinator.service, TRIGGER, 3)
+    await devil_auto(coordinator)
+    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 0

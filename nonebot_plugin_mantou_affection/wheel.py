@@ -11,6 +11,7 @@ from nonebot import logger
 from nonebot.adapters.onebot.v11 import MessageSegment
 
 from .service import normalize_nickname
+from .wheel_corpus import CorpusError
 from .wheel_memes import MemeAssetMissing, MemeGenerationError
 from .wheel_stickers import StickerAssetMissing, StickerError
 
@@ -247,6 +248,16 @@ WHEEL_TAOZI_FAILED_REPLY = " 本次桃子表情包发送失败，不重抽"
 WHEEL_DEVIL_NO_CHOICE_REPLY = " 恶魔转盘不需要“运作”或“确认”，60 秒后会自动开转。"
 WHEEL_DEVIL_AUTO_START_REPLY = " 60 秒到，恶魔转盘自动开转。"
 
+WHEEL_CORPUS_MISSING_REPLY = " 群友语料库还没准备好，本次不扣好感也不重抽"
+WHEEL_CORPUS_FAILED_REPLY = " 群友语料库这次没取到内容，不重抽"
+
+
+def format_corpus_line(line: str, cost: int, affection: int) -> str:
+    return (
+        f" 群友语料库：已扣 {cost} 点好感，当前 {affection}。\n"
+        f"馒头记得有群友说过：「{line}」"
+    )
+
 
 def format_sticker_prompt(
     affection: int, timeout: int, cost: int = WHEEL_TAOZI_COST
@@ -399,6 +410,7 @@ class WheelCoordinator:
         memes=None,
         resources=None,
         stickers=None,
+        corpus=None,
         poke_delay: float = 0.2,
     ):
         self.service = service
@@ -408,6 +420,7 @@ class WheelCoordinator:
         self.memes = memes
         self.resources = resources
         self.stickers = stickers
+        self.corpus = corpus
         self.poke_delay = poke_delay
         self.choice_timeout = float(config.mantou_affection_wheel_timeout)
         self.meme_confirm_timeout = float(
@@ -695,6 +708,8 @@ class WheelCoordinator:
                         await self._run_poke(pending, participant, outcome.value)
                     elif outcome.kind == "taozi":
                         await self._run_sticker_outcome(pending, participant)
+                    elif outcome.kind == "corpus":
+                        await self._run_corpus_outcome(pending, participant)
                     else:
                         await self._run_meme_outcome(pending, participant)
                 except Exception:
@@ -704,6 +719,44 @@ class WheelCoordinator:
                     )
         finally:
             self.discard(pending)
+
+    async def _run_corpus_outcome(
+        self, pending: PendingWheel, participant: WheelParticipant
+    ) -> None:
+        try:
+            if self.corpus is None:
+                raise CorpusError("群友语料库未装配")
+            line = self.corpus.pick()
+        except CorpusError as error:
+            logger.warning(f"[mantou-affection] 群友语料库不可用: {error}")
+            await pending.send(
+                MessageSegment.at(participant.user_id)
+                + MessageSegment.text(WHEEL_CORPUS_MISSING_REPLY)
+            )
+            return
+        try:
+            applied, profile = await self.service.adjust(
+                pending.group_id,
+                participant.user_id,
+                participant.nickname,
+                -pending.spec.corpus_cost,
+            )
+        except Exception:
+            logger.exception(
+                f"[mantou-affection] 转盘语料库扣费失败 group={pending.group_id} "
+                f"user={participant.user_id}"
+            )
+            await pending.send(
+                MessageSegment.at(participant.user_id)
+                + MessageSegment.text(WHEEL_CORPUS_FAILED_REPLY)
+            )
+            return
+        await pending.send(
+            MessageSegment.at(participant.user_id)
+            + MessageSegment.text(
+                format_corpus_line(line, -applied, profile.affection)
+            )
+        )
 
     async def _run_poke(
         self, pending: PendingWheel, participant: WheelParticipant, count: int
