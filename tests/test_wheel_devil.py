@@ -65,6 +65,8 @@ def test_devil_spec_differs_from_normal_only_where_designed() -> None:
 
 def test_devil_rules_list_threshold_cost_and_every_probability() -> None:
     text = format_devil_wheel_rules(60, 200)
+    assert "只有好感度大于" not in text
+    assert "才会出现恶魔转盘" in text
     for fragment in (
         "大于 200",
         "不限人数",

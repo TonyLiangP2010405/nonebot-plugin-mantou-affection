@@ -181,8 +181,8 @@ def format_devil_wheel_rules(timeout: int, min_affection: int) -> str:
     ]
 
     return (
-        " 馒头小恶魔转盘出现了！\n"
-        f"只有好感度大于 {min_affection} 的群友才会抽到恶魔转盘。\n"
+        " 馒头小恶魔转盘出现了！"
+        f"（触发者好感度大于 {min_affection} 才会出现恶魔转盘）\n"
         "含触发者不限人数，其他群友发送“参与”即可加入，"
         f"参与一次扣 {DEVIL_SPEC.join_cost} 点好感度。\n"
         f"本轮不需要“运作”或“确认”，{timeout} 秒后自动开转，"
