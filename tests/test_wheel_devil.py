@@ -463,6 +463,17 @@ async def test_devil_corpus_floors_affection_at_zero(tmp_path: Path) -> None:
     assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 0
 
 
+async def test_devil_deduction_sends_daily_gift(tmp_path: Path) -> None:
+    coordinator = make_coordinator(
+        tmp_path, rng=FixedRollRng(roll=98), newbie_below=50
+    )
+    coordinator.service.stickers = FakeStickers()
+    await give(coordinator.service, TRIGGER, 60)
+    _pending, sent = await devil_auto(coordinator)
+    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 0
+    assert any("[CQ:image" in str(message) for message in sent)
+
+
 async def test_devil_meme_receipt_shows_actual_deduction(tmp_path: Path) -> None:
     coordinator = make_coordinator(tmp_path, rng=FixedRollRng(roll=0), memes=FakeMemes())
     coordinator.choice_timeout = 0.01

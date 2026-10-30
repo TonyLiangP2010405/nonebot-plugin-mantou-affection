@@ -73,3 +73,61 @@ async def test_protection_can_be_disabled_by_config(tmp_path: Path) -> None:
     applied, _profile, protected = await service.adjust(GROUP, USER, "测试员", -30)
     assert applied == -30
     assert protected is False
+
+
+class FakeStickers:
+    def __init__(self, error: Exception | None = None):
+        self.error = error
+        self.picks = 0
+
+    async def pick(self) -> tuple[bytes, str]:
+        self.picks += 1
+        if self.error is not None:
+            raise self.error
+        return b"taozi", "头部主播"
+
+
+async def _noop(message) -> None:
+    return None
+
+
+async def test_send_gift_once_per_day(tmp_path: Path) -> None:
+    stickers = FakeStickers()
+    service = make_service(tmp_path)
+    service.stickers = stickers
+    await give(service, 60)
+    sent = []
+
+    async def send(message) -> None:
+        sent.append(message)
+
+    assert await service.send_gift(send, GROUP, USER, "测试员") is True
+    assert await service.send_gift(send, GROUP, USER, "测试员") is False
+    assert stickers.picks == 1
+    assert len(sent) == 1
+    assert "[CQ:image" in str(sent[0])
+
+
+async def test_send_gift_skips_high_affection(tmp_path: Path) -> None:
+    stickers = FakeStickers()
+    service = make_service(tmp_path)
+    service.stickers = stickers
+    await give(service, 100)
+    assert await service.send_gift(_noop, GROUP, USER, "测试员") is False
+    assert stickers.picks == 0
+
+
+async def test_send_gift_without_sticker_library(tmp_path: Path) -> None:
+    service = make_service(tmp_path)
+    await give(service, 10)
+    assert await service.send_gift(_noop, GROUP, USER, "测试员") is False
+
+
+async def test_send_gift_failure_keeps_daily_slot(tmp_path: Path) -> None:
+    stickers = FakeStickers(error=RuntimeError("missing"))
+    service = make_service(tmp_path)
+    service.stickers = stickers
+    await give(service, 60)
+    assert await service.send_gift(_noop, GROUP, USER, "测试员") is False
+    stickers.error = None
+    assert await service.send_gift(_noop, GROUP, USER, "测试员") is True

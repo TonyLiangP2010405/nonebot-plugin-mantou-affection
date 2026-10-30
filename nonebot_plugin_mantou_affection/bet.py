@@ -449,6 +449,10 @@ class BetCoordinator:
             applied, profile, protected = await self.service.adjust(
                 group_id, user_id, nickname, -BET_IDENTICAL_PENALTY
             )
+            if applied < 0:
+                await self.service.send_gift(
+                    pending.send, group_id, user_id, nickname
+                )
             segments.append(MessageSegment.text("\n"))
             segments.append(MessageSegment.at(user_id))
             segments.append(
@@ -625,6 +629,8 @@ class BetCoordinator:
         )
         actual = -applied
         note = NEWBIE_PROTECTION_NOTE if protected else ""
+        if actual > 0:
+            await self.service.send_gift(pending.send, group_id, user_id, nickname)
         if answer is None:
             template = BET_MISS_REPLY if actual > 0 else BET_MISS_EMPTY_REPLY
             return actual, template.format(

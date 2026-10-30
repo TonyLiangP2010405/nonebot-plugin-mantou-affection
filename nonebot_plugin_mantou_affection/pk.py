@@ -306,6 +306,10 @@ class PkCoordinator:
             applied, profile, protected = await self.service.adjust(
                 pending.group_id, answer.user_id, answer.nickname, delta
             )
+            if applied < 0:
+                await self.service.send_gift(
+                    send, pending.group_id, answer.user_id, answer.nickname
+                )
             result = PK_ANSWER_RIGHT_REPLY if correct else PK_ANSWER_WRONG_REPLY
             self._add_line(
                 segments,
@@ -320,6 +324,10 @@ class PkCoordinator:
             applied, profile, protected = await self.service.adjust(
                 pending.group_id, target_id, target_name, PK_TIMEOUT_PENALTY
             )
+            if applied < 0:
+                await self.service.send_gift(
+                    send, pending.group_id, target_id, target_name
+                )
             self._add_line(
                 segments,
                 target_id,

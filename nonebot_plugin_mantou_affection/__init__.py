@@ -102,6 +102,7 @@ meme_resources = MemeResourceManager()
 taozi_stickers = TaoziStickerLibrary(
     base_dir=Path(get_plugin_data_dir()) / "taozi_stickers"
 )
+service.stickers = taozi_stickers
 group_corpus = GroupCorpus(BUNDLED_CORPUS_PATH)
 wheel_coordinator = WheelCoordinator(
     service,

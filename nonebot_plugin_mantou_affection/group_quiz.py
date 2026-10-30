@@ -209,6 +209,10 @@ class GroupQuizCoordinator:
             applied, profile, protected = await self.service.adjust(
                 pending.group_id, answer.user_id, answer.nickname, delta
             )
+            if applied < 0:
+                await self.service.send_gift(
+                    send, pending.group_id, answer.user_id, answer.nickname
+                )
             result = GROUP_QUIZ_ANSWER_RIGHT_REPLY if correct else GROUP_QUIZ_ANSWER_WRONG_REPLY
             self._add_line(
                 segments,
@@ -223,6 +227,10 @@ class GroupQuizCoordinator:
             applied, profile, protected = await self.service.adjust(
                 pending.group_id, target_id, target_name, GROUP_QUIZ_TIMEOUT_PENALTY
             )
+            if applied < 0:
+                await self.service.send_gift(
+                    send, pending.group_id, target_id, target_name
+                )
             self._add_line(
                 segments,
                 target_id,

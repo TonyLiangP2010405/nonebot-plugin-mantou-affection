@@ -6,6 +6,9 @@ from datetime import datetime
 from typing import Any, Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from nonebot import logger
+from nonebot.adapters.onebot.v11 import MessageSegment
+
 from .config import Config
 from .copywriting import AffectionTextLibrary
 from .logic import (
@@ -34,6 +37,7 @@ PK_PROBABILITY_SETTING = "pk_probability"
 GROUP_QUIZ_PROBABILITY_SETTING = "group_quiz_probability"
 WHEEL_PROBABILITY_SETTING = "wheel_probability"
 MEME_CONFIRM_WHITELIST_SETTING = "meme_confirm_whitelist"
+NEWBIE_GIFT_REPLY = " 扣分安慰：送你一张桃子表情包「{caption}」"
 AMBIENT_SCENE = "mantou.ambient"
 
 
@@ -50,11 +54,13 @@ class AffectionService:
         *,
         text_library: AffectionTextLibrary | None = None,
         rng: random.Random | None = None,
+        stickers=None,
     ):
         self.store = store
         self.config = config
         self.text_library = text_library
         self.rng = rng or random.Random()
+        self.stickers = stickers
         try:
             self.timezone = ZoneInfo(config.mantou_affection_timezone)
         except ZoneInfoNotFoundError:
@@ -384,6 +390,56 @@ class AffectionService:
             )
 
         return await self.store.update_profile(group_id, user_id, nickname, update)
+
+    async def send_gift(
+        self, send, group_id: str, user_id: str, nickname: str
+    ) -> bool:
+        """扣分后给低好感群友补一张桃子表情包，每人每天最多一张。"""
+
+        if self.stickers is None:
+            return False
+        threshold = self.config.mantou_affection_newbie_gift_below
+        if threshold <= 0:
+            return False
+        today = self._now().date().isoformat()
+        try:
+            profile = await self.profile(group_id, user_id)
+        except Exception:
+            logger.exception("[mantou-affection] 读取扣分安慰状态失败")
+            return False
+        if profile.affection >= threshold or profile.gift_date == today:
+            return False
+        try:
+            image, caption = await self.stickers.pick()
+        except Exception:
+            logger.exception("[mantou-affection] 扣分安慰取图失败")
+            return False
+
+        def claim(profile: Profile) -> bool:
+            if profile.gift_date == today:
+                return False
+            profile.gift_date = today
+            return True
+
+        try:
+            claimed = await self.store.update_profile(
+                group_id, user_id, normalize_nickname(nickname, user_id), claim
+            )
+        except Exception:
+            logger.exception("[mantou-affection] 记录扣分安慰失败")
+            return False
+        if not claimed:
+            return False
+        try:
+            await send(
+                MessageSegment.at(user_id)
+                + MessageSegment.text(NEWBIE_GIFT_REPLY.format(caption=caption))
+                + MessageSegment.image(image)
+            )
+        except Exception:
+            logger.exception("[mantou-affection] 扣分安慰发送失败")
+            return False
+        return True
 
     async def adjust(
         self,

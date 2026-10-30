@@ -475,6 +475,7 @@ class FindCharCoordinator:
         *,
         group_id: str,
         timeout: float,
+        send: Callable[[Message | str], Awaitable[object]] | None = None,
     ) -> Message:
         """等满作答窗口后统一结算，返回合并了好感变化的消息。"""
 
@@ -493,9 +494,13 @@ class FindCharCoordinator:
 
         for guess in pending.answers.values():
             delta = FIND_CHAR_CORRECT_DELTA if guess.correct else FIND_CHAR_WRONG_DELTA
-            _, profile, protected = await self.service.adjust(
+            applied, profile, protected = await self.service.adjust(
                 group_id, guess.user_id, guess.nickname, delta
             )
+            if applied < 0 and send is not None:
+                await self.service.send_gift(
+                    send, group_id, guess.user_id, guess.nickname
+                )
             template = FIND_CHAR_CORRECT_REPLY if guess.correct else FIND_CHAR_WRONG_REPLY
             add_line(
                 guess.user_id,
@@ -509,12 +514,16 @@ class FindCharCoordinator:
             )
 
         if pending.trigger_id not in pending.answers:
-            _, profile, protected = await self.service.adjust(
+            applied, profile, protected = await self.service.adjust(
                 group_id,
                 pending.trigger_id,
                 pending.trigger_name,
                 FIND_CHAR_TIMEOUT_DELTA,
             )
+            if applied < 0 and send is not None:
+                await self.service.send_gift(
+                    send, group_id, pending.trigger_id, pending.trigger_name
+                )
             add_line(
                 pending.trigger_id,
                 FIND_CHAR_TIMEOUT_REPLY.format(
@@ -551,7 +560,9 @@ class FindCharCoordinator:
 
         async def run() -> Message | None:
             try:
-                message = await self.settle(pending, group_id=group_id, timeout=timeout)
+                message = await self.settle(
+                    pending, group_id=group_id, timeout=timeout, send=send
+                )
             except Exception:
                 logger.exception("[mantou-affection] 找字小游戏结算失败")
                 return None

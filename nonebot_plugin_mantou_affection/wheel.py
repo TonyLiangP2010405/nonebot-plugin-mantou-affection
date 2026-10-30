@@ -619,6 +619,10 @@ class WheelCoordinator:
             )
             note = NEWBIE_PROTECTION_NOTE if protected else ""
             pending.participants.append(WheelParticipant(user_id, name))
+            if applied < 0:
+                await self.service.send_gift(
+                    pending.send, pending.group_id, user_id, name
+                )
             template = (
                 WHEEL_DEVIL_JOIN_COST_REPLY
                 if pending.spec.auto_start
@@ -705,6 +709,13 @@ class WheelCoordinator:
                         f" 选择不运作，好感 {applied:+d}，当前 {profile.affection}{note}"
                     )
                 )
+                if applied < 0:
+                    await self.service.send_gift(
+                        pending.send,
+                        pending.group_id,
+                        trigger.user_id,
+                        trigger.nickname,
+                    )
             except Exception:
                 logger.exception(
                     f"[mantou-affection] 转盘不运作结算失败 group={pending.group_id} "
@@ -735,6 +746,13 @@ class WheelCoordinator:
                                 f" 转盘好感 {applied:+d}，当前 {profile.affection}{note}"
                             )
                         )
+                        if applied < 0:
+                            await self.service.send_gift(
+                                pending.send,
+                                pending.group_id,
+                                participant.user_id,
+                                participant.nickname,
+                            )
                     elif outcome.kind == "poke":
                         await self._run_poke(pending, participant, outcome.value)
                     elif outcome.kind == "taozi":
@@ -772,6 +790,13 @@ class WheelCoordinator:
                 participant.nickname,
                 -pending.spec.corpus_cost,
             )
+            if applied < 0:
+                await self.service.send_gift(
+                    pending.send,
+                    pending.group_id,
+                    participant.user_id,
+                    participant.nickname,
+                )
         except Exception:
             logger.exception(
                 f"[mantou-affection] 转盘语料库扣费失败 group={pending.group_id} "
@@ -885,6 +910,13 @@ class WheelCoordinator:
                 affection = profile.affection
                 if protected:
                     note = NEWBIE_PROTECTION_NOTE
+                if applied < 0:
+                    await self.service.send_gift(
+                        pending.send,
+                        pending.group_id,
+                        participant.user_id,
+                        participant.nickname,
+                    )
             except Exception:
                 logger.exception(
                     f"[mantou-affection] 转盘表情扣费失败 group={pending.group_id} "
@@ -1159,6 +1191,13 @@ class WheelCoordinator:
                     template.format(delta=applied, affection=profile.affection) + note
                 )
             )
+            if applied < 0:
+                await self.service.send_gift(
+                    confirm.send,
+                    confirm.group_id,
+                    confirm.user_id,
+                    confirm.nickname,
+                )
         except Exception:
             logger.exception(
                 f"[mantou-affection] 转盘表情确认结算失败 group={confirm.group_id} "
@@ -1328,6 +1367,13 @@ class WheelCoordinator:
                 -confirm.cost,
                 protect=False,
             )
+            if applied < 0:
+                await self.service.send_gift(
+                    confirm.send,
+                    confirm.group_id,
+                    confirm.user_id,
+                    confirm.nickname,
+                )
         except Exception:
             logger.exception(
                 f"[mantou-affection] 转盘桃子表情包扣费失败 group={confirm.group_id} "

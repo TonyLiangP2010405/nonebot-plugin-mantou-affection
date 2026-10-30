@@ -275,6 +275,7 @@ class EventCoordinator:
         *,
         group_id: str,
         timeout: float,
+        send: Callable[[Message | str], Awaitable[object]] | None = None,
     ) -> Message:
         """等满作答窗口后统一结算，返回合并了好感变化的消息。"""
 
@@ -295,15 +296,26 @@ class EventCoordinator:
             option = pending.options[answer.index]
             add_line(
                 answer.user_id,
-                await self._settle_answer(group_id, pending, answer, option),
+                await self._settle_answer(
+                    group_id, pending, answer, option, send=send
+                ),
             )
 
         if pending.trigger_id not in pending.answers:
-            add_line(pending.trigger_id, await self._settle_timeout(group_id, pending))
+            add_line(
+                pending.trigger_id,
+                await self._settle_timeout(group_id, pending, send=send),
+            )
 
         return Message(segments)
 
-    async def _settle_timeout(self, group_id: str, pending: PendingEvent) -> str:
+    async def _settle_timeout(
+        self,
+        group_id: str,
+        pending: PendingEvent,
+        *,
+        send: Callable[[Message | str], Awaitable[object]] | None = None,
+    ) -> str:
         """结算触发者超时，返回这一行的完整文案。"""
 
         bot_name = self.config.mantou_affection_bot_name
@@ -317,6 +329,10 @@ class EventCoordinator:
             applied, profile, protected = await self.service.adjust(
                 group_id, pending.trigger_id, pending.trigger_name, -penalty
             )
+            if applied < 0 and send is not None:
+                await self.service.send_gift(
+                    send, group_id, pending.trigger_id, pending.trigger_name
+                )
             return UPSET_TIMEOUT_REPLY.format(
                 bot=bot_name, delta=applied, affection=profile.affection
             ) + (NEWBIE_PROTECTION_NOTE if protected else "")
@@ -325,6 +341,10 @@ class EventCoordinator:
         applied, profile, protected = await self.service.adjust(
             group_id, pending.trigger_id, pending.trigger_name, -penalty
         )
+        if applied < 0 and send is not None:
+            await self.service.send_gift(
+                send, group_id, pending.trigger_id, pending.trigger_name
+            )
         reply = TIMEOUT_REPLY.format(bot=bot_name, penalty=-applied)
         note = NEWBIE_PROTECTION_NOTE if protected else ""
         return f"{reply}，当前 {profile.affection}{note}"
@@ -356,6 +376,8 @@ class EventCoordinator:
         pending: PendingEvent,
         answer: PendingAnswer,
         option: EventOption,
+        *,
+        send: Callable[[Message | str], Awaitable[object]] | None = None,
     ) -> str:
         """结算一位答题者，返回这一行的完整文案。"""
 
@@ -367,6 +389,10 @@ class EventCoordinator:
         applied, profile, protected = await self.service.adjust(
             group_id, answer.user_id, answer.nickname, delta
         )
+        if applied < 0 and send is not None:
+            await self.service.send_gift(
+                send, group_id, answer.user_id, answer.nickname
+            )
         note = NEWBIE_PROTECTION_NOTE if protected else ""
         if pending.event.upset:
             template = UPSET_REPLIES.get(option.delta)
@@ -435,7 +461,9 @@ class EventCoordinator:
 
         async def run() -> Message | None:
             try:
-                message = await self.settle(pending, group_id=group_id, timeout=timeout)
+                message = await self.settle(
+                    pending, group_id=group_id, timeout=timeout, send=send
+                )
             except Exception:
                 logger.exception("[mantou-affection] 随机事件结算失败")
                 return None

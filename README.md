@@ -68,6 +68,7 @@ MANTOU_AFFECTION_INTERACTION_LIMIT=5
 MANTOU_AFFECTION_INTERACTION_COOLDOWN=7200
 MANTOU_AFFECTION_MAX=999
 MANTOU_AFFECTION_NEWBIE_PROTECTION_BELOW=50
+MANTOU_AFFECTION_NEWBIE_GIFT_BELOW=100
 MANTOU_AFFECTION_DAILY_GAIN_LIMIT=3
 MANTOU_AFFECTION_RANKING_SIZE=10
 MANTOU_AFFECTION_LINK_ENABLED=true
@@ -103,6 +104,7 @@ MANTOU_AFFECTION_MEMES_BLOCKED_TERMS=
 ```
 
 `MANTOU_AFFECTION_NEWBIE_PROTECTION_BELOW` 是新手保护阈值（默认 50）：好感度低于这个值的群友，任何扣分只扣 1/3；设成 `0` 即关闭。
+`MANTOU_AFFECTION_NEWBIE_GIFT_BELOW` 是扣分安慰阈值（默认 100）：好感度低于这个值的群友，每次被扣分时额外收到一张随机桃子表情包，每人每天最多一张；设成 `0` 即关闭。
 
 `MANTOU_AFFECTION_LINK_REWARDS` 是“插件模块名 -> 单次变化值”的 JSON 对象，支持正数和负数。默认值如下：
 
@@ -727,6 +729,10 @@ SUPERUSER 可以用 `/馒头转盘概率 0.1%` 查看或修改触发概率，设
 （向零取整，至少扣 1 点），提示里会注明「（新手保护，本次只扣 1/3）」。
 
 好感增加不受影响；管理员用 `/馒头好感调整` 扣分不受保护。阈值设成 `0` 即关闭。
+
+好感度低于 `MANTOU_AFFECTION_NEWBIE_GIFT_BELOW`（默认 100）的群友，每次被扣分时还会额外收到
+一张随机桃子表情包，**每人每天最多一张**（按群计，数据存在个人档案里）。素材没下载好或发送失败
+只记日志，不影响扣分本身，也不占用当天名额以外的任何东西。
 
 #### memes 表情联动（可选）
 
