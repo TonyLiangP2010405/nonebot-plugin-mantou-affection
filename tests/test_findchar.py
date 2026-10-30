@@ -127,15 +127,13 @@ def _service(
 ) -> AffectionService:
     return AffectionService(
         AffectionStore(tmp_path / "affection.json"),
-        config or Config(),
+        config or Config(mantou_affection_newbie_protection_below=0),
         text_library=text_library,
         rng=rng or random.Random(0),
     )
 
 
-async def _give_affection(
-    service: AffectionService, score: int, user_id: str = TRIGGER_ID
-) -> None:
+async def _give_affection(service: AffectionService, score: int, user_id: str = TRIGGER_ID) -> None:
     def bump(profile: Profile) -> None:
         profile.affection = score
 
@@ -186,7 +184,7 @@ def _find_char(
 
     if entries is None:
         entries = [PAIR_ENTRY, TRIO_ENTRY]
-    config = config or Config()
+    config = config or Config(mantou_affection_newbie_protection_below=0)
     return FindCharCoordinator(
         _service(tmp_path, config),
         config,
@@ -266,26 +264,96 @@ def test_library_skips_invalid_entries(tmp_path: Path) -> None:
         [
             PAIR_ENTRY,
             "不是对象",
-            {"mode": "other", "decoys": ["己"], "target": "已", "rows": 8, "cols": 10,
-             "row": 1, "col": 1},
-            {"mode": "pair", "decoys": ["己", "已"], "target": "巳", "rows": 8, "cols": 10,
-             "row": 1, "col": 1},
-            {"mode": "trio", "decoys": ["己"], "target": "巳", "rows": 8, "cols": 10,
-             "row": 1, "col": 1},
-            {"mode": "pair", "decoys": ["己"], "target": "己", "rows": 8, "cols": 10,
-             "row": 1, "col": 1},
-            {"mode": "pair", "decoys": ["己"], "target": "a", "rows": 8, "cols": 10,
-             "row": 1, "col": 1},
-            {"mode": "pair", "decoys": ["己"], "target": "已", "rows": 2, "cols": 10,
-             "row": 1, "col": 1},
-            {"mode": "pair", "decoys": ["己"], "target": "已", "rows": 8, "cols": 40,
-             "row": 1, "col": 1},
-            {"mode": "pair", "decoys": ["己"], "target": "已", "rows": 8, "cols": 10,
-             "row": 9, "col": 1},
-            {"mode": "trio", "decoys": ["己", "已"], "target": "巳", "rows": 9, "cols": 12,
-             "row": 4, "col": 13},
-            {"mode": "pair", "decoys": ["己"], "target": "已", "rows": "8", "cols": 10,
-             "row": 1, "col": 1},
+            {
+                "mode": "other",
+                "decoys": ["己"],
+                "target": "已",
+                "rows": 8,
+                "cols": 10,
+                "row": 1,
+                "col": 1,
+            },
+            {
+                "mode": "pair",
+                "decoys": ["己", "已"],
+                "target": "巳",
+                "rows": 8,
+                "cols": 10,
+                "row": 1,
+                "col": 1,
+            },
+            {
+                "mode": "trio",
+                "decoys": ["己"],
+                "target": "巳",
+                "rows": 8,
+                "cols": 10,
+                "row": 1,
+                "col": 1,
+            },
+            {
+                "mode": "pair",
+                "decoys": ["己"],
+                "target": "己",
+                "rows": 8,
+                "cols": 10,
+                "row": 1,
+                "col": 1,
+            },
+            {
+                "mode": "pair",
+                "decoys": ["己"],
+                "target": "a",
+                "rows": 8,
+                "cols": 10,
+                "row": 1,
+                "col": 1,
+            },
+            {
+                "mode": "pair",
+                "decoys": ["己"],
+                "target": "已",
+                "rows": 2,
+                "cols": 10,
+                "row": 1,
+                "col": 1,
+            },
+            {
+                "mode": "pair",
+                "decoys": ["己"],
+                "target": "已",
+                "rows": 8,
+                "cols": 40,
+                "row": 1,
+                "col": 1,
+            },
+            {
+                "mode": "pair",
+                "decoys": ["己"],
+                "target": "已",
+                "rows": 8,
+                "cols": 10,
+                "row": 9,
+                "col": 1,
+            },
+            {
+                "mode": "trio",
+                "decoys": ["己", "已"],
+                "target": "巳",
+                "rows": 9,
+                "cols": 12,
+                "row": 4,
+                "col": 13,
+            },
+            {
+                "mode": "pair",
+                "decoys": ["己"],
+                "target": "已",
+                "rows": "8",
+                "cols": 10,
+                "row": 1,
+                "col": 1,
+            },
         ],
     )
 
@@ -328,7 +396,7 @@ def test_opening_lines_are_plentiful_and_unique(mode: str) -> None:
 
 
 def test_find_char_defaults() -> None:
-    config = Config()
+    config = Config(mantou_affection_newbie_protection_below=0)
     assert config.mantou_affection_find_char_chance == 0.0005
     assert config.mantou_affection_poke_find_char_chance == 0.0005
     assert config.mantou_affection_find_char_timeout == 30
@@ -557,7 +625,7 @@ def test_bundled_bank_opening_lines_never_leak_the_target() -> None:
 def test_bundled_bank_messages_never_point_at_the_target(tmp_path: Path) -> None:
     """遍历整份题库:开局消息不会用「」点名答案字,答案只藏在方阵那一格里。"""
 
-    config = Config()
+    config = Config(mantou_affection_newbie_protection_below=0)
     library = FindCharLibrary(BUNDLED_PUZZLES_PATH)
     find_char = FindCharCoordinator(
         _service(tmp_path, config), config, library, rng=random.Random(11)
@@ -581,7 +649,7 @@ def test_message_falls_back_to_seeded_opening(tmp_path: Path) -> None:
 
 
 async def test_settlement_reveals_answer_and_position(tmp_path: Path) -> None:
-    config = Config()
+    config = Config(mantou_affection_newbie_protection_below=0)
     service = _service(tmp_path, config)
     find_char = FindCharCoordinator(
         service, config, _library(tmp_path, [TRIO_ENTRY]), rng=random.Random(6)
@@ -620,14 +688,12 @@ async def test_start_blocks_second_game_in_same_group(tmp_path: Path) -> None:
 
 
 async def test_start_needs_a_usable_library(tmp_path: Path) -> None:
-    config = Config()
+    config = Config(mantou_affection_newbie_protection_below=0)
     service = _service(tmp_path, config)
     without_library = FindCharCoordinator(service, config, rng=random.Random(0))
     assert without_library.start(GROUP_ID, TRIGGER_ID, "桃友") is None
 
-    empty = FindCharCoordinator(
-        service, config, _library(tmp_path, []), rng=random.Random(0)
-    )
+    empty = FindCharCoordinator(service, config, _library(tmp_path, []), rng=random.Random(0))
     assert empty.library is not None and empty.library.pick() is None
     assert empty.start(GROUP_ID, TRIGGER_ID, "桃友") is None
 
@@ -668,7 +734,7 @@ async def test_trio_and_pair_answers_are_judged_by_target(tmp_path: Path, mode: 
 
 
 async def test_settle_scores_answers_and_trigger_timeout(tmp_path: Path) -> None:
-    config = Config()
+    config = Config(mantou_affection_newbie_protection_below=0)
     service = _service(tmp_path, config)
     await _give_affection(service, 20, TRIGGER_ID)
     await _give_affection(service, 10, OTHER_ID)
@@ -706,7 +772,7 @@ async def test_settle_scores_answers_and_trigger_timeout(tmp_path: Path) -> None
 
 
 async def test_settle_counts_wrong_answer_as_answered(tmp_path: Path) -> None:
-    config = Config()
+    config = Config(mantou_affection_newbie_protection_below=0)
     service = _service(tmp_path, config)
     await _give_affection(service, 20, TRIGGER_ID)
     find_char = FindCharCoordinator(
@@ -735,7 +801,7 @@ async def test_settle_counts_wrong_answer_as_answered(tmp_path: Path) -> None:
 async def test_find_char_and_event_share_the_group_slot(
     tmp_path: Path, bundled_texts_path: Path
 ) -> None:
-    config = Config()
+    config = Config(mantou_affection_newbie_protection_below=0)
     service = _service(tmp_path, config)
     events = EventLibrary(bundled_texts_path.with_name("affection_events.json"))
     coordinator = EventCoordinator(service, config, events, rng=random.Random(0))
@@ -762,7 +828,7 @@ async def test_find_char_and_event_share_the_group_slot(
 
 
 async def test_poke_find_char_requires_send(tmp_path: Path) -> None:
-    config = Config()
+    config = Config(mantou_affection_newbie_protection_below=0)
     find_char = _find_char(tmp_path, config, [PAIR_ENTRY], rng=FixedRng(0.0))
 
     started = await find_char.start_poke_find_char(
@@ -774,7 +840,7 @@ async def test_poke_find_char_requires_send(tmp_path: Path) -> None:
 
 
 async def test_poke_find_char_respects_chance(tmp_path: Path) -> None:
-    config = Config()
+    config = Config(mantou_affection_newbie_protection_below=0)
     find_char = _find_char(tmp_path, config, [PAIR_ENTRY], rng=FixedRng(0.9))
 
     started = await find_char.start_poke_find_char(
@@ -816,9 +882,7 @@ async def test_poke_find_char_returns_message_and_keeps_settlement_for_send(
     await _cancel_task(find_char, GROUP_ID)
 
 
-async def test_public_poke_returns_find_char_message(
-    tmp_path: Path, monkeypatch
-) -> None:
+async def test_public_poke_returns_find_char_message(tmp_path: Path, monkeypatch) -> None:
     from nonebot_plugin_mantou_affection import poke
 
     config = Config(mantou_affection_find_char_timeout=3)
@@ -894,6 +958,7 @@ async def test_plugin_wiring_runs_find_char_end_to_end(monkeypatch) -> None:
     answer_id = "90093"
     monkeypatch.setattr(plugin_config, "mantou_affection_find_char_chance", 1.0)
     monkeypatch.setattr(plugin_config, "mantou_affection_find_char_timeout", 0.05)
+    monkeypatch.setattr(plugin_config, "mantou_affection_newbie_protection_below", 0)
     sent: list[Message] = []
 
     async def fake_send(message) -> None:
@@ -938,6 +1003,7 @@ async def _ambient_setup(
     monkeypatch,
     **config_kwargs,
 ) -> tuple:
+    config_kwargs.setdefault("mantou_affection_newbie_protection_below", 0)
     config_kwargs.setdefault("mantou_affection_ambient_probability", 1.0)
     config_kwargs.setdefault("mantou_affection_ambient_event_ratio", 0.0)
     config = Config(**config_kwargs)
@@ -992,9 +1058,7 @@ async def test_ambient_handler_starts_find_char_game(
     assert "请在 30 秒内作答" in body
     assert coordinator.pending == {}
 
-    await answer.handlers[0].call(
-        _event(pending.puzzle.target, user_id=90003, nickname="路人")
-    )
+    await answer.handlers[0].call(_event(pending.puzzle.target, user_id=90003, nickname="路人"))
     assert list(pending.answers) == [OTHER_ID]
     assert pending.answers[OTHER_ID].correct is True
 
@@ -1101,7 +1165,7 @@ async def test_find_char_chances_prefer_stored_override(tmp_path: Path) -> None:
 
     restarted = AffectionService(
         AffectionStore(tmp_path / "affection.json"),
-        Config(),
+        Config(mantou_affection_newbie_protection_below=0),
         rng=random.Random(0),
     )
     assert await restarted.find_char_chances() == pytest.approx((0.5, 0.25))
@@ -1127,7 +1191,7 @@ async def test_find_char_chances_ignore_broken_setting(tmp_path: Path) -> None:
 
 def _find_char_command(tmp_path: Path, monkeypatch) -> tuple:
     service = _service(tmp_path)
-    command = register_commands(service, Config())[7]
+    command = register_commands(service, Config(mantou_affection_newbie_protection_below=0))[7]
     sent: list[str] = []
 
     async def fake_finish(message: Message | str = "", **kwargs) -> None:

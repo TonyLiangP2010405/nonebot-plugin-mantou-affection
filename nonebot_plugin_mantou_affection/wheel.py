@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 from nonebot import logger
 from nonebot.adapters.onebot.v11 import MessageSegment
 
+from .logic import NEWBIE_PROTECTION_NOTE, protect_deduction
 from .service import normalize_nickname
 from .wheel_corpus import CorpusError
 from .wheel_memes import MemeAssetMissing, MemeGenerationError
@@ -86,8 +87,6 @@ WHEEL_MAX_PARTICIPANTS = 4
 WHEEL_TOTAL_SEATS = WHEEL_MAX_PARTICIPANTS + 1
 WHEEL_JOIN_COST = 2
 WHEEL_TAOZI_COST = 10
-
-
 @dataclass(frozen=True)
 class WheelSpec:
     """一张转盘表的权重与流程开关；普通表和恶魔表只在这份数据上不同。"""
@@ -135,7 +134,7 @@ def _join_weights(items: list[tuple[int, int]], prefix: str) -> str:
     return "、".join(f"{prefix}{value} {weight}%" for value, weight in items)
 
 
-def format_wheel_rules(timeout: int) -> str:
+def format_wheel_rules(timeout: int, newbie_below: int = 50) -> str:
     meme_weight = sum(weight for outcome, weight in WHEEL_OUTCOMES if outcome.kind == "meme")
     taozi_weight = sum(weight for outcome, weight in WHEEL_OUTCOMES if outcome.kind == "taozi")
     pokes = [(o.value, w) for o, w in WHEEL_OUTCOMES if o.kind == "poke"]
@@ -150,6 +149,7 @@ def format_wheel_rules(timeout: int) -> str:
         "发送“运作”后还需在倒计时内回复“确认”才会开转。\n"
         "其他群友发送“参与”即可加入，触发者确认后立即截止，运作时每人独立抽取一次。\n"
         "本轮取消或触发者选择“不运作”时，参与费会全额退回。\n"
+        f"好感度低于 {newbie_below} 的群友有新手保护：所有扣分只扣 1/3。\n"
         "转盘各项概率：\n"
         f"· 馒头制作随机表情 {meme_weight}%\n"
         f"· 桃子表情包 {taozi_weight}%（换一张需 {WHEEL_TAOZI_COST} 点好感）\n"
@@ -159,7 +159,9 @@ def format_wheel_rules(timeout: int) -> str:
     )
 
 
-def format_devil_wheel_rules(timeout: int, min_affection: int) -> str:
+def format_devil_wheel_rules(
+    timeout: int, min_affection: int, newbie_below: int = 50
+) -> str:
     meme_weight = sum(
         weight for outcome, weight in DEVIL_WHEEL_OUTCOMES if outcome.kind == "meme"
     )
@@ -187,6 +189,8 @@ def format_devil_wheel_rules(timeout: int, min_affection: int) -> str:
         f"参与一次扣 {DEVIL_SPEC.join_cost} 点好感度。\n"
         f"本轮不需要“运作”或“确认”，{timeout} 秒后自动开转，"
         "每人独立抽取一次；开转后不退款。\n"
+        f"好感度低于 {newbie_below} 的群友有新手保护："
+        "所有扣分只扣 1/3。\n"
         "恶魔转盘各项概率：\n"
         f"· 馒头制作随机表情 {meme_weight}%（抽中扣 {DEVIL_SPEC.meme_cost} 点好感，"
         f"从 {DEVIL_SPEC.meme_candidates} 个模板里选 1 个）\n"
@@ -218,7 +222,7 @@ WHEEL_MEME_ASSET_MISSING_REPLY = " 表情素材尚未下载完成，本次不重
 WHEEL_MEME_FAILED_REPLY = " 本次表情生成失败，不重抽"
 
 WHEEL_MEME_PICK_REPLY = (
-    " 你抽中了「随机表情」，已扣除 {cost} 点好感，当前 {affection}。"
+    " 你抽中了「随机表情」，已扣除 {cost} 点好感{note}，当前 {affection}。"
     "回复「选1」到「选{count}」挑一个，{timeout} 秒内有效：\n{options}"
 )
 WHEEL_MEME_PICK_CONFIRMED_REPLY = " 馒头为你做了这张表情："
@@ -228,17 +232,21 @@ WHEEL_MEME_PICK_INVALID_REPLY = " 只能回复「选1」到「选{count}」，�
 _MEME_PICK_PATTERN = re.compile(r"选([1-9])")
 
 WHEEL_JOIN_COST_REPLY = (
-    " 参与成功，已扣除 {cost} 点好感度，当前 {affection}，"
+    " 参与成功，已扣除 {cost} 点好感度{note}，当前 {affection}，"
     "已加入本轮转盘，等待触发者选择是否运作。"
+)
+WHEEL_DEVIL_JOIN_COST_REPLY = (
+    " 参与成功，已扣除 {cost} 点好感度{note}，当前 {affection}，"
+    "已加入本轮恶魔转盘，到点自动开转。"
 )
 WHEEL_JOIN_POOR_REPLY = " 好感度不足 {cost} 点，暂时无法参与本轮转盘（当前 {affection}）。"
 WHEEL_JOIN_REFUND_REPLY = " 本轮没有开转，参与费 {amount:+d} 已退回，当前 {affection}"
 
 WHEEL_TAOZI_PROMPT_REPLY = (
-    " 你抽中了「桃子表情包」！花 {cost} 点好感可以换一张随机桃子表情包图片，"
+    " 你抽中了「桃子表情包」！花 {cost} 点好感{note}可以换一张随机桃子表情包图片，"
     "当前 {affection}。要换吗？请在 {timeout} 秒内回复「要」或「不要」。"
 )
-WHEEL_TAOZI_CONFIRMED_REPLY = " 已扣除 {cost} 点好感，桃子的表情包「{caption}」来啦："
+WHEEL_TAOZI_CONFIRMED_REPLY = " 已扣除 {cost} 点好感{note}，桃子的表情包「{caption}」来啦："
 WHEEL_TAOZI_DECLINED_REPLY = " 已放弃兑换桃子的表情包，好感不变"
 WHEEL_TAOZI_TIMEOUT_REPLY = " 桃子表情包确认超时，本次没有兑换，好感不变"
 WHEEL_TAOZI_POOR_REPLY = " 好感不足 {cost} 点，本次没有兑换，当前 {affection}"
@@ -260,10 +268,10 @@ def format_corpus_line(line: str, cost: int, affection: int) -> str:
 
 
 def format_sticker_prompt(
-    affection: int, timeout: int, cost: int = WHEEL_TAOZI_COST
+    affection: int, timeout: int, cost: int = WHEEL_TAOZI_COST, note: str = ""
 ) -> str:
     return WHEEL_TAOZI_PROMPT_REPLY.format(
-        cost=cost, affection=affection, timeout=timeout
+        cost=cost, affection=affection, timeout=timeout, note=note
     )
 
 
@@ -291,7 +299,11 @@ def format_meme_confirm(meme: Any, timeout: int) -> str:
 
 
 def format_meme_pick(
-    candidates: list[tuple[Any, str]], timeout: int, cost: int, affection: int
+    candidates: list[tuple[Any, str]],
+    timeout: int,
+    cost: int,
+    affection: int,
+    note: str = "",
 ) -> str:
     options = "\n".join(
         f"选{index}. {_meme_name(meme)}（种类：{_meme_tags(meme)}，"
@@ -304,6 +316,7 @@ def format_meme_pick(
         count=len(candidates),
         timeout=timeout,
         options=options,
+        note=note,
     )
 
 
@@ -369,6 +382,7 @@ class PendingStickerConfirm:
         bot,
         send,
         cost: int = WHEEL_TAOZI_COST,
+        note: str = "",
     ):
         self.group_id = group_id
         self.user_id = user_id
@@ -376,6 +390,7 @@ class PendingStickerConfirm:
         self.bot = bot
         self.send = send
         self.cost = cost
+        self.note = note
         self.accepting = True
         self.task: asyncio.Task | None = None
 
@@ -482,9 +497,13 @@ class WheelCoordinator:
                 format_devil_wheel_rules(
                     int(self.choice_timeout),
                     self.config.mantou_affection_wheel_devil_min_affection,
+                    self.config.mantou_affection_newbie_protection_below,
                 )
                 if devil
-                else format_wheel_rules(int(self.choice_timeout))
+                else format_wheel_rules(
+                    int(self.choice_timeout),
+                    self.config.mantou_affection_newbie_protection_below,
+                )
             )
             await send(MessageSegment.at(user) + MessageSegment.text(rules))
         except Exception:
@@ -595,15 +614,21 @@ class WheelCoordinator:
                     )
                 )
                 return True
-            applied, profile = await self.service.adjust(
+            applied, profile, protected = await self.service.adjust(
                 pending.group_id, user_id, name, -cost
             )
+            note = NEWBIE_PROTECTION_NOTE if protected else ""
             pending.participants.append(WheelParticipant(user_id, name))
+            template = (
+                WHEEL_DEVIL_JOIN_COST_REPLY
+                if pending.spec.auto_start
+                else WHEEL_JOIN_COST_REPLY
+            )
             await pending.send(
                 MessageSegment.at(user_id)
                 + MessageSegment.text(
-                    WHEEL_JOIN_COST_REPLY.format(
-                        cost=-applied, affection=profile.affection
+                    template.format(
+                        cost=-applied, affection=profile.affection, note=note
                     )
                 )
             )
@@ -614,7 +639,7 @@ class WheelCoordinator:
 
         for participant in pending.participants:
             try:
-                applied, profile = await self.service.adjust(
+                applied, profile, _protected = await self.service.adjust(
                     pending.group_id,
                     participant.user_id,
                     participant.nickname,
@@ -670,13 +695,14 @@ class WheelCoordinator:
             trigger = pending.trigger
             delta = draw_not_operate_delta(self.rng)
             try:
-                applied, profile = await self.service.adjust(
+                applied, profile, protected = await self.service.adjust(
                     pending.group_id, trigger.user_id, trigger.nickname, delta
                 )
+                note = NEWBIE_PROTECTION_NOTE if protected else ""
                 await pending.send(
                     MessageSegment.at(trigger.user_id)
                     + MessageSegment.text(
-                        f" 选择不运作，好感 {applied:+d}，当前 {profile.affection}"
+                        f" 选择不运作，好感 {applied:+d}，当前 {profile.affection}{note}"
                     )
                 )
             except Exception:
@@ -696,16 +722,17 @@ class WheelCoordinator:
                 try:
                     outcome = draw_wheel_outcome(self.rng, pending.spec.outcomes)
                     if outcome.kind == "affection":
-                        applied, profile = await self.service.adjust(
+                        applied, profile, protected = await self.service.adjust(
                             pending.group_id,
                             participant.user_id,
                             participant.nickname,
                             outcome.value,
                         )
+                        note = NEWBIE_PROTECTION_NOTE if protected else ""
                         await pending.send(
                             MessageSegment.at(participant.user_id)
                             + MessageSegment.text(
-                                f" 转盘好感 {applied:+d}，当前 {profile.affection}"
+                                f" 转盘好感 {applied:+d}，当前 {profile.affection}{note}"
                             )
                         )
                     elif outcome.kind == "poke":
@@ -739,7 +766,7 @@ class WheelCoordinator:
             )
             return
         try:
-            applied, profile = await self.service.adjust(
+            applied, profile, protected = await self.service.adjust(
                 pending.group_id,
                 participant.user_id,
                 participant.nickname,
@@ -755,10 +782,11 @@ class WheelCoordinator:
                 + MessageSegment.text(WHEEL_CORPUS_FAILED_REPLY)
             )
             return
+        note = NEWBIE_PROTECTION_NOTE if protected else ""
         await pending.send(
             MessageSegment.at(participant.user_id)
             + MessageSegment.text(
-                format_corpus_line(line, -applied, profile.affection)
+                format_corpus_line(line, -applied, profile.affection) + note
             )
         )
 
@@ -845,15 +873,18 @@ class WheelCoordinator:
         affection = (
             await self.service.profile(pending.group_id, participant.user_id)
         ).affection
+        note = ""
         if cost > 0:
             try:
-                applied, profile = await self.service.adjust(
+                applied, profile, protected = await self.service.adjust(
                     pending.group_id,
                     participant.user_id,
                     participant.nickname,
                     -cost,
                 )
                 affection = profile.affection
+                if protected:
+                    note = NEWBIE_PROTECTION_NOTE
             except Exception:
                 logger.exception(
                     f"[mantou-affection] 转盘表情扣费失败 group={pending.group_id} "
@@ -883,7 +914,7 @@ class WheelCoordinator:
             )
             return
         await self._request_meme_pick(
-            pending, participant, candidates, -applied, affection
+            pending, participant, candidates, -applied, affection, note
         )
 
     async def _send_chosen_meme(
@@ -923,6 +954,7 @@ class WheelCoordinator:
         candidates: list[tuple[Any, str]],
         cost: int,
         affection: int,
+        note: str = "",
     ) -> None:
         key = (pending.group_id, participant.user_id)
         old = self.meme_picks.pop(key, None)
@@ -945,7 +977,11 @@ class WheelCoordinator:
                 MessageSegment.at(participant.user_id)
                 + MessageSegment.text(
                     format_meme_pick(
-                        candidates, int(self.meme_confirm_timeout), cost, affection
+                        candidates,
+                        int(self.meme_confirm_timeout),
+                        cost,
+                        affection,
+                        note,
                     )
                 )
             )
@@ -1113,13 +1149,14 @@ class WheelCoordinator:
             WHEEL_MEME_DECLINED_REPLY if declined else WHEEL_MEME_TIMEOUT_REPLY
         )
         try:
-            applied, profile = await self.service.adjust(
+            applied, profile, protected = await self.service.adjust(
                 confirm.group_id, confirm.user_id, confirm.nickname, delta
             )
+            note = NEWBIE_PROTECTION_NOTE if protected else ""
             await confirm.send(
                 MessageSegment.at(confirm.user_id)
                 + MessageSegment.text(
-                    template.format(delta=applied, affection=profile.affection)
+                    template.format(delta=applied, affection=profile.affection) + note
                 )
             )
         except Exception:
@@ -1176,6 +1213,11 @@ class WheelCoordinator:
     ) -> None:
         cost = pending.spec.taozi_cost
         current = (await self.service.profile(pending.group_id, participant.user_id)).affection
+        protected_cost = -protect_deduction(
+            current, -cost, self.config.mantou_affection_newbie_protection_below
+        )
+        note = NEWBIE_PROTECTION_NOTE if protected_cost != cost else ""
+        cost = protected_cost
         if current < cost:
             await pending.send(
                 MessageSegment.at(participant.user_id)
@@ -1184,10 +1226,14 @@ class WheelCoordinator:
                 )
             )
             return
-        await self._request_sticker_confirm(pending, participant)
+        await self._request_sticker_confirm(pending, participant, cost, note)
 
     async def _request_sticker_confirm(
-        self, pending: PendingWheel, participant: WheelParticipant
+        self,
+        pending: PendingWheel,
+        participant: WheelParticipant,
+        cost: int = WHEEL_TAOZI_COST,
+        note: str = "",
     ) -> None:
         key = (pending.group_id, participant.user_id)
         old = self.sticker_confirms.pop(key, None)
@@ -1201,7 +1247,8 @@ class WheelCoordinator:
             participant.nickname,
             bot=pending.bot,
             send=pending.send,
-            cost=pending.spec.taozi_cost,
+            cost=cost,
+            note=note,
         )
         self.sticker_confirms[key] = confirm
         current = (await self.service.profile(pending.group_id, participant.user_id)).affection
@@ -1212,7 +1259,8 @@ class WheelCoordinator:
                     format_sticker_prompt(
                         current,
                         int(self.sticker_confirm_timeout),
-                        pending.spec.taozi_cost,
+                        cost,
+                        note,
                     )
                 )
             )
@@ -1273,11 +1321,12 @@ class WheelCoordinator:
                     )
                 )
                 return
-            applied, _profile = await self.service.adjust(
+            applied, _profile, protected = await self.service.adjust(
                 confirm.group_id,
                 confirm.user_id,
                 confirm.nickname,
                 -confirm.cost,
+                protect=False,
             )
         except Exception:
             logger.exception(
@@ -1292,7 +1341,11 @@ class WheelCoordinator:
         await confirm.send(
             MessageSegment.at(confirm.user_id)
             + MessageSegment.text(
-                WHEEL_TAOZI_CONFIRMED_REPLY.format(cost=-applied, caption=caption)
+                WHEEL_TAOZI_CONFIRMED_REPLY.format(
+                    cost=-applied,
+                    caption=caption,
+                    note=NEWBIE_PROTECTION_NOTE if protected else confirm.note,
+                )
             )
             + MessageSegment.image(image)
         )

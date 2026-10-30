@@ -14,6 +14,7 @@ from nonebot import logger
 from nonebot.adapters.onebot.v11 import Message, MessageSegment
 
 from .config import Config
+from .logic import NEWBIE_PROTECTION_NOTE
 from .service import AffectionService, normalize_nickname
 
 if TYPE_CHECKING:
@@ -445,7 +446,7 @@ class BetCoordinator:
         self.discard(group_id)
         segments: list[MessageSegment] = [MessageSegment.text(pending.round.settle)]
         for user_id, nickname in pending.named:
-            _, profile = await self.service.adjust(
+            applied, profile, protected = await self.service.adjust(
                 group_id, user_id, nickname, -BET_IDENTICAL_PENALTY
             )
             segments.append(MessageSegment.text("\n"))
@@ -454,8 +455,9 @@ class BetCoordinator:
                 MessageSegment.text(
                     " "
                     + BET_IDENTICAL_REPLY.format(
-                        delta=-BET_IDENTICAL_PENALTY, affection=profile.affection
+                        delta=applied, affection=profile.affection
                     )
+                    + (NEWBIE_PROTECTION_NOTE if protected else "")
                 )
             )
         try:
@@ -542,7 +544,7 @@ class BetCoordinator:
         for index, (user_id, kind) in enumerate(sharers):
             amount = share + (remainder if index == 0 else 0)
             answer = pending.answers[user_id]
-            _, profile = await self.service.adjust(
+            _, profile, _protected = await self.service.adjust(
                 group_id, user_id, answer.nickname, amount
             )
             if kind == "winner":
@@ -618,14 +620,20 @@ class BetCoordinator:
         nickname = answer.nickname if answer is not None else self._name_of(pending, user_id)
         current = (await self.service.profile(group_id, user_id)).affection
         amount = max(1, int(current * BET_LOSS_RATE)) if current > 0 else 0
-        _, profile = await self.service.adjust(group_id, user_id, nickname, -amount)
-        if answer is None:
-            template = BET_MISS_REPLY if amount > 0 else BET_MISS_EMPTY_REPLY
-            return amount, template.format(amount=amount, affection=profile.affection)
-        template = BET_LOSE_REPLY if amount > 0 else BET_LOSE_EMPTY_REPLY
-        return amount, template.format(
-            hits=answer.hits, amount=amount, affection=profile.affection
+        applied, profile, protected = await self.service.adjust(
+            group_id, user_id, nickname, -amount
         )
+        actual = -applied
+        note = NEWBIE_PROTECTION_NOTE if protected else ""
+        if answer is None:
+            template = BET_MISS_REPLY if actual > 0 else BET_MISS_EMPTY_REPLY
+            return actual, template.format(
+                amount=actual, affection=profile.affection
+            ) + note
+        template = BET_LOSE_REPLY if actual > 0 else BET_LOSE_EMPTY_REPLY
+        return actual, template.format(
+            hits=answer.hits, amount=actual, affection=profile.affection
+        ) + note
 
     @staticmethod
     def _name_of(pending: PendingBet, user_id: str) -> str:

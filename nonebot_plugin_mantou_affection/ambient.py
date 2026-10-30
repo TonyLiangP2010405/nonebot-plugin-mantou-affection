@@ -17,6 +17,7 @@ from .events import Event, EventLibrary, EventOption
 from .findchar import BUNDLED_PUZZLES_PATH, FindCharCoordinator, FindCharLibrary
 from .group_quiz import BUNDLED_GROUP_QUIZ_PATH, GroupQuizCoordinator
 from .logic import (
+    NEWBIE_PROTECTION_NOTE,
     UPSET_EVENT_RATIOS,
     snapshot_for,
 )
@@ -313,19 +314,20 @@ class EventCoordinator:
             penalty = self._percent_penalty(
                 current, UPSET_TIMEOUT_PERCENT
             ) * pending.penalty_scale
-            _, profile = await self.service.adjust(
+            applied, profile, protected = await self.service.adjust(
                 group_id, pending.trigger_id, pending.trigger_name, -penalty
             )
             return UPSET_TIMEOUT_REPLY.format(
-                bot=bot_name, delta=-penalty, affection=profile.affection
-            )
+                bot=bot_name, delta=applied, affection=profile.affection
+            ) + (NEWBIE_PROTECTION_NOTE if protected else "")
 
         penalty = self.config.mantou_affection_event_timeout_penalty * pending.penalty_scale
-        _, profile = await self.service.adjust(
+        applied, profile, protected = await self.service.adjust(
             group_id, pending.trigger_id, pending.trigger_name, -penalty
         )
-        reply = TIMEOUT_REPLY.format(bot=bot_name, penalty=penalty)
-        return f"{reply}，当前 {profile.affection}"
+        reply = TIMEOUT_REPLY.format(bot=bot_name, penalty=-applied)
+        note = NEWBIE_PROTECTION_NOTE if protected else ""
+        return f"{reply}，当前 {profile.affection}{note}"
 
     @staticmethod
     def _percent_penalty(affection: int, percent: int) -> int:
@@ -362,15 +364,18 @@ class EventCoordinator:
             delta = await self._upset_delta(group_id, pending, answer, option)
         else:
             delta = pending.scaled_delta(option.delta)
-        _, profile = await self.service.adjust(
+        applied, profile, protected = await self.service.adjust(
             group_id, answer.user_id, answer.nickname, delta
         )
+        note = NEWBIE_PROTECTION_NOTE if protected else ""
         if pending.event.upset:
             template = UPSET_REPLIES.get(option.delta)
             if template is None:
                 template = UPSET_TRAP_REPLY if option.delta < 0 else UPSET_BEST_REPLY
-            return template.format(bot=bot_name, delta=delta, affection=profile.affection)
-        return f"{self._option_reply(option, delta)}，当前 {profile.affection}"
+            return template.format(
+                bot=bot_name, delta=applied, affection=profile.affection
+            ) + note
+        return f"{self._option_reply(option, applied)}，当前 {profile.affection}{note}"
 
     def _option_reply(self, option: EventOption, delta: int) -> str:
         if option.delta >= 2:

@@ -177,6 +177,18 @@ def adjust_affection(profile: Profile, delta: int, affection_max: int, now_times
     return profile.affection - before
 
 
+NEWBIE_DIVISOR = 3
+NEWBIE_PROTECTION_NOTE = "（新手保护，本次只扣 1/3）"
+
+
+def protect_deduction(affection_before: int, delta: int, threshold: int) -> int:
+    """新手保护：好感低于阈值时把一次扣分缩到 1/3（向零取整，至少 1 点）。"""
+
+    if delta >= 0 or affection_before >= threshold:
+        return delta
+    return -max(1, (-delta) // NEWBIE_DIVISOR)
+
+
 def apply_link_reward(
     profile: Profile,
     *,

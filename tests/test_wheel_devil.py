@@ -8,6 +8,7 @@ import pytest
 from nonebot.adapters.onebot.v11 import Message
 
 from nonebot_plugin_mantou_affection.config import Config
+from nonebot_plugin_mantou_affection.logic import protect_deduction
 from nonebot_plugin_mantou_affection.service import AffectionService
 from nonebot_plugin_mantou_affection.storage import AffectionStore
 from nonebot_plugin_mantou_affection.wheel import (
@@ -167,9 +168,15 @@ class FakeStickers:
 
 
 def make_coordinator(
-    tmp_path: Path, rng=None, memes=None, resources=None, stickers=None, corpus=None
+    tmp_path: Path,
+    rng=None,
+    memes=None,
+    resources=None,
+    stickers=None,
+    corpus=None,
+    newbie_below: int = 0,
 ):
-    config = Config()
+    config = Config(mantou_affection_newbie_protection_below=newbie_below)
     service = AffectionService(AffectionStore(tmp_path / "affection.json"), config)
     coordinator = WheelCoordinator(
         service,
@@ -268,9 +275,7 @@ async def test_devil_auto_runs_at_timeout_without_refund(tmp_path: Path) -> None
 
 
 async def test_devil_taozi_asks_thirty_and_charges_thirty(tmp_path: Path) -> None:
-    coordinator = make_coordinator(
-        tmp_path, rng=FixedRollRng(roll=10), stickers=FakeStickers()
-    )
+    coordinator = make_coordinator(tmp_path, rng=FixedRollRng(roll=10), stickers=FakeStickers())
     await give(coordinator.service, TRIGGER, 100)
     _pending, sent = await devil_auto(coordinator)
     prompt = sent[-1].extract_plain_text()
@@ -281,9 +286,7 @@ async def test_devil_taozi_asks_thirty_and_charges_thirty(tmp_path: Path) -> Non
 
 
 async def test_devil_taozi_needs_thirty_to_ask(tmp_path: Path) -> None:
-    coordinator = make_coordinator(
-        tmp_path, rng=FixedRollRng(roll=10), stickers=FakeStickers()
-    )
+    coordinator = make_coordinator(tmp_path, rng=FixedRollRng(roll=10), stickers=FakeStickers())
     await give(coordinator.service, TRIGGER, 29)
     _pending, sent = await devil_auto(coordinator)
     assert "好感不足" in sent[-1].extract_plain_text()
@@ -326,16 +329,12 @@ class FakeMemes:
         draw_error: Exception | None = None,
         generate_error: Exception | None = None,
     ):
-        self.candidates = [
-            FakeMemeTemplate(f"meme{index}", f"名字{index}") for index in range(5)
-        ]
+        self.candidates = [FakeMemeTemplate(f"meme{index}", f"名字{index}") for index in range(5)]
         self.draw_error = draw_error
         self.generate_error = generate_error
         self.generated: list[tuple[object, str, str]] = []
 
-    async def draw_candidates_for_group(
-        self, *, group_id: str, bot, user_id: str, count: int
-    ):
+    async def draw_candidates_for_group(self, *, group_id: str, bot, user_id: str, count: int):
         if self.draw_error is not None:
             raise self.draw_error
         return [(meme, "single") for meme in self.candidates[:count]]
@@ -436,9 +435,7 @@ class FakeCorpus:
 
 
 async def test_devil_corpus_charges_five_and_quotes_a_line(tmp_path: Path) -> None:
-    coordinator = make_coordinator(
-        tmp_path, rng=FixedRollRng(roll=35), corpus=FakeCorpus()
-    )
+    coordinator = make_coordinator(tmp_path, rng=FixedRollRng(roll=35), corpus=FakeCorpus())
     await give(coordinator.service, TRIGGER, 50)
     _pending, sent = await devil_auto(coordinator)
     body = sent[-1].extract_plain_text()
@@ -460,9 +457,7 @@ async def test_devil_corpus_missing_does_not_charge(tmp_path: Path) -> None:
 
 
 async def test_devil_corpus_floors_affection_at_zero(tmp_path: Path) -> None:
-    coordinator = make_coordinator(
-        tmp_path, rng=FixedRollRng(roll=35), corpus=FakeCorpus()
-    )
+    coordinator = make_coordinator(tmp_path, rng=FixedRollRng(roll=35), corpus=FakeCorpus())
     await give(coordinator.service, TRIGGER, 3)
     await devil_auto(coordinator)
     assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 0
@@ -479,3 +474,113 @@ async def test_devil_meme_receipt_shows_actual_deduction(tmp_path: Path) -> None
     assert "已扣除 0 点好感" in body
     assert "当前 0" in body
     assert (await coordinator.service.profile(GROUP, OTHER)).affection == 0
+
+
+def test_protect_deduction_rounds_toward_zero() -> None:
+    assert protect_deduction(0, -5, 50) == -1
+    assert protect_deduction(0, -4, 50) == -1
+    assert protect_deduction(0, -8, 50) == -2
+    assert protect_deduction(0, -12, 50) == -4
+    assert protect_deduction(0, -20, 50) == -6
+    assert protect_deduction(0, -30, 50) == -10
+    assert protect_deduction(0, -40, 50) == -13
+    assert protect_deduction(0, -60, 50) == -20
+    assert protect_deduction(0, -1, 50) == -1
+    assert protect_deduction(0, 0, 50) == 0
+    assert protect_deduction(0, 4, 50) == 4
+    assert protect_deduction(50, -60, 50) == -60
+
+
+async def test_devil_negative_delta_protected_below_fifty(tmp_path: Path) -> None:
+    coordinator = make_coordinator(tmp_path, rng=FixedRollRng(roll=98), newbie_below=50)
+    await give(coordinator.service, TRIGGER, 40)
+    _pending, sent = await devil_auto(coordinator)
+    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 20
+    body = sent[-1].extract_plain_text()
+    assert "-20" in body
+    assert "新手保护" in body
+
+
+async def test_devil_negative_delta_not_protected_at_fifty(tmp_path: Path) -> None:
+    coordinator = make_coordinator(tmp_path, rng=FixedRollRng(roll=87), newbie_below=50)
+    await give(coordinator.service, TRIGGER, 50)
+    _pending, sent = await devil_auto(coordinator)
+    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 30
+    assert "新手保护" not in sent[-1].extract_plain_text()
+
+
+async def test_normal_wheel_also_protected_below_fifty(tmp_path: Path) -> None:
+    coordinator = make_coordinator(tmp_path, rng=FixedRollRng(roll=99), newbie_below=50)
+    await give(coordinator.service, TRIGGER, 40)
+    sent = []
+
+    async def send(message) -> None:
+        sent.append(Message(message) if isinstance(message, str) else message)
+
+    assert await coordinator.start(
+        group_id=GROUP,
+        user_id=TRIGGER,
+        nickname="触发者",
+        bot=FakeBot(),
+        send=send,
+    )
+    pending = coordinator.pending[GROUP]
+    await coordinator.answer(GROUP, TRIGGER, "触发者", "运作")
+    await coordinator.answer(GROUP, TRIGGER, "触发者", "确认")
+    await asyncio.wait_for(pending.task, 2)
+    # 普通转盘 -20 也被保护成 -6
+    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 34
+
+
+async def test_devil_join_fee_protected_below_fifty(tmp_path: Path) -> None:
+    coordinator = make_coordinator(tmp_path, newbie_below=50)
+    pending, sent = await devil_start(coordinator)
+    await give(coordinator.service, OTHER, 40)
+    await coordinator.answer(GROUP, OTHER, "群友", "参与")
+    assert (await coordinator.service.profile(GROUP, OTHER)).affection == 39
+    body = sent[-1].extract_plain_text()
+    assert "1 点好感度" in body
+    assert "新手保护" in body
+    pending.task.cancel()
+
+
+async def test_devil_meme_cost_protected_below_fifty(tmp_path: Path) -> None:
+    coordinator = make_coordinator(
+        tmp_path, rng=FixedRollRng(roll=0), memes=FakeMemes(), newbie_below=50
+    )
+    await give(coordinator.service, TRIGGER, 40)
+    _pending, sent = await devil_auto(coordinator)
+    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 39
+    body = sent[-1].extract_plain_text()
+    assert "已扣除 1 点好感" in body
+    assert "新手保护" in body
+
+
+async def test_devil_corpus_cost_protected_below_fifty(tmp_path: Path) -> None:
+    coordinator = make_coordinator(
+        tmp_path, rng=FixedRollRng(roll=35), corpus=FakeCorpus(), newbie_below=50
+    )
+    await give(coordinator.service, TRIGGER, 40)
+    _pending, sent = await devil_auto(coordinator)
+    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 39
+    assert "新手保护" in sent[-1].extract_plain_text()
+
+
+async def test_devil_taozi_cost_protected_below_fifty(tmp_path: Path) -> None:
+    coordinator = make_coordinator(
+        tmp_path, rng=FixedRollRng(roll=10), stickers=FakeStickers(), newbie_below=50
+    )
+    await give(coordinator.service, TRIGGER, 40)
+    _pending, sent = await devil_auto(coordinator)
+    prompt = sent[-1].extract_plain_text()
+    assert "10 点好感" in prompt
+    assert "新手保护" in prompt
+    await coordinator.answer(GROUP, TRIGGER, "触发者", "要")
+    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 30
+    assert "新手保护" in sent[-1].extract_plain_text()
+
+
+def test_devil_rules_mention_newbie_protection() -> None:
+    text = format_devil_wheel_rules(60, 200)
+    assert "新手保护" in text
+    assert "50" in text

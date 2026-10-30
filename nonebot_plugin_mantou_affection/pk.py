@@ -12,6 +12,7 @@ from nonebot import get_bot, get_driver, logger
 from nonebot.adapters.onebot.v11 import Message, MessageSegment
 
 from .config import Config
+from .logic import NEWBIE_PROTECTION_NOTE
 from .service import AffectionService, normalize_nickname
 
 if TYPE_CHECKING:
@@ -302,7 +303,7 @@ class PkCoordinator:
         for answer in pending.answers.values():
             correct = answer.index == question.answer
             delta = PK_RIGHT_REWARD if correct else PK_WRONG_PENALTY
-            applied, profile = await self.service.adjust(
+            applied, profile, protected = await self.service.adjust(
                 pending.group_id, answer.user_id, answer.nickname, delta
             )
             result = PK_ANSWER_RIGHT_REPLY if correct else PK_ANSWER_WRONG_REPLY
@@ -311,17 +312,19 @@ class PkCoordinator:
                 answer.user_id,
                 PK_ANSWER_REPLY.format(
                     result=result, delta=applied, affection=profile.affection
-                ),
+                )
+                + (NEWBIE_PROTECTION_NOTE if protected else ""),
             )
 
         if target_id not in pending.answers:
-            applied, profile = await self.service.adjust(
+            applied, profile, protected = await self.service.adjust(
                 pending.group_id, target_id, target_name, PK_TIMEOUT_PENALTY
             )
             self._add_line(
                 segments,
                 target_id,
-                PK_TIMEOUT_REPLY.format(delta=applied, affection=profile.affection),
+                PK_TIMEOUT_REPLY.format(delta=applied, affection=profile.affection)
+                + (NEWBIE_PROTECTION_NOTE if protected else ""),
             )
 
         await send(Message(segments))

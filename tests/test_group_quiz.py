@@ -80,7 +80,9 @@ def _library(tmp_path: Path, questions: list[dict] | None = None) -> PkQuestionL
 
 def _service(tmp_path: Path, config: Config | None = None) -> AffectionService:
     return AffectionService(
-        AffectionStore(tmp_path / "affection.json"), config or Config(), rng=random.Random(0)
+        AffectionStore(tmp_path / "affection.json"),
+        config or Config(mantou_affection_newbie_protection_below=0),
+        rng=random.Random(0),
     )
 
 
@@ -91,7 +93,7 @@ def _coordinator(
     events: EventCoordinator | None = None,
     rng: random.Random | None = None,
 ) -> GroupQuizCoordinator:
-    config = config or Config()
+    config = config or Config(mantou_affection_newbie_protection_below=0)
     service = _service(tmp_path, config)
     coordinator = GroupQuizCoordinator(
         service,
@@ -458,9 +460,7 @@ def _commands(tmp_path: Path, monkeypatch) -> tuple:
     return service, group_quiz_cmd, sent
 
 
-async def test_group_quiz_probability_command_reports_and_sets(
-    tmp_path: Path, monkeypatch
-) -> None:
+async def test_group_quiz_probability_command_reports_and_sets(tmp_path: Path, monkeypatch) -> None:
     service, group_quiz_cmd, sent = _commands(tmp_path, monkeypatch)
 
     await group_quiz_cmd.handlers[0].call(Message(""))

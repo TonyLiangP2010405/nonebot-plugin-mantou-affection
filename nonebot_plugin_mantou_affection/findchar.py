@@ -13,6 +13,7 @@ from nonebot import logger
 from nonebot.adapters.onebot.v11 import Message, MessageSegment
 
 from .config import Config
+from .logic import NEWBIE_PROTECTION_NOTE
 from .service import AffectionService
 
 if TYPE_CHECKING:
@@ -492,7 +493,7 @@ class FindCharCoordinator:
 
         for guess in pending.answers.values():
             delta = FIND_CHAR_CORRECT_DELTA if guess.correct else FIND_CHAR_WRONG_DELTA
-            _, profile = await self.service.adjust(
+            _, profile, protected = await self.service.adjust(
                 group_id, guess.user_id, guess.nickname, delta
             )
             template = FIND_CHAR_CORRECT_REPLY if guess.correct else FIND_CHAR_WRONG_REPLY
@@ -503,11 +504,12 @@ class FindCharCoordinator:
                     char=pending.puzzle.target,
                     delta=delta,
                     affection=profile.affection,
-                ),
+                )
+                + (NEWBIE_PROTECTION_NOTE if protected else ""),
             )
 
         if pending.trigger_id not in pending.answers:
-            _, profile = await self.service.adjust(
+            _, profile, protected = await self.service.adjust(
                 group_id,
                 pending.trigger_id,
                 pending.trigger_name,
@@ -519,7 +521,8 @@ class FindCharCoordinator:
                     bot=self.config.mantou_affection_bot_name,
                     delta=FIND_CHAR_TIMEOUT_DELTA,
                     affection=profile.affection,
-                ),
+                )
+                + (NEWBIE_PROTECTION_NOTE if protected else ""),
             )
 
         if segments:

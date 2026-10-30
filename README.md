@@ -67,6 +67,7 @@ MANTOU_AFFECTION_TEXT_PATH=
 MANTOU_AFFECTION_INTERACTION_LIMIT=5
 MANTOU_AFFECTION_INTERACTION_COOLDOWN=7200
 MANTOU_AFFECTION_MAX=999
+MANTOU_AFFECTION_NEWBIE_PROTECTION_BELOW=50
 MANTOU_AFFECTION_DAILY_GAIN_LIMIT=3
 MANTOU_AFFECTION_RANKING_SIZE=10
 MANTOU_AFFECTION_LINK_ENABLED=true
@@ -100,6 +101,8 @@ MANTOU_AFFECTION_WHEEL_TAOZI_TIMEOUT=30
 MANTOU_AFFECTION_MEMES_EXTRA_REPOS=true
 MANTOU_AFFECTION_MEMES_BLOCKED_TERMS=
 ```
+
+`MANTOU_AFFECTION_NEWBIE_PROTECTION_BELOW` 是新手保护阈值（默认 50）：好感度低于这个值的群友，任何扣分只扣 1/3；设成 `0` 即关闭。
 
 `MANTOU_AFFECTION_LINK_REWARDS` 是“插件模块名 -> 单次变化值”的 JSON 对象，支持正数和负数。默认值如下：
 
@@ -715,6 +718,15 @@ SUPERUSER 可以用 `/馒头转盘概率 0.1%` 查看或修改触发概率，设
 
 汇总：表情 10%，桃子 25%，语料库 10%，正向好感 10%，负向好感 45%。平均每次约 -5.4 点，
 是明显的净消耗；负向权重和数值都比普通表重得多。
+
+#### 新手保护
+
+任何扣好感度的操作——转盘的好感减少、参与费、换桃子表情包、表情和语料库的费用，以及问答、
+博弈、找字、随机事件的惩罚——在扣分发生的那一刻，如果该群友当前好感度低于
+`MANTOU_AFFECTION_NEWBIE_PROTECTION_BELOW`（默认 50），本次只扣原来的 **1/3**
+（向零取整，至少扣 1 点），提示里会注明「（新手保护，本次只扣 1/3）」。
+
+好感增加不受影响；管理员用 `/馒头好感调整` 扣分不受保护。阈值设成 `0` 即关闭。
 
 #### memes 表情联动（可选）
 

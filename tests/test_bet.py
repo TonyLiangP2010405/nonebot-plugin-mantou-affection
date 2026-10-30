@@ -106,7 +106,7 @@ def _service(
 ) -> AffectionService:
     return AffectionService(
         AffectionStore(tmp_path / "affection.json"),
-        config or Config(),
+        config or Config(mantou_affection_newbie_protection_below=0),
         text_library=text_library,
         rng=rng or random.Random(0),
     )
@@ -119,7 +119,7 @@ def _bet(
     rounds: list[dict] | None = None,
     events: EventCoordinator | None = None,
 ) -> tuple[BetCoordinator, AffectionService]:
-    config = config or Config()
+    config = config or Config(mantou_affection_newbie_protection_below=0)
     service = _service(tmp_path, config, rng=rng)
     coordinator = BetCoordinator(
         service,
@@ -335,7 +335,7 @@ def test_bet_library_rejects_broken_root_and_missing_file(tmp_path: Path) -> Non
 
 
 def test_bet_defaults() -> None:
-    config = Config()
+    config = Config(mantou_affection_newbie_protection_below=0)
     assert config.mantou_affection_bet_chance == 0.0005
     assert config.mantou_affection_bet_min_affection == 50
     assert config.mantou_affection_bet_recent_minutes == 5
@@ -348,14 +348,20 @@ def test_bet_defaults() -> None:
 async def test_maybe_start_needs_send_and_candidates(tmp_path: Path) -> None:
     coordinator, _service = _bet(tmp_path, Config(mantou_affection_bet_chance=1.0))
 
-    assert await coordinator.maybe_start(
-        group_id=GROUP_ID, user_id=TRIGGER_ID, nickname="桃友", candidates=CANDIDATES, send=None
-    ) is False
+    assert (
+        await coordinator.maybe_start(
+            group_id=GROUP_ID, user_id=TRIGGER_ID, nickname="桃友", candidates=CANDIDATES, send=None
+        )
+        is False
+    )
     assert coordinator.pending == {}
 
-    assert await coordinator.maybe_start(
-        group_id=GROUP_ID, user_id=TRIGGER_ID, nickname="桃友", candidates=None, send=None
-    ) is False
+    assert (
+        await coordinator.maybe_start(
+            group_id=GROUP_ID, user_id=TRIGGER_ID, nickname="桃友", candidates=None, send=None
+        )
+        is False
+    )
 
 
 async def test_maybe_start_respects_chance(tmp_path: Path) -> None:
@@ -378,11 +384,13 @@ async def test_maybe_start_needs_two_rivals(tmp_path: Path) -> None:
 
 
 async def test_maybe_start_blocked_when_group_is_busy(tmp_path: Path) -> None:
-    service = _service(tmp_path, Config())
-    events = EventCoordinator(service, Config(), None, rng=random.Random(0))
+    service = _service(tmp_path, Config(mantou_affection_newbie_protection_below=0))
+    events = EventCoordinator(
+        service, Config(mantou_affection_newbie_protection_below=0), None, rng=random.Random(0)
+    )
     find_char = FindCharCoordinator(
         service,
-        Config(),
+        Config(mantou_affection_newbie_protection_below=0),
         FindCharLibrary(BUNDLED_PUZZLES_PATH),
         events=events,
         rng=random.Random(0),
@@ -454,9 +462,8 @@ async def test_maybe_start_picks_distinct_rivals_excluding_trigger(tmp_path: Pat
 async def _start_with_pending(
     tmp_path: Path, **config_kwargs
 ) -> tuple[BetCoordinator, AffectionService]:
-    coordinator, service = _bet(
-        tmp_path, Config(mantou_affection_bet_chance=1.0, **config_kwargs)
-    )
+    config_kwargs.setdefault("mantou_affection_newbie_protection_below", 0)
+    coordinator, service = _bet(tmp_path, Config(mantou_affection_bet_chance=1.0, **config_kwargs))
     sent: list[Message] = []
     assert await _start(coordinator, sent=sent) is True
     return coordinator, service
@@ -507,13 +514,16 @@ async def test_maybe_start_still_needs_two_candidates(tmp_path: Path) -> None:
     async def fake_send(message: Message) -> None:
         sent.append(message)
 
-    assert await coordinator.maybe_start(
-        group_id=GROUP_ID,
-        user_id=TRIGGER_ID,
-        nickname="桃友",
-        candidates=[(int(TRIGGER_ID), "桃友"), (int(RIVAL_A), "甲")],
-        send=fake_send,
-    ) is False
+    assert (
+        await coordinator.maybe_start(
+            group_id=GROUP_ID,
+            user_id=TRIGGER_ID,
+            nickname="桃友",
+            candidates=[(int(TRIGGER_ID), "桃友"), (int(RIVAL_A), "甲")],
+            send=fake_send,
+        )
+        is False
+    )
     assert coordinator.pending == {}
     assert sent == []
 
@@ -927,9 +937,7 @@ async def test_recent_speaker_recorder_catches_every_message(
     assert recorders
 
     for dependent in recorders:
-        await dependent(
-            event=_event("馒头好感", user_id=int(RIVAL_A), nickname="甲"), state={}
-        )
+        await dependent(event=_event("馒头好感", user_id=int(RIVAL_A), nickname="甲"), state={})
 
     assert (GROUP_ID, RIVAL_A) in bet.recent
     assert bet.recent[(GROUP_ID, RIVAL_A)][1] == "甲"
@@ -960,6 +968,7 @@ async def test_ambient_handler_records_recent_speaker(
 async def _ambient_setup(
     tmp_path: Path, bundled_texts_path: Path, monkeypatch, **config_kwargs
 ) -> tuple:
+    config_kwargs.setdefault("mantou_affection_newbie_protection_below", 0)
     config_kwargs.setdefault("mantou_affection_ambient_probability", 1.0)
     config_kwargs.setdefault("mantou_affection_ambient_event_ratio", 0.0)
     config = Config(**config_kwargs)
@@ -1033,9 +1042,7 @@ async def test_ambient_bet_requires_affection_over_threshold(
         mantou_affection_bet_chance=1.0,
         mantou_affection_find_char_chance=0.0,
     )
-    await _seed_recent_and_affection(
-        service, bet, RIVAL_A, RIVAL_B, score=60
-    )
+    await _seed_recent_and_affection(service, bet, RIVAL_A, RIVAL_B, score=60)
     await _give_affection(service, 50, TRIGGER_ID)
 
     await ambient.handlers[0].call(_event())
@@ -1172,7 +1179,9 @@ async def test_bet_probability_prefers_stored_override(tmp_path: Path) -> None:
     assert await service.bet_probability_override() == pytest.approx(0.02)
 
     restarted = AffectionService(
-        AffectionStore(tmp_path / "affection.json"), Config(), rng=random.Random(0)
+        AffectionStore(tmp_path / "affection.json"),
+        Config(mantou_affection_newbie_protection_below=0),
+        rng=random.Random(0),
     )
     assert await restarted.bet_probability() == pytest.approx(0.02)
 
@@ -1187,7 +1196,7 @@ async def test_bet_probability_ignores_broken_setting(tmp_path: Path) -> None:
 
 def _bet_command(tmp_path: Path, monkeypatch) -> tuple:
     service = _service(tmp_path)
-    command = register_commands(service, Config())[8]
+    command = register_commands(service, Config(mantou_affection_newbie_protection_below=0))[8]
     sent: list[str] = []
 
     async def fake_finish(message: Message | str = "", **kwargs) -> None:
@@ -1258,6 +1267,7 @@ async def test_plugin_wiring_runs_bet_end_to_end(monkeypatch) -> None:
     monkeypatch.setattr(plugin_config, "mantou_affection_bet_window", 0.05)
     # 触发者要好感度超过门槛,直接写档案(公开 API 受每日获取上限约束)
     for user_id, score in ((trigger_id, 60), (rival_id, 3), (other_id, 3)):
+
         def bump(profile: Profile, score: int = score) -> None:
             profile.affection = score
 
@@ -1314,7 +1324,10 @@ async def test_answer_router_sends_bet_answers_to_bet(tmp_path: Path) -> None:
     service = _service(tmp_path, config, text_library=AffectionTextLibrary(_bet_texts(tmp_path)))
     events = EventCoordinator(service, config, None, rng=random.Random(0))
     find_char = FindCharCoordinator(
-        service, config, FindCharLibrary(_find_char_bank(tmp_path)), events=events,
+        service,
+        config,
+        FindCharLibrary(_find_char_bank(tmp_path)),
+        events=events,
         rng=random.Random(0),
     )
     bet = BetCoordinator(
@@ -1332,13 +1345,16 @@ async def test_answer_router_sends_bet_answers_to_bet(tmp_path: Path) -> None:
     async def fake_send(message: Message) -> None:
         sent.append(message)
 
-    assert await bet.maybe_start(
-        group_id=GROUP_ID,
-        user_id=TRIGGER_ID,
-        nickname="桃友",
-        candidates=CANDIDATES,
-        send=fake_send,
-    ) is True
+    assert (
+        await bet.maybe_start(
+            group_id=GROUP_ID,
+            user_id=TRIGGER_ID,
+            nickname="桃友",
+            candidates=CANDIDATES,
+            send=fake_send,
+        )
+        is True
+    )
 
     await answer.handlers[0].call(_event("3 1 5 2 4", user_id=92005, nickname="路人"))
 
@@ -1376,8 +1392,17 @@ def _find_char_bank(tmp_path: Path) -> Path:
     path = tmp_path / "findchar_puzzles.json"
     path.write_text(
         json.dumps(
-            [{"mode": "pair", "decoys": ["己"], "target": "已", "rows": 8, "cols": 10,
-              "row": 3, "col": 5}],
+            [
+                {
+                    "mode": "pair",
+                    "decoys": ["己"],
+                    "target": "已",
+                    "rows": 8,
+                    "cols": 10,
+                    "row": 3,
+                    "col": 5,
+                }
+            ],
             ensure_ascii=False,
         ),
         encoding="utf-8",

@@ -10,6 +10,7 @@ from nonebot import logger
 from nonebot.adapters.onebot.v11 import Message, MessageSegment
 
 from .config import Config
+from .logic import NEWBIE_PROTECTION_NOTE
 from .pk import PkQuestion, PkQuestionLibrary
 from .service import AffectionService, normalize_nickname
 
@@ -205,7 +206,7 @@ class GroupQuizCoordinator:
         for answer in pending.answers.values():
             correct = answer.index == question.answer
             delta = GROUP_QUIZ_RIGHT_REWARD if correct else GROUP_QUIZ_WRONG_PENALTY
-            applied, profile = await self.service.adjust(
+            applied, profile, protected = await self.service.adjust(
                 pending.group_id, answer.user_id, answer.nickname, delta
             )
             result = GROUP_QUIZ_ANSWER_RIGHT_REPLY if correct else GROUP_QUIZ_ANSWER_WRONG_REPLY
@@ -214,17 +215,19 @@ class GroupQuizCoordinator:
                 answer.user_id,
                 GROUP_QUIZ_ANSWER_REPLY.format(
                     result=result, delta=applied, affection=profile.affection
-                ),
+                )
+                + (NEWBIE_PROTECTION_NOTE if protected else ""),
             )
 
         if target_id not in pending.answers:
-            applied, profile = await self.service.adjust(
+            applied, profile, protected = await self.service.adjust(
                 pending.group_id, target_id, target_name, GROUP_QUIZ_TIMEOUT_PENALTY
             )
             self._add_line(
                 segments,
                 target_id,
-                GROUP_QUIZ_TIMEOUT_REPLY.format(delta=applied, affection=profile.affection),
+                GROUP_QUIZ_TIMEOUT_REPLY.format(delta=applied, affection=profile.affection)
+                + (NEWBIE_PROTECTION_NOTE if protected else ""),
             )
 
         await send(Message(segments))

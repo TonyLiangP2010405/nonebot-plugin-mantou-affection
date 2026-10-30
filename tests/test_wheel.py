@@ -163,7 +163,7 @@ class FakeStickers:
 
 
 def make_coordinator(tmp_path: Path, rng=None, memes=None, resources=None, stickers=None):
-    config = Config()
+    config = Config(mantou_affection_newbie_protection_below=0)
     service = AffectionService(AffectionStore(tmp_path / "affection.json"), config)
     coordinator = WheelCoordinator(
         service,

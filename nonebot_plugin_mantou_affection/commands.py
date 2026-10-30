@@ -305,8 +305,12 @@ def register_commands(
             await adjust_cmd.finish(str(error))
             return
         try:
-            applied, profile = await service.adjust(
-                str(event.group_id), adjustment.user_id, "", adjustment.delta
+            applied, profile, _protected = await service.adjust(
+                str(event.group_id),
+                adjustment.user_id,
+                "",
+                adjustment.delta,
+                protect=False,
             )
         except Exception:
             logger.exception("[mantou-affection] 管理员调整好感度失败")

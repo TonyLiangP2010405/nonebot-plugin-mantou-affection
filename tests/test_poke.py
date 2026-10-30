@@ -99,7 +99,7 @@ def _service(
 ) -> AffectionService:
     return AffectionService(
         AffectionStore(tmp_path / "affection.json"),
-        Config(**config_kwargs),
+        Config(mantou_affection_newbie_protection_below=0, **config_kwargs),
         text_library=text_library,
         rng=rng or FixedRng(0.9),
     )

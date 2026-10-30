@@ -13,6 +13,7 @@ from .logic import (
     apply_link_reward,
     perform_interaction,
     perform_poke,
+    protect_deduction,
     snapshot_for,
 )
 from .models import (
@@ -390,16 +391,24 @@ class AffectionService:
         user_id: str,
         nickname: str,
         delta: int,
-    ) -> tuple[int, Profile]:
+        *,
+        protect: bool = True,
+    ) -> tuple[int, Profile, bool]:
         nickname = normalize_nickname(nickname, user_id)
+        threshold = self.config.mantou_affection_newbie_protection_below
 
-        def update(profile: Profile) -> tuple[int, Profile]:
+        def update(profile: Profile) -> tuple[int, Profile, bool]:
+            value = delta
+            protected = False
+            if protect:
+                value = protect_deduction(profile.affection, delta, threshold)
+                protected = value != delta
             applied = adjust_affection(
                 profile,
-                delta,
+                value,
                 self.config.mantou_affection_max,
                 time.time(),
             )
-            return applied, profile
+            return applied, profile, protected
 
         return await self.store.update_profile(group_id, user_id, nickname, update)
