@@ -37,12 +37,8 @@ def test_devil_weights_match_approved_table() -> None:
         (("affection", 12), 2),
         (("affection", 20), 1),
         (("affection", 40), 1),
-        (("affection", -4), 13),
-        (("affection", -8), 11),
-        (("affection", -12), 8),
-        (("affection", -20), 7),
-        (("affection", -40), 4),
-        (("affection", -60), 2),
+        (("affection", -19), 30),
+        (("affection", -20), 15),
     ]
     assert sum(w for _o, w in DEVIL_WHEEL_OUTCOMES) == 100
 
@@ -81,8 +77,8 @@ def test_devil_rules_list_threshold_cost_and_every_probability() -> None:
         "扣 5 点好感",
         "+4 4%",
         "+40 1%",
-        "-4 13%",
-        "-60 2%",
+        "-19 30%",
+        "-20 15%",
     ):
         assert fragment in text
 
@@ -301,12 +297,8 @@ async def test_devil_taozi_needs_thirty_to_ask(tmp_path: Path) -> None:
         (51, 12),
         (53, 20),
         (54, 40),
-        (55, -4),
-        (68, -8),
-        (79, -12),
-        (87, -20),
-        (94, -40),
-        (98, -60),
+        (55, -19),
+        (85, -20),
     ],
 )
 async def test_devil_affection_outcomes(tmp_path: Path, roll: int, delta: int) -> None:
@@ -470,7 +462,7 @@ async def test_devil_deduction_sends_daily_gift(tmp_path: Path) -> None:
     coordinator.service.stickers = FakeStickers()
     await give(coordinator.service, TRIGGER, 60)
     _pending, sent = await devil_auto(coordinator)
-    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 0
+    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 40
     assert any("[CQ:image" in str(message) for message in sent)
 
 
@@ -506,9 +498,9 @@ async def test_devil_negative_delta_protected_below_fifty(tmp_path: Path) -> Non
     coordinator = make_coordinator(tmp_path, rng=FixedRollRng(roll=98), newbie_below=50)
     await give(coordinator.service, TRIGGER, 40)
     _pending, sent = await devil_auto(coordinator)
-    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 20
+    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 34
     body = sent[-1].extract_plain_text()
-    assert "-20" in body
+    assert "-6" in body
     assert "新手保护" in body
 
 

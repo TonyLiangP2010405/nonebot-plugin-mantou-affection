@@ -57,12 +57,8 @@ DEVIL_WHEEL_OUTCOMES: tuple[tuple[WheelOutcome, int], ...] = (
     (WheelOutcome("affection", 12), 2),
     (WheelOutcome("affection", 20), 1),
     (WheelOutcome("affection", 40), 1),
-    (WheelOutcome("affection", -4), 13),
-    (WheelOutcome("affection", -8), 11),
-    (WheelOutcome("affection", -12), 8),
-    (WheelOutcome("affection", -20), 7),
-    (WheelOutcome("affection", -40), 4),
-    (WheelOutcome("affection", -60), 2),
+    (WheelOutcome("affection", -19), 30),
+    (WheelOutcome("affection", -20), 15),
 )
 
 
