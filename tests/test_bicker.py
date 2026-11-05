@@ -3,12 +3,14 @@ from __future__ import annotations
 import asyncio
 import random
 from pathlib import Path
+from types import SimpleNamespace
 
 from nonebot.adapters.onebot.v11 import Message
 
 from nonebot_plugin_mantou_affection.bicker import (
     BICKER_OPTIONS,
     BickerCoordinator,
+    GroupMemoryAdapter,
     GroupMemoryUnavailable,
 )
 from nonebot_plugin_mantou_affection.config import Config
@@ -95,10 +97,16 @@ def test_bicker_options_are_six_numbered_stakes() -> None:
 
 async def test_start_aborts_when_memory_unavailable(tmp_path: Path) -> None:
     coordinator, _ = _coordinator(tmp_path, FakeMemory([], available=False))
+    sent = []
+
+    async def send(message) -> None:
+        sent.append(message)
+
     assert await coordinator.start(
-        group_id=GROUP_ID, user_id=TRIGGER_ID, nickname="触发者", send=_noop_send
+        group_id=GROUP_ID, user_id=TRIGGER_ID, nickname="触发者", send=send
     ) is False
     assert coordinator.pending == {}
+    assert sent == []
 
 
 async def test_start_aborts_when_recent_messages_empty(tmp_path: Path) -> None:
@@ -321,3 +329,207 @@ async def test_newbie_protection_on_trigger_loss(tmp_path: Path) -> None:
         await coordinator.handle_debate(GROUP_ID, TRIGGER_ID, f"我说{index}")
     assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == 39
     assert "新手保护" in sent[-1].extract_plain_text()
+
+
+async def test_concurrent_bets_from_same_user_charge_once(
+    tmp_path: Path, monkeypatch
+) -> None:
+    coordinator, service = _coordinator(tmp_path, FakeMemory(["题目"]))
+    pending, sent = await _start(coordinator)
+    await give(service, OTHER_ID, 10)
+    original_adjust = service.adjust
+
+    async def slow_adjust(*args, **kwargs):
+        await asyncio.sleep(0.01)
+        return await original_adjust(*args, **kwargs)
+
+    monkeypatch.setattr(service, "adjust", slow_adjust)
+    results = await asyncio.gather(
+        coordinator.answer(GROUP_ID, OTHER_ID, "甲", "1"),
+        coordinator.answer(GROUP_ID, OTHER_ID, "甲", "3"),
+    )
+
+    assert results == [True, True]
+    assert pending.bets[OTHER_ID].stake == 1
+    assert (await service.profile(GROUP_ID, OTHER_ID)).affection == 9
+    assert sum("已经押过" in m.extract_plain_text() for m in sent) == 1
+    pending.bet_task.cancel()
+
+
+async def test_bet_handoff_does_not_accept_reply_before_debate(
+    tmp_path: Path,
+) -> None:
+    coordinator, _ = _coordinator(tmp_path, FakeMemory(["题目", "馒头的回应"]))
+    seen = []
+
+    async def send(message) -> None:
+        body = message.extract_plain_text()
+        if "押注截止" in body or "馒头直接开斗" in body:
+            seen.append(coordinator.is_debater_turn(GROUP_ID, TRIGGER_ID))
+            await asyncio.sleep(0.01)
+
+    assert await coordinator.start(
+        group_id=GROUP_ID, user_id=TRIGGER_ID, nickname="触发者", send=send
+    )
+    pending = coordinator.pending[GROUP_ID]
+    await asyncio.wait_for(pending.bet_task, 2)
+
+    assert seen == [False]
+    assert pending.phase == "debating"
+    assert pending.round == 0
+    pending.round_task.cancel()
+
+
+async def test_settle_failure_releases_group_seat(
+    tmp_path: Path, monkeypatch
+) -> None:
+    memory = FakeMemory(["题目", "回1", "回2", "回3", "回4", "回5", "群友赢"])
+    coordinator, service = _coordinator(tmp_path, memory)
+    await give(service, TRIGGER_ID, 50)
+    pending, _sent = await _start(coordinator)
+    await asyncio.wait_for(pending.bet_task, 2)
+
+    async def boom(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(service, "adjust", boom)
+    for index in range(1, 6):
+        await coordinator.handle_debate(GROUP_ID, TRIGGER_ID, f"我说{index}")
+
+    assert GROUP_ID not in coordinator.pending
+    assert coordinator.busy(GROUP_ID) is False
+
+
+class _FakeConfig:
+    def __init__(self, ready: bool = True):
+        self.ready = ready
+
+    def require_chat_config(self) -> None:
+        if not self.ready:
+            raise RuntimeError("not configured")
+
+
+class _FakeStore:
+    def __init__(self) -> None:
+        self.calls: list[tuple[int, int]] = []
+        self.messages = [SimpleNamespace(display_name="甲", text="你好")]
+
+    async def recent_messages(self, group_id: int, limit: int):
+        self.calls.append((group_id, limit))
+        return list(self.messages)
+
+
+class _FakeChatClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[object, str, str | None]] = []
+
+    async def complete(self, context, text: str, *, session_id=None) -> str:
+        self.calls.append((context, text, session_id))
+        return "模型回复"
+
+
+class _FakeHandlers:
+    def __init__(self, ready: bool = True):
+        self.store = _FakeStore()
+        self.chat_client = _FakeChatClient()
+        self.config = _FakeConfig(ready)
+
+
+class _FakePlugin:
+    def __init__(self, handlers: _FakeHandlers):
+        self.module = SimpleNamespace(handlers=handlers)
+
+
+def _adapter(handlers: _FakeHandlers) -> GroupMemoryAdapter:
+    return GroupMemoryAdapter(lambda name: _FakePlugin(handlers))
+
+
+def test_memory_adapter_unavailable_without_plugin() -> None:
+    adapter = GroupMemoryAdapter(lambda name: None)
+    assert adapter.available() is False
+
+
+def test_memory_adapter_unavailable_without_chat_config() -> None:
+    handlers = _FakeHandlers(ready=False)
+    assert _adapter(handlers).available() is False
+
+
+async def test_memory_adapter_maps_recent_messages() -> None:
+    handlers = _FakeHandlers()
+    adapter = _adapter(handlers)
+    assert adapter.available() is True
+    assert await adapter.recent_messages(GROUP_ID, 5) == [("甲", "你好")]
+    assert handlers.store.calls == [(int(GROUP_ID), 5)]
+
+
+async def test_memory_adapter_complete_uses_empty_context_and_session() -> None:
+    handlers = _FakeHandlers()
+    adapter = _adapter(handlers)
+    assert await adapter.complete(GROUP_ID, "请出题") == "模型回复"
+    context, text, session_id = handlers.chat_client.calls[0]
+    assert context.recent_messages == []
+    assert context.long_term_chunks == []
+    assert text == "请出题"
+    assert session_id == f"bicker:{GROUP_ID}"
+
+
+async def test_post_timeout_reply_is_rejected(tmp_path: Path) -> None:
+    memory = FakeMemory(["题目"])
+    coordinator, service = _coordinator(tmp_path, memory)
+    coordinator.round_timeout = 0.01
+    await give(service, TRIGGER_ID, 50)
+    pending, sent = await _start(coordinator)
+    await asyncio.wait_for(pending.bet_task, 2)
+    await asyncio.wait_for(pending.round_task, 2)
+
+    assert await coordinator.handle_debate(GROUP_ID, TRIGGER_ID, "晚了一步") is False
+    assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == 45
+    assert sum("斗嘴结果" in m.extract_plain_text() for m in sent) == 1
+
+
+async def test_second_same_round_message_is_ignored(tmp_path: Path) -> None:
+    class SlowMemory(FakeMemory):
+        async def complete(self, group_id, text, *, timeout=20.0):
+            await asyncio.sleep(0.01)
+            return await super().complete(group_id, text, timeout=timeout)
+
+    memory = SlowMemory(["题目", "馒头的回应"])
+    coordinator, service = _coordinator(tmp_path, memory)
+    await give(service, TRIGGER_ID, 50)
+    pending, _sent = await _start(coordinator)
+    await asyncio.wait_for(pending.bet_task, 2)
+
+    first = asyncio.create_task(
+        coordinator.handle_debate(GROUP_ID, TRIGGER_ID, "第一句")
+    )
+    await asyncio.sleep(0.001)
+    assert await coordinator.handle_debate(GROUP_ID, TRIGGER_ID, "第二句") is False
+    await first
+
+    assert [line for role, line in pending.transcript if role == "群友"] == ["第一句"]
+    pending.round_task.cancel()
+
+
+async def test_start_refused_while_group_busy(tmp_path: Path) -> None:
+    coordinator, _ = _coordinator(tmp_path, FakeMemory(["题目", "第二题"]))
+    pending, _sent = await _start(coordinator)
+
+    assert await coordinator.start(
+        group_id=GROUP_ID, user_id=TRIGGER_ID, nickname="触发者", send=_noop_send
+    ) is False
+    pending.bet_task.cancel()
+
+
+async def test_pool_zero_returns_principal_only(tmp_path: Path) -> None:
+    memory = FakeMemory(["题目", "回1", "回2", "回3", "回4", "回5", "群友赢"])
+    coordinator, service = _coordinator(tmp_path, memory)
+    await give(service, TRIGGER_ID, 50)
+    await give(service, OTHER_ID, 50)
+    pending, _sent = await _start(coordinator)
+    await coordinator.answer(GROUP_ID, OTHER_ID, "甲", "1")
+    await asyncio.wait_for(pending.bet_task, 2)
+    for index in range(1, 6):
+        await coordinator.handle_debate(GROUP_ID, TRIGGER_ID, f"我说{index}")
+
+    assert (await service.profile(GROUP_ID, OTHER_ID)).affection == 50
+    assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == 53

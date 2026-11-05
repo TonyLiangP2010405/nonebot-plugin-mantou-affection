@@ -169,7 +169,7 @@ class EventCoordinator:
         self.bicker = bicker
 
     def busy(self, group_id: str) -> bool:
-        """本群是否已经有待结算的活动：随机事件、找字、博弈、问答、群友问答或转盘。"""
+        """本群是否已经有待结算的活动：随机事件、找字、博弈、问答、群友问答、转盘或斗嘴。"""
 
         key = str(group_id)
         if key in self.pending:
@@ -504,13 +504,14 @@ def register_ambient(
     group_quiz: GroupQuizCoordinator | None = None,
     bicker: BickerCoordinator | None = None,
 ) -> tuple:
-    """群友发言时按概率触发找字、博弈、随机问答、群友问答、命运齿轮转盘或馒头小动作。
+    """群友发言时按概率触发找字、博弈、随机问答、群友问答、命运齿轮转盘、馒头斗嘴或馒头小动作。
 
     找字和博弈保留各自的好感度门槛；随机问答和群友问答不看榜单或好感度，分别默认每次
     群消息有 1%、0.05% 概率给当前发言者出一道题。命运齿轮转盘只看好感大于 0 和它自己的
-    独立概率，不参与小动作的抽签。几种活动互斥，不会在同一条消息上同时触发；所有数字
-    答案都走这里的答案路由，「参与 / 运作 / 不运作」也由同一个 answer matcher 转给转盘。
-    事件预处理器只给博弈记录最近发言表。
+    独立概率，不参与小动作的抽签；馒头斗嘴从群聊记忆出题，押注截止后打 5 个回合。几种
+    活动互斥，不会在同一条消息上同时触发；所有数字答案都走这里的答案路由，
+    「参与 / 运作 / 不运作」也由同一个 answer matcher 转给转盘。事件预处理器只给博弈
+    记录最近发言表。
     """
 
     coordinator = events or EventCoordinator(service, config)

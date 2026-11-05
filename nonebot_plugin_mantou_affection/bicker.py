@@ -173,6 +173,7 @@ class BickerCoordinator:
         self.bet_window = float(config.mantou_affection_bicker_bet_window)
         self.round_timeout = float(config.mantou_affection_bicker_round_timeout)
         self.pending: dict[str, PendingBicker] = {}
+        self._lock = asyncio.Lock()
 
     def available(self) -> bool:
         return bool(self.memory.available())
@@ -268,43 +269,44 @@ class BickerCoordinator:
     async def answer(
         self, group_id: str, user_id: str, nickname: str, text: str
     ) -> bool:
-        pending = self.pending.get(str(group_id))
-        if pending is None or pending.phase != "betting" or not pending.accepting:
-            return False
         option = BICKER_OPTIONS.get(text.strip())
         if option is None:
             return False
-        user = str(user_id)
-        if user == pending.trigger_id:
-            await self._send_text(pending, " 你是当事人，不能押注。")
-            return True
-        if user in pending.bets:
-            await self._send_text(pending, " 你已经押过了，不能改注。")
-            return True
-        side, stake = option
-        current = (await self.service.profile(pending.group_id, user)).affection
-        if current < stake:
+        async with self._lock:
+            pending = self.pending.get(str(group_id))
+            if pending is None or pending.phase != "betting" or not pending.accepting:
+                return False
+            user = str(user_id)
+            if user == pending.trigger_id:
+                await self._send_text(pending, " 你是当事人，不能押注。")
+                return True
+            if user in pending.bets:
+                await self._send_text(pending, " 你已经押过了，不能改注。")
+                return True
+            side, stake = option
+            current = (await self.service.profile(pending.group_id, user)).affection
+            if current < stake:
+                await self._send_text(
+                    pending, f" 好感不足 {stake} 点，可以改选更低的档位。"
+                )
+                return True
+            name = normalize_nickname(nickname, user)
+            applied, profile, _protected = await self.service.adjust(
+                pending.group_id, user, name, -stake, protect=False
+            )
+            pending.bets[user] = BickerBet(
+                user_id=user,
+                nickname=name,
+                side=side,
+                stake=stake,
+                actual=-applied,
+                placed_at=time.monotonic(),
+            )
+            label = "押群友赢" if side else "押群友输"
             await self._send_text(
-                pending, f" 好感不足 {stake} 点，可以改选更低的档位。"
+                pending, f" 押注成功：{label} {stake} 点，当前 {profile.affection}"
             )
             return True
-        name = normalize_nickname(nickname, user)
-        applied, profile, _protected = await self.service.adjust(
-            pending.group_id, user, name, -stake, protect=False
-        )
-        pending.bets[user] = BickerBet(
-            user_id=user,
-            nickname=name,
-            side=side,
-            stake=stake,
-            actual=-applied,
-            placed_at=time.monotonic(),
-        )
-        label = "押群友赢" if side else "押群友输"
-        await self._send_text(
-            pending, f" 押注成功：{label} {stake} 点，当前 {profile.affection}"
-        )
-        return True
 
     def summary_message(self, pending: PendingBicker) -> str:
         if not pending.bets:
@@ -322,18 +324,14 @@ class BickerCoordinator:
             or self.pending.get(pending.group_id) is not pending
         ):
             return
-        pending.phase = "debating"
+        pending.accepting = False
         await self._send_text(pending, self.summary_message(pending))
         await self._begin_debate(pending)
 
     async def _begin_debate(self, pending: PendingBicker) -> None:
-        if (
-            not pending.accepting
-            or self.pending.get(pending.group_id) is not pending
-        ):
+        if self.pending.get(pending.group_id) is not pending:
             return
         pending.round = 0
-        pending.phase = "debating"
         try:
             await pending.send(
                 MessageSegment.at(pending.trigger_id)
@@ -346,6 +344,8 @@ class BickerCoordinator:
             logger.exception("[mantou-affection] 发送斗嘴开场失败")
             await self._cancel(pending)
             return
+        pending.phase = "debating"
+        pending.accepting = True
         self._schedule_round(pending)
 
     def _schedule_round(self, pending: PendingBicker) -> None:
@@ -440,7 +440,11 @@ class BickerCoordinator:
         if trigger_won is None:
             await self._cancel(pending)
             return
-        await self._settle(pending, trigger_won=trigger_won)
+        try:
+            await self._settle(pending, trigger_won=trigger_won)
+        except Exception:
+            logger.exception("[mantou-affection] 斗嘴结算失败")
+            self.pending.pop(pending.group_id, None)
 
     async def _judge(self, pending: PendingBicker) -> bool | None:
         prompt = JUDGE_PROMPT.format(
@@ -461,6 +465,7 @@ class BickerCoordinator:
     ) -> None:
         pending.phase = "settled"
         pending.accepting = False
+        self.pending.pop(pending.group_id, None)
         delta = 3 if trigger_won else -5
         applied, profile, protected = await self.service.adjust(
             pending.group_id, pending.trigger_id, pending.trigger_name, delta
@@ -530,26 +535,30 @@ class BickerCoordinator:
             await pending.send(Message(segments))
         except Exception:
             logger.exception("[mantou-affection] 发送斗嘴结算失败")
-        self.pending.pop(pending.group_id, None)
 
     async def _cancel(self, pending: PendingBicker) -> None:
         if pending.phase == "settled":
             return
         pending.phase = "settled"
         pending.accepting = False
+        self.pending.pop(pending.group_id, None)
         current = asyncio.current_task()
         for task in (pending.bet_task, pending.round_task):
             if task is not None and task is not current:
                 task.cancel()
         segments: list[MessageSegment] = []
         for bet in pending.bets.values():
-            _refund, profile, _ = await self.service.adjust(
-                pending.group_id,
-                bet.user_id,
-                bet.nickname,
-                bet.actual,
-                protect=False,
-            )
+            try:
+                _refund, profile, _ = await self.service.adjust(
+                    pending.group_id,
+                    bet.user_id,
+                    bet.nickname,
+                    bet.actual,
+                    protect=False,
+                )
+            except Exception:
+                logger.exception("[mantou-affection] 斗嘴取消退款失败")
+                continue
             if segments:
                 segments.append(MessageSegment.text("\n"))
             segments.append(MessageSegment.at(bet.user_id))
@@ -568,7 +577,6 @@ class BickerCoordinator:
             await pending.send(Message(segments))
         except Exception:
             logger.exception("[mantou-affection] 发送斗嘴取消提示失败")
-        self.pending.pop(pending.group_id, None)
 
     def discard(self, pending: PendingBicker) -> None:
         if self.pending.get(pending.group_id) is pending:
