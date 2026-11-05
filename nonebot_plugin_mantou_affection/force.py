@@ -13,6 +13,7 @@ from nonebot.rule import Rule
 
 from .ambient import EventCoordinator
 from .bet import BET_RIVALS, BetCoordinator
+from .bicker import BickerCoordinator
 from .commands import GROUP_ONLY
 from .config import Config
 from .findchar import FindCharCoordinator
@@ -34,6 +35,7 @@ FORCE_ACTIVITY_PK = "pk"
 FORCE_ACTIVITY_GROUP_QUIZ = "group_quiz"
 FORCE_ACTIVITY_WHEEL = "wheel"
 FORCE_ACTIVITY_DEVIL = "devil"
+FORCE_ACTIVITY_BICKER = "bicker"
 
 FORCE_CHOICES: dict[str, str] = {
     "1": FORCE_ACTIVITY_AMBIENT,
@@ -44,6 +46,7 @@ FORCE_CHOICES: dict[str, str] = {
     "6": FORCE_ACTIVITY_GROUP_QUIZ,
     "7": FORCE_ACTIVITY_WHEEL,
     "8": FORCE_ACTIVITY_DEVIL,
+    "9": FORCE_ACTIVITY_BICKER,
 }
 FORCE_ACTIVITY_LINES: tuple[str, ...] = (
     "1. 馒头小动作",
@@ -54,11 +57,12 @@ FORCE_ACTIVITY_LINES: tuple[str, ...] = (
     "6. 群友问答",
     "7. 命运齿轮转盘",
     "8. 小恶魔转盘",
+    "9. 馒头斗嘴",
 )
 FORCE_PROMPT = (
     "🎛️ 馒头强制事件（目标：{target}）\n"
-    + "\n".join(FORCE_ACTIVITY_LINES)
-    + "\n请在 {timeout} 秒内直接回复数字选择（只有发起命令的 SUPERUSER 有效）。"
+    "{lines}\n"
+    "请在 {timeout} 秒内直接回复数字选择（只有发起命令的 SUPERUSER 有效）。"
 )
 FORCE_USAGE = "用法：/馒头强制事件 @群友（只能 @ 一位群友）"
 FORCE_BUSY_REPLY = "本群还有活动没结束，等它结束再开新一轮。"
@@ -66,6 +70,7 @@ FORCE_TIMEOUT_REPLY = "馒头强制事件超时取消，好感度没有变化。
 FORCE_INVALID_REPLY = "这不是有效的活动编号，馒头强制事件已取消，好感度没有变化。"
 FORCE_RIVAL_REPLY = "最近发言的群友不足两位，凑不齐对手，馒头博弈开不了局。"
 FORCE_FAIL_REPLY = "馒头没能把这场活动摆出来，已经取消，好感度没有变化。"
+FORCE_BICKER_UNAVAILABLE = "群聊记忆插件不可用，馒头斗嘴开不了。"
 
 Send = Callable[[Union[Message, str]], Awaitable[object]]
 
@@ -100,6 +105,7 @@ class ForceCoordinator:
         pk: PkCoordinator,
         wheel: WheelCoordinator,
         group_quiz: GroupQuizCoordinator | None = None,
+        bicker: BickerCoordinator | None = None,
         choice_timeout: float = FORCE_CHOICE_TIMEOUT,
     ):
         self.service = service
@@ -110,6 +116,7 @@ class ForceCoordinator:
         self.pk = pk
         self.wheel = wheel
         self.group_quiz = group_quiz
+        self.bicker = bicker
         self.choice_timeout = float(choice_timeout)
         self.pending: dict[str, PendingForce] = {}
 
@@ -120,6 +127,20 @@ class ForceCoordinator:
         """本群是否已经有待结算的活动：强制事件必须让位给正在进行的活动。"""
 
         return self.events.busy(str(group_id))
+
+    def activity_lines(self) -> tuple[str, ...]:
+        if self.bicker is not None and self.bicker.available():
+            return FORCE_ACTIVITY_LINES
+        return tuple(
+            line for line in FORCE_ACTIVITY_LINES if not line.startswith("9.")
+        )
+
+    def prompt(self, target: str) -> str:
+        return FORCE_PROMPT.format(
+            target=target,
+            lines="\n".join(self.activity_lines()),
+            timeout=int(self.choice_timeout),
+        )
 
     def start(
         self,
@@ -212,6 +233,8 @@ class ForceCoordinator:
             return await self._start_wheel(pending, send)
         if choice == FORCE_ACTIVITY_DEVIL:
             return await self._start_wheel(pending, send, devil=True)
+        if choice == FORCE_ACTIVITY_BICKER:
+            return await self._start_bicker(pending, send)
         return FORCE_FAIL_REPLY
 
     async def _send_ambient(self, pending: PendingForce, send: Send) -> str | None:
@@ -316,6 +339,19 @@ class ForceCoordinator:
         )
         return None if started else FORCE_FAIL_REPLY
 
+    async def _start_bicker(
+        self, pending: PendingForce, send: Send
+    ) -> str | None:
+        if self.bicker is None:
+            return FORCE_BICKER_UNAVAILABLE
+        started = await self.bicker.start(
+            group_id=pending.group_id,
+            user_id=pending.target_id,
+            nickname=pending.target_name,
+            send=send,
+        )
+        return None if started else FORCE_BICKER_UNAVAILABLE
+
     @staticmethod
     async def _send(send: Send, text: str) -> None:
         try:
@@ -352,6 +388,7 @@ def register_force_commands(
     wheel: WheelCoordinator,
     *,
     group_quiz: GroupQuizCoordinator | None = None,
+    bicker: BickerCoordinator | None = None,
     coordinator: ForceCoordinator | None = None,
 ) -> tuple:
     """/馒头强制事件：SUPERUSER 发活动列表，发起者 20 秒内回复编号强制开一场。
@@ -369,6 +406,7 @@ def register_force_commands(
         pk=pk,
         wheel=wheel,
         group_quiz=group_quiz,
+        bicker=bicker,
     )
     force_cmd = on_command(
         FORCE_COMMAND,
@@ -414,9 +452,7 @@ def register_force_commands(
             target_name=name,
             send=force_answer.send,
         )
-        await force_cmd.finish(
-            FORCE_PROMPT.format(target=name, timeout=int(force.choice_timeout))
-        )
+        await force_cmd.finish(force.prompt(name))
 
     @force_answer.handle()
     async def handle_force_choice(event: GroupMessageEvent) -> None:
