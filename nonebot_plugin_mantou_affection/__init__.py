@@ -31,6 +31,7 @@ from nonebot_plugin_localstore import get_plugin_data_dir
 
 from .ambient import EventCoordinator, register_ambient
 from .bet import BUNDLED_ROUNDS_PATH, BetCoordinator, BetLibrary
+from .bicker import BickerCoordinator, GroupMemoryAdapter
 from .commands import register_commands
 from .copywriting import AffectionTextLibrary
 from .events import EventLibrary
@@ -114,6 +115,13 @@ wheel_coordinator = WheelCoordinator(
     corpus=group_corpus,
 )
 event_coordinator.attach_wheel(wheel_coordinator)
+bicker_coordinator = BickerCoordinator(
+    service,
+    plugin_config,
+    GroupMemoryAdapter(),
+    events=event_coordinator,
+)
+event_coordinator.attach_bicker(bicker_coordinator)
 matchers = register_commands(service, plugin_config, pk_coordinator)
 ambient_matcher, answer_matcher = register_ambient(
     service,
@@ -124,6 +132,7 @@ ambient_matcher, answer_matcher = register_ambient(
     pk_coordinator,
     wheel_coordinator,
     group_quiz_coordinator,
+    bicker=bicker_coordinator,
 )
 force_matchers = register_force_commands(
     service,

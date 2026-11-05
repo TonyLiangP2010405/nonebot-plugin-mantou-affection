@@ -390,7 +390,7 @@ class BickerCoordinator:
             return True
         pending.transcript.append(("馒头", reply))
         try:
-            await pending.send(MessageSegment.text(f" {reply}"))
+            await pending.send(Message(MessageSegment.text(f" {reply}")))
         except Exception:
             logger.exception("[mantou-affection] 发送斗嘴回应失败")
         if pending.round >= BICKER_ROUNDS:

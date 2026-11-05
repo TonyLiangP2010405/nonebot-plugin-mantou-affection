@@ -11,6 +11,7 @@ from nonebot.message import event_preprocessor
 from nonebot.typing import T_State
 
 from .bet import BUNDLED_ROUNDS_PATH, BetCoordinator, BetLibrary
+from .bicker import BickerCoordinator
 from .commands import GROUP_ONLY
 from .config import Config
 from .events import Event, EventLibrary, EventOption
@@ -124,6 +125,7 @@ class EventCoordinator:
         pk: PkCoordinator | None = None,
         wheel: WheelCoordinator | None = None,
         group_quiz: GroupQuizCoordinator | None = None,
+        bicker: BickerCoordinator | None = None,
     ):
         self.service = service
         self.config = config
@@ -135,6 +137,7 @@ class EventCoordinator:
         self.pk = pk
         self.wheel = wheel
         self.group_quiz = group_quiz
+        self.bicker = bicker
         self.pending: dict[str, PendingEvent] = {}
 
     def attach_find_char(self, findchar: FindCharCoordinator) -> None:
@@ -160,6 +163,11 @@ class EventCoordinator:
 
         self.group_quiz = group_quiz
 
+    def attach_bicker(self, bicker: BickerCoordinator) -> None:
+        """接入馒头斗嘴，让它和其余活动共用同一个群的席位。"""
+
+        self.bicker = bicker
+
     def busy(self, group_id: str) -> bool:
         """本群是否已经有待结算的活动：随机事件、找字、博弈、问答、群友问答或转盘。"""
 
@@ -168,7 +176,14 @@ class EventCoordinator:
             return True
         return any(
             peer is not None and key in peer.pending
-            for peer in (self.findchar, self.bet, self.pk, self.group_quiz, self.wheel)
+            for peer in (
+                self.findchar,
+                self.bet,
+                self.pk,
+                self.group_quiz,
+                self.wheel,
+                self.bicker,
+            )
         )
 
     def triggered(self) -> bool:
@@ -487,6 +502,7 @@ def register_ambient(
     pk: PkCoordinator | None = None,
     wheel: WheelCoordinator | None = None,
     group_quiz: GroupQuizCoordinator | None = None,
+    bicker: BickerCoordinator | None = None,
 ) -> tuple:
     """群友发言时按概率触发找字、博弈、随机问答、群友问答、命运齿轮转盘或馒头小动作。
 
@@ -498,6 +514,8 @@ def register_ambient(
     """
 
     coordinator = events or EventCoordinator(service, config)
+    if bicker is not None:
+        coordinator.attach_bicker(bicker)
     find_char = findchar or FindCharCoordinator(
         service,
         config,
@@ -556,6 +574,10 @@ def register_ambient(
             text = event.message.extract_plain_text()
             if await wheel_coordinator.answer(group_id, user_id, name, text):
                 return
+            if bicker is not None and await bicker.answer(
+                group_id, user_id, name, text
+            ):
+                return
             if await pk_coordinator.answer(group_id, user_id, name, text):
                 return
             if await group_quiz_coordinator.answer(group_id, user_id, name, text):
@@ -574,6 +596,15 @@ def register_ambient(
         user_id = str(event.user_id)
         nickname = _sender_name(event)
         bet_coordinator.note_message(group_id, user_id, nickname)
+
+        if bicker is not None and bicker.is_debater_turn(group_id, user_id):
+            try:
+                await bicker.handle_debate(
+                    group_id, user_id, event.message.extract_plain_text()
+                )
+            except Exception:
+                logger.exception("[mantou-affection] 处理斗嘴回嘴失败")
+            return
 
         try:
             find_char_ready = await service.find_char_triggered(group_id, user_id)
@@ -684,6 +715,25 @@ def register_ambient(
                 )
             except Exception:
                 logger.exception("[mantou-affection] 发起命运齿轮转盘失败")
+                started = False
+            if started:
+                return
+
+        try:
+            bicker_ready = await service.bicker_triggered()
+        except Exception:
+            logger.exception("[mantou-affection] 判定馒头斗嘴失败")
+            bicker_ready = False
+        if bicker is not None and bicker_ready:
+            try:
+                started = await bicker.start(
+                    group_id=group_id,
+                    user_id=user_id,
+                    nickname=nickname,
+                    send=ambient.send,
+                )
+            except Exception:
+                logger.exception("[mantou-affection] 发起馒头斗嘴失败")
                 started = False
             if started:
                 return
