@@ -265,3 +265,11 @@ async def test_daily_gain_budget_is_shared_by_interact_and_link(tmp_path: Path) 
     assert profile.affection == 3
     assert profile.gain_points == 3
     assert service.gained_points_today(profile) == 3
+
+
+async def test_bicker_probability_defaults_and_override(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    assert await service.bicker_probability() == pytest.approx(0.0005)
+    await service.set_bicker_probability(0.25)
+    assert await service.bicker_probability() == pytest.approx(0.25)
+    assert await service.bicker_probability_override() == pytest.approx(0.25)
