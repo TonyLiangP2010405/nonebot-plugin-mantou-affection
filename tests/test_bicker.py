@@ -186,3 +186,138 @@ async def test_no_bets_close_posts_no_bets_message(tmp_path: Path) -> None:
     await asyncio.wait_for(pending.bet_task, 2)
     assert any("没人押注" in message.extract_plain_text() for message in sent)
     assert pending.phase == "debating"
+
+
+async def test_five_rounds_then_judge_and_trigger_wins(tmp_path: Path) -> None:
+    memory = FakeMemory(["题目", "回1", "回2", "回3", "回4", "回5", "群友赢"])
+    coordinator, service = _coordinator(tmp_path, memory)
+    await give(service, TRIGGER_ID, 50)
+    pending, _sent = await _start(coordinator)
+    await asyncio.wait_for(pending.bet_task, 2)
+    for index in range(1, 6):
+        assert await coordinator.handle_debate(GROUP_ID, TRIGGER_ID, f"我说{index}") is True
+    assert len(memory.calls) == 7
+    assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == 53
+    assert GROUP_ID not in coordinator.pending
+
+
+async def test_trigger_loses_and_bets_settle(tmp_path: Path) -> None:
+    memory = FakeMemory(["题目", "回1", "回2", "回3", "回4", "回5", "馒头赢"])
+    coordinator, service = _coordinator(tmp_path, memory)
+    await give(service, TRIGGER_ID, 50)
+    await give(service, OTHER_ID, 50)
+    await give(service, "93004", 50)
+    pending, _sent = await _start(coordinator)
+    await coordinator.answer(GROUP_ID, OTHER_ID, "甲", "1")  # 押群友赢 1
+    await coordinator.answer(GROUP_ID, "93004", "乙", "5")  # 押群友输 3
+    await asyncio.wait_for(pending.bet_task, 2)
+    for index in range(1, 6):
+        await coordinator.handle_debate(GROUP_ID, TRIGGER_ID, f"我说{index}")
+    assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == 45
+    assert (await service.profile(GROUP_ID, OTHER_ID)).affection == 49
+    assert (await service.profile(GROUP_ID, "93004")).affection == 51
+
+
+async def test_round_timeout_loses_and_settles(tmp_path: Path) -> None:
+    memory = FakeMemory(["题目"])
+    coordinator, service = _coordinator(tmp_path, memory)
+    coordinator.round_timeout = 0.01
+    await give(service, TRIGGER_ID, 50)
+    pending, _sent = await _start(coordinator)
+    await asyncio.wait_for(pending.bet_task, 2)
+    await asyncio.wait_for(pending.round_task, 2)
+    assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == 45
+    assert GROUP_ID not in coordinator.pending
+
+
+async def test_no_winners_refunds_all(tmp_path: Path) -> None:
+    memory = FakeMemory(["题目", "回1", "回2", "回3", "回4", "回5", "馒头赢"])
+    coordinator, service = _coordinator(tmp_path, memory)
+    await give(service, TRIGGER_ID, 50)
+    await give(service, OTHER_ID, 50)
+    await give(service, "93004", 50)
+    pending, _sent = await _start(coordinator)
+    await coordinator.answer(GROUP_ID, OTHER_ID, "甲", "1")
+    await coordinator.answer(GROUP_ID, "93004", "乙", "2")
+    await asyncio.wait_for(pending.bet_task, 2)
+    for index in range(1, 6):
+        await coordinator.handle_debate(GROUP_ID, TRIGGER_ID, f"我说{index}")
+    assert (await service.profile(GROUP_ID, OTHER_ID)).affection == 50
+    assert (await service.profile(GROUP_ID, "93004")).affection == 50
+    assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == 45
+
+
+async def test_remainder_goes_to_earliest_winner(tmp_path: Path) -> None:
+    memory = FakeMemory(["题目", "回1", "回2", "回3", "回4", "回5", "群友赢"])
+    coordinator, service = _coordinator(tmp_path, memory)
+    await give(service, TRIGGER_ID, 50)
+    await give(service, OTHER_ID, 50)
+    await give(service, "93004", 50)
+    await give(service, "93005", 50)
+    pending, _sent = await _start(coordinator)
+    await coordinator.answer(GROUP_ID, OTHER_ID, "甲", "1")  # 最早赢家
+    await coordinator.answer(GROUP_ID, "93004", "乙", "1")  # 第二赢家
+    await coordinator.answer(GROUP_ID, "93005", "丙", "6")  # 输家押 5
+    await asyncio.wait_for(pending.bet_task, 2)
+    for index in range(1, 6):
+        await coordinator.handle_debate(GROUP_ID, TRIGGER_ID, f"我说{index}")
+    assert (await service.profile(GROUP_ID, OTHER_ID)).affection == 53
+    assert (await service.profile(GROUP_ID, "93004")).affection == 52
+    assert (await service.profile(GROUP_ID, "93005")).affection == 45
+
+
+async def test_no_bets_only_trigger_settles(tmp_path: Path) -> None:
+    memory = FakeMemory(["题目", "回1", "回2", "回3", "回4", "回5", "群友赢"])
+    coordinator, service = _coordinator(tmp_path, memory)
+    await give(service, TRIGGER_ID, 50)
+    pending, _sent = await _start(coordinator)
+    await asyncio.wait_for(pending.bet_task, 2)
+    for index in range(1, 6):
+        await coordinator.handle_debate(GROUP_ID, TRIGGER_ID, f"我说{index}")
+    assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == 53
+    assert GROUP_ID not in coordinator.pending
+
+
+async def test_model_failure_cancels_and_refunds(tmp_path: Path) -> None:
+    memory = FakeMemory(["题目"])
+    coordinator, service = _coordinator(tmp_path, memory)
+    await give(service, TRIGGER_ID, 50)
+    await give(service, OTHER_ID, 50)
+    pending, _sent = await _start(coordinator)
+    await coordinator.answer(GROUP_ID, OTHER_ID, "甲", "2")
+    await asyncio.wait_for(pending.bet_task, 2)
+    assert await coordinator.handle_debate(GROUP_ID, TRIGGER_ID, "我说一句") is True
+    assert (await service.profile(GROUP_ID, OTHER_ID)).affection == 50
+    assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == 50
+    assert GROUP_ID not in coordinator.pending
+
+
+async def test_judge_failure_cancels_and_refunds(tmp_path: Path) -> None:
+    memory = FakeMemory(["题目", "回1", "回2", "回3", "回4", "回5", "不知道"])
+    coordinator, service = _coordinator(tmp_path, memory)
+    await give(service, TRIGGER_ID, 50)
+    await give(service, OTHER_ID, 50)
+    pending, _sent = await _start(coordinator)
+    await coordinator.answer(GROUP_ID, OTHER_ID, "甲", "1")
+    await asyncio.wait_for(pending.bet_task, 2)
+    for index in range(1, 6):
+        await coordinator.handle_debate(GROUP_ID, TRIGGER_ID, f"我说{index}")
+    assert (await service.profile(GROUP_ID, OTHER_ID)).affection == 50
+    assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == 50
+    assert GROUP_ID not in coordinator.pending
+
+
+async def test_newbie_protection_on_trigger_loss(tmp_path: Path) -> None:
+    memory = FakeMemory(["题目", "回1", "回2", "回3", "回4", "回5", "馒头赢"])
+    coordinator, service = _coordinator(
+        tmp_path,
+        memory,
+        config=Config(mantou_affection_newbie_protection_below=50),
+    )
+    await give(service, TRIGGER_ID, 40)
+    pending, sent = await _start(coordinator)
+    await asyncio.wait_for(pending.bet_task, 2)
+    for index in range(1, 6):
+        await coordinator.handle_debate(GROUP_ID, TRIGGER_ID, f"我说{index}")
+    assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == 39
+    assert "新手保护" in sent[-1].extract_plain_text()

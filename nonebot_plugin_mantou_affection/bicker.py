@@ -12,6 +12,7 @@ from nonebot import get_plugin, logger
 from nonebot.adapters.onebot.v11 import Message, MessageSegment
 
 from .config import Config
+from .logic import NEWBIE_PROTECTION_NOTE
 from .service import AffectionService, normalize_nickname
 
 BICKER_STAKES = (1, 3, 5)
@@ -33,6 +34,15 @@ TOPIC_PROMPT = (
     "下面是本群最近的聊天记录：\n{recent}\n\n"
     "请根据这些内容，出一道适合群友和馒头斗嘴的题目。\n"
     "要求：一句话，不超过 40 字，必须和群友说过的话有关，不要解释，不要加引号。"
+)
+REPLY_PROMPT = (
+    "你正在和群友斗嘴。题目：{topic}\n"
+    "已经发生的对话：\n{transcript}\n\n"
+    "请只输出馒头接下来的一句回嘴，不超过 60 字，不要解释，不要加引号。"
+)
+JUDGE_PROMPT = (
+    "下面是馒头和群友的 5 回合斗嘴记录。\n题目：{topic}\n\n{transcript}\n\n"
+    "请判断谁更占上风。只回复「群友赢」或「馒头赢」，不要解释。"
 )
 
 Send = Callable[[Message | str], Awaitable[object]]
@@ -135,6 +145,10 @@ def _first_line(text: str) -> str:
         if cleaned:
             return cleaned[:BICKER_MAX_LINE]
     return ""
+
+
+def format_transcript(transcript: list[tuple[str, str]]) -> str:
+    return "\n".join(f"{role}: {text}" for role, text in transcript)
 
 
 class BickerCoordinator:
@@ -313,7 +327,248 @@ class BickerCoordinator:
         await self._begin_debate(pending)
 
     async def _begin_debate(self, pending: PendingBicker) -> None:
-        return None
+        if (
+            not pending.accepting
+            or self.pending.get(pending.group_id) is not pending
+        ):
+            return
+        pending.round = 0
+        pending.phase = "debating"
+        try:
+            await pending.send(
+                MessageSegment.at(pending.trigger_id)
+                + MessageSegment.text(
+                    f" 题目：{pending.topic}\n"
+                    f"来，说说你的看法。请在 {int(self.round_timeout)} 秒内回嘴。"
+                )
+            )
+        except Exception:
+            logger.exception("[mantou-affection] 发送斗嘴开场失败")
+            await self._cancel(pending)
+            return
+        self._schedule_round(pending)
+
+    def _schedule_round(self, pending: PendingBicker) -> None:
+        pending.round_task = asyncio.create_task(
+            self._expire_round(pending, pending.round)
+        )
+
+    async def _expire_round(
+        self, pending: PendingBicker, round_index: int
+    ) -> None:
+        try:
+            await asyncio.sleep(self.round_timeout)
+        except asyncio.CancelledError:
+            return
+        if (
+            not pending.accepting
+            or pending.phase != "debating"
+            or pending.round != round_index
+        ):
+            return
+        await self._finish(pending, trigger_won=False)
+
+    async def handle_debate(
+        self, group_id: str, user_id: str, text: str
+    ) -> bool:
+        if not self.is_debater_turn(group_id, user_id):
+            return False
+        pending = self.pending[str(group_id)]
+        line = text.strip()[:BICKER_MAX_REPLY]
+        if not line:
+            return False
+        pending.awaiting_reply = True
+        if pending.round_task is not None:
+            pending.round_task.cancel()
+        pending.transcript.append(("群友", line))
+        pending.round += 1
+        try:
+            reply = await self._generate_reply(pending)
+        except Exception:
+            logger.exception("[mantou-affection] 生成斗嘴回应失败")
+            await self._cancel(pending)
+            return True
+        pending.transcript.append(("馒头", reply))
+        try:
+            await pending.send(MessageSegment.text(f" {reply}"))
+        except Exception:
+            logger.exception("[mantou-affection] 发送斗嘴回应失败")
+        if pending.round >= BICKER_ROUNDS:
+            await self._finish(pending)
+        else:
+            await self._send_text(
+                pending,
+                f" 轮到你了，请在 {int(self.round_timeout)} 秒内回嘴。",
+                at=pending.trigger_id,
+            )
+            pending.awaiting_reply = False
+            self._schedule_round(pending)
+        return True
+
+    async def _generate_reply(self, pending: PendingBicker) -> str:
+        prompt = REPLY_PROMPT.format(
+            topic=pending.topic,
+            transcript=format_transcript(pending.transcript),
+        )
+        reply = await self.memory.complete(
+            pending.group_id, prompt, timeout=self.model_timeout
+        )
+        line = _first_line(reply)
+        if not line:
+            raise GroupMemoryUnavailable("斗嘴回应为空")
+        return line
+
+    async def _finish(
+        self, pending: PendingBicker, *, trigger_won: bool | None = None
+    ) -> None:
+        if pending.phase != "debating" or not pending.accepting:
+            return
+        pending.phase = "judging"
+        pending.accepting = False
+        if (
+            pending.round_task is not None
+            and pending.round_task is not asyncio.current_task()
+        ):
+            pending.round_task.cancel()
+        if trigger_won is None:
+            try:
+                trigger_won = await self._judge(pending)
+            except Exception:
+                logger.exception("[mantou-affection] 判定斗嘴输赢失败")
+                await self._cancel(pending)
+                return
+        if trigger_won is None:
+            await self._cancel(pending)
+            return
+        await self._settle(pending, trigger_won=trigger_won)
+
+    async def _judge(self, pending: PendingBicker) -> bool | None:
+        prompt = JUDGE_PROMPT.format(
+            topic=pending.topic,
+            transcript=format_transcript(pending.transcript),
+        )
+        reply = await self.memory.complete(
+            pending.group_id, prompt, timeout=self.model_timeout
+        )
+        group_won = "群友赢" in reply
+        bot_won = "馒头赢" in reply
+        if group_won == bot_won:
+            return None
+        return group_won
+
+    async def _settle(
+        self, pending: PendingBicker, *, trigger_won: bool
+    ) -> None:
+        pending.phase = "settled"
+        pending.accepting = False
+        delta = 3 if trigger_won else -5
+        applied, profile, protected = await self.service.adjust(
+            pending.group_id, pending.trigger_id, pending.trigger_name, delta
+        )
+        note = NEWBIE_PROTECTION_NOTE if protected else ""
+        segments: list[MessageSegment] = []
+
+        def add(user_id: str, line: str) -> None:
+            if segments:
+                segments.append(MessageSegment.text("\n"))
+            segments.append(MessageSegment.at(user_id))
+            segments.append(MessageSegment.text(f" {line}"))
+
+        result = "群友赢" if trigger_won else "馒头赢"
+        add(
+            pending.trigger_id,
+            f"斗嘴结果：{result}，好感度 {applied:+d}，"
+            f"当前 {profile.affection}{note}",
+        )
+        winners = [
+            bet for bet in pending.bets.values() if bet.side == trigger_won
+        ]
+        losers = [
+            bet for bet in pending.bets.values() if bet.side != trigger_won
+        ]
+        if pending.bets and not winners:
+            for bet in pending.bets.values():
+                _refund, refund_profile, _ = await self.service.adjust(
+                    pending.group_id,
+                    bet.user_id,
+                    bet.nickname,
+                    bet.actual,
+                    protect=False,
+                )
+                add(
+                    bet.user_id,
+                    f"押注 {bet.stake} 点已退回，当前 {refund_profile.affection}",
+                )
+        elif winners:
+            pool = sum(bet.actual for bet in losers)
+            share, remainder = divmod(pool, len(winners))
+            for index, bet in enumerate(
+                sorted(winners, key=lambda item: item.placed_at)
+            ):
+                amount = bet.actual + share + (remainder if index == 0 else 0)
+                refund, refund_profile, _ = await self.service.adjust(
+                    pending.group_id,
+                    bet.user_id,
+                    bet.nickname,
+                    amount,
+                    protect=False,
+                )
+                add(
+                    bet.user_id,
+                    f"押注 {bet.stake} 点押中，到账 {refund:+d}，"
+                    f"当前 {refund_profile.affection}",
+                )
+            for bet in losers:
+                loser_profile = await self.service.profile(
+                    pending.group_id, bet.user_id
+                )
+                add(
+                    bet.user_id,
+                    f"押注 {bet.stake} 点没押中，当前 {loser_profile.affection}",
+                )
+        try:
+            await pending.send(Message(segments))
+        except Exception:
+            logger.exception("[mantou-affection] 发送斗嘴结算失败")
+        self.pending.pop(pending.group_id, None)
+
+    async def _cancel(self, pending: PendingBicker) -> None:
+        if pending.phase == "settled":
+            return
+        pending.phase = "settled"
+        pending.accepting = False
+        current = asyncio.current_task()
+        for task in (pending.bet_task, pending.round_task):
+            if task is not None and task is not current:
+                task.cancel()
+        segments: list[MessageSegment] = []
+        for bet in pending.bets.values():
+            _refund, profile, _ = await self.service.adjust(
+                pending.group_id,
+                bet.user_id,
+                bet.nickname,
+                bet.actual,
+                protect=False,
+            )
+            if segments:
+                segments.append(MessageSegment.text("\n"))
+            segments.append(MessageSegment.at(bet.user_id))
+            segments.append(
+                MessageSegment.text(
+                    f" 押注 {bet.stake} 点已退回，当前 {profile.affection}"
+                )
+            )
+        prefix = "\n" if segments else ""
+        segments.append(
+            MessageSegment.text(
+                f"{prefix} 斗嘴中断，押注已全部退回，好感度没有变化。"
+            )
+        )
+        try:
+            await pending.send(Message(segments))
+        except Exception:
+            logger.exception("[mantou-affection] 发送斗嘴取消提示失败")
+        self.pending.pop(pending.group_id, None)
 
     def discard(self, pending: PendingBicker) -> None:
         if self.pending.get(pending.group_id) is pending:
