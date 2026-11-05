@@ -18,6 +18,10 @@ from nonebot_plugin_mantou_affection.bet import (
     BetCoordinator,
     BetLibrary,
 )
+from nonebot_plugin_mantou_affection.bicker import (
+    BickerCoordinator,
+    GroupMemoryUnavailable,
+)
 from nonebot_plugin_mantou_affection.config import Config
 from nonebot_plugin_mantou_affection.copywriting import AffectionTextLibrary
 from nonebot_plugin_mantou_affection.events import EventLibrary
@@ -67,6 +71,7 @@ EXPECTED_ACTIVITY_LINES = (
     "6. 群友问答",
     "7. 命运齿轮转盘",
     "8. 小恶魔转盘",
+    "9. 馒头斗嘴",
 )
 
 
@@ -79,6 +84,30 @@ class FixedRng(random.Random):
 
     def random(self) -> float:
         return self.value
+
+
+class FakeMemory:
+    def __init__(self, responses, recent=None, available=True):
+        self.responses = list(responses)
+        self.recent = (
+            recent
+            if recent is not None
+            else [("甲", "我昨天十点就睡了"), ("乙", "早睡都是假的")]
+        )
+        self.available_flag = available
+        self.calls: list[str] = []
+
+    def available(self) -> bool:
+        return self.available_flag
+
+    async def recent_messages(self, group_id, limit=30):
+        return list(self.recent)
+
+    async def complete(self, group_id, text, *, timeout=20.0):
+        self.calls.append(text)
+        if not self.responses:
+            raise GroupMemoryUnavailable("模型没有返回")
+        return self.responses.pop(0)
 
 
 def _event(text: str, user_id: str = SUPER_ID, nickname: str = "管理员") -> GroupMessageEvent:
@@ -183,11 +212,19 @@ class Harness:
             rng=rng,
         )
         self.wheel = WheelCoordinator(self.service, self.config, events=self.events, rng=rng)
+        self.bicker = BickerCoordinator(
+            self.service,
+            self.config,
+            FakeMemory(["题目"]),
+            events=self.events,
+            rng=rng,
+        )
         self.events.attach_find_char(self.findchar)
         self.events.attach_bet(self.bet)
         self.events.attach_pk(self.pk)
         self.events.attach_group_quiz(self.group_quiz)
         self.events.attach_wheel(self.wheel)
+        self.events.attach_bicker(self.bicker)
         self.force = ForceCoordinator(
             self.service,
             self.config,
@@ -197,6 +234,7 @@ class Harness:
             pk=self.pk,
             wheel=self.wheel,
             group_quiz=self.group_quiz,
+            bicker=self.bicker,
             choice_timeout=choice_timeout,
         )
         self.force_cmd, self.force_answer = register_force_commands(
@@ -207,6 +245,7 @@ class Harness:
             self.bet,
             self.pk,
             self.wheel,
+            bicker=self.bicker,
             coordinator=self.force,
         )
         self.sent: list[Message] = []
@@ -245,6 +284,10 @@ class Harness:
             task = getattr(pending, "task", None)
             if task is not None:
                 tasks.append(task)
+        for pending in self.bicker.pending.values():
+            for task in (pending.bet_task, pending.round_task):
+                if task is not None:
+                    tasks.append(task)
         for task in tasks:
             task.cancel()
             with suppress(asyncio.CancelledError):
@@ -399,7 +442,7 @@ async def test_force_choice_timeout_cancels_without_affection_change(
     await harness.cleanup()
 
 
-@pytest.mark.parametrize("text", ["9", "0", "1 2", "随便"])
+@pytest.mark.parametrize("text", ["10", "0", "1 2", "随便"])
 async def test_invalid_choice_cancels_without_affection_change(
     tmp_path: Path, bundled_texts_path: Path, monkeypatch, text: str
 ) -> None:
@@ -430,6 +473,7 @@ async def test_invalid_choice_cancels_without_affection_change(
         ("6", "group_quiz", "💬 群友问答！"),
         ("7", "wheel", "命运齿轮转盘"),
         ("8", "wheel", "小恶魔转盘"),
+        ("9", "bicker", "馒头斗嘴"),
     ],
 )
 async def test_force_choice_starts_activity(
@@ -465,6 +509,30 @@ async def test_force_devil_choice_starts_devil_wheel(
 
     assert harness.wheel.pending[GROUP_ID].spec is DEVIL_SPEC
     await harness.cleanup()
+
+
+async def test_force_bicker_choice_starts_bicker(
+    tmp_path: Path, bundled_texts_path: Path, monkeypatch
+) -> None:
+    harness = Harness(tmp_path, bundled_texts_path, monkeypatch)
+    await harness.start_command()
+    harness.sent.clear()
+
+    await harness.choose("9")
+
+    assert GROUP_ID in harness.bicker.pending
+    assert "馒头斗嘴" in _body(harness.sent[-1])
+    harness.bicker.pending[GROUP_ID].bet_task.cancel()
+    await harness.cleanup()
+
+
+def test_force_prompt_hides_bicker_when_unavailable(
+    tmp_path: Path, bundled_texts_path: Path, monkeypatch
+) -> None:
+    harness = Harness(tmp_path, bundled_texts_path, monkeypatch)
+    harness.bicker.memory.available_flag = False
+
+    assert "9. 馒头斗嘴" not in harness.force.prompt("桃友")
 
 
 async def test_force_bet_choice_names_target_and_two_rivals(
