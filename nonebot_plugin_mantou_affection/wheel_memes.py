@@ -332,7 +332,7 @@ class ExtraMemeRepo:
 
 EXTRA_MEME_REPOS: tuple[ExtraMemeRepo, ...] = (
     ExtraMemeRepo(
-        "mantou-memes", "TonyLiangP2010405/mantou-memes", "memes", "mantou_groups"
+        "mantou-memes", "TonyLiangP2010405/mantou-memes", "memes", "mantou_anime_batch100"
     ),
     ExtraMemeRepo("meme-generator-contrib", "MemeCrafters/meme-generator-contrib", "memes"),
     ExtraMemeRepo("meme_emoji", "anyliew/meme_emoji", "emoji"),

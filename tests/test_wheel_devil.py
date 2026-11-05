@@ -32,13 +32,13 @@ def test_devil_weights_match_approved_table() -> None:
         (("meme", 0), 10),
         (("taozi", 0), 25),
         (("corpus", 0), 10),
-        (("affection", 4), 4),
-        (("affection", 8), 2),
-        (("affection", 12), 2),
+        (("affection", 2), 4),
+        (("affection", 4), 2),
+        (("affection", 6), 2),
+        (("affection", 10), 1),
         (("affection", 20), 1),
-        (("affection", 40), 1),
-        (("affection", -19), 30),
-        (("affection", -20), 15),
+        (("affection", -9), 30),
+        (("affection", -10), 15),
     ]
     assert sum(w for _o, w in DEVIL_WHEEL_OUTCOMES) == 100
 
@@ -75,10 +75,10 @@ def test_devil_rules_list_threshold_cost_and_every_probability() -> None:
         "30 点好感",
         "群友语料库 10%",
         "扣 5 点好感",
-        "+4 4%",
-        "+40 1%",
-        "-19 30%",
-        "-20 15%",
+        "+2 4%",
+        "+20 1%",
+        "-9 30%",
+        "-10 15%",
     ):
         assert fragment in text
 
@@ -265,9 +265,9 @@ async def test_devil_auto_runs_at_timeout_without_refund(tmp_path: Path) -> None
     assert (await coordinator.service.profile(GROUP, OTHER)).affection == 45
     await asyncio.wait_for(pending.task, 2)
     assert GROUP not in coordinator.pending
-    # 参与者 50 - 5 参与费 + 4 抽中 = 49, 没有退款, 结果确实结算了
-    assert (await coordinator.service.profile(GROUP, OTHER)).affection == 49
-    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 504
+    # 参与者 50 - 5 参与费 + 2 抽中 = 47, 没有退款, 结果确实结算了
+    assert (await coordinator.service.profile(GROUP, OTHER)).affection == 47
+    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 502
 
 
 async def test_devil_taozi_asks_thirty_and_charges_thirty(tmp_path: Path) -> None:
@@ -292,13 +292,13 @@ async def test_devil_taozi_needs_thirty_to_ask(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("roll", "delta"),
     [
-        (45, 4),
-        (49, 8),
-        (51, 12),
-        (53, 20),
-        (54, 40),
-        (55, -19),
-        (85, -20),
+        (45, 2),
+        (49, 4),
+        (51, 6),
+        (53, 10),
+        (54, 20),
+        (55, -9),
+        (85, -10),
     ],
 )
 async def test_devil_affection_outcomes(tmp_path: Path, roll: int, delta: int) -> None:
@@ -346,13 +346,15 @@ async def test_devil_meme_lists_five_and_sends_no_image(tmp_path: Path) -> None:
     _pending, sent = await devil_auto(coordinator)
     body = sent[-1].extract_plain_text()
     assert "已扣除 5 点好感" in body
+    assert "直接回复 1 到 5" in body
     for index in range(1, 6):
-        assert f"选{index}." in body
+        assert f"{index}. 名字{index - 1}" in body
+    assert "选1." not in body
     assert "[CQ:image" not in str(sent[-1])
     assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 45
 
 
-async def test_devil_meme_pick_generates_chosen_template(tmp_path: Path) -> None:
+async def test_devil_meme_pick_still_accepts_xuan_prefix(tmp_path: Path) -> None:
     memes = FakeMemes()
     coordinator = make_coordinator(tmp_path, rng=FixedRollRng(roll=0), memes=memes)
     await give(coordinator.service, TRIGGER, 50)
@@ -362,23 +364,42 @@ async def test_devil_meme_pick_generates_chosen_template(tmp_path: Path) -> None
     assert (GROUP, TRIGGER) not in coordinator.meme_picks
 
 
-async def test_devil_bare_digit_does_not_pick(tmp_path: Path) -> None:
-    coordinator = make_coordinator(tmp_path, rng=FixedRollRng(roll=0), memes=FakeMemes())
+async def test_devil_bare_digit_picks_template(tmp_path: Path) -> None:
+    memes = FakeMemes()
+    coordinator = make_coordinator(tmp_path, rng=FixedRollRng(roll=0), memes=memes)
     await give(coordinator.service, TRIGGER, 50)
     _pending, _sent = await devil_auto(coordinator)
-    assert await coordinator.answer(GROUP, TRIGGER, "触发者", "3") is False
-    assert (GROUP, TRIGGER) in coordinator.meme_picks
+    assert await coordinator.answer(GROUP, TRIGGER, "触发者", "3") is True
+    assert memes.generated[-1][0] is memes.candidates[2]
+    assert (GROUP, TRIGGER) not in coordinator.meme_picks
 
 
-async def test_devil_meme_pick_timeout_drops_without_refund(tmp_path: Path) -> None:
-    coordinator = make_coordinator(tmp_path, rng=FixedRollRng(roll=0), memes=FakeMemes())
+async def test_devil_meme_pick_timeout_sends_a_random_candidate(tmp_path: Path) -> None:
+    memes = FakeMemes()
+    coordinator = make_coordinator(tmp_path, rng=FixedRollRng(roll=0), memes=memes)
     coordinator.meme_confirm_timeout = 0.01
     await give(coordinator.service, TRIGGER, 50)
     _pending, sent = await devil_auto(coordinator)
     pick = coordinator.meme_picks[(GROUP, TRIGGER)]
     await asyncio.wait_for(pick.task, 2)
-    assert "超时" in sent[-1].extract_plain_text()
+    body = sent[-1].extract_plain_text()
+    assert "超时" in body
+    assert "随机" in body
+    assert "[CQ:image" in str(sent[-1])
+    assert memes.generated[-1][0] in memes.candidates
+    assert (GROUP, TRIGGER) not in coordinator.meme_picks
     assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 45
+
+
+async def test_devil_meme_pick_invalid_choice_mentions_random_fallback(
+    tmp_path: Path,
+) -> None:
+    coordinator = make_coordinator(tmp_path, rng=FixedRollRng(roll=0), memes=FakeMemes())
+    await give(coordinator.service, TRIGGER, 50)
+    _pending, sent = await devil_auto(coordinator)
+    assert await coordinator.answer(GROUP, TRIGGER, "触发者", "9") is True
+    assert "随机" in sent[-1].extract_plain_text()
+    assert (GROUP, TRIGGER) in coordinator.meme_picks
 
 
 async def test_devil_meme_whitelisted_user_gets_image_without_prompt(
@@ -462,7 +483,7 @@ async def test_devil_deduction_sends_daily_gift(tmp_path: Path) -> None:
     coordinator.service.stickers = FakeStickers()
     await give(coordinator.service, TRIGGER, 60)
     _pending, sent = await devil_auto(coordinator)
-    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 40
+    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 50
     assert any("[CQ:image" in str(message) for message in sent)
 
 
@@ -498,9 +519,9 @@ async def test_devil_negative_delta_protected_below_fifty(tmp_path: Path) -> Non
     coordinator = make_coordinator(tmp_path, rng=FixedRollRng(roll=98), newbie_below=50)
     await give(coordinator.service, TRIGGER, 40)
     _pending, sent = await devil_auto(coordinator)
-    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 34
+    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 37
     body = sent[-1].extract_plain_text()
-    assert "-6" in body
+    assert "-3" in body
     assert "新手保护" in body
 
 
@@ -508,7 +529,7 @@ async def test_devil_negative_delta_not_protected_at_fifty(tmp_path: Path) -> No
     coordinator = make_coordinator(tmp_path, rng=FixedRollRng(roll=87), newbie_below=50)
     await give(coordinator.service, TRIGGER, 50)
     _pending, sent = await devil_auto(coordinator)
-    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 30
+    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 40
     assert "新手保护" not in sent[-1].extract_plain_text()
 
 

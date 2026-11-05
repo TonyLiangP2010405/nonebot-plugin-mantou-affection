@@ -52,13 +52,13 @@ DEVIL_WHEEL_OUTCOMES: tuple[tuple[WheelOutcome, int], ...] = (
     (WheelOutcome("meme"), 10),
     (WheelOutcome("taozi"), 25),
     (WheelOutcome("corpus"), 10),
-    (WheelOutcome("affection", 4), 4),
-    (WheelOutcome("affection", 8), 2),
-    (WheelOutcome("affection", 12), 2),
+    (WheelOutcome("affection", 2), 4),
+    (WheelOutcome("affection", 4), 2),
+    (WheelOutcome("affection", 6), 2),
+    (WheelOutcome("affection", 10), 1),
     (WheelOutcome("affection", 20), 1),
-    (WheelOutcome("affection", 40), 1),
-    (WheelOutcome("affection", -19), 30),
-    (WheelOutcome("affection", -20), 15),
+    (WheelOutcome("affection", -9), 30),
+    (WheelOutcome("affection", -10), 15),
 )
 
 
@@ -219,13 +219,15 @@ WHEEL_MEME_FAILED_REPLY = " 本次表情生成失败，不重抽"
 
 WHEEL_MEME_PICK_REPLY = (
     " 你抽中了「随机表情」，已扣除 {cost} 点好感{note}，当前 {affection}。"
-    "回复「选1」到「选{count}」挑一个，{timeout} 秒内有效：\n{options}"
+    "直接回复 1 到 {count} 挑一个，{timeout} 秒内有效：\n{options}"
 )
 WHEEL_MEME_PICK_CONFIRMED_REPLY = " 馒头为你做了这张表情："
-WHEEL_MEME_PICK_TIMEOUT_REPLY = " 表情选择超时，本次不制作，已扣的好感不退。"
-WHEEL_MEME_PICK_INVALID_REPLY = " 只能回复「选1」到「选{count}」，或者等它超时放弃。"
+WHEEL_MEME_PICK_TIMEOUT_REPLY = (
+    " 表情选择超时，馒头随机给你挑了一张（已扣的好感不退）："
+)
+WHEEL_MEME_PICK_INVALID_REPLY = " 只能回复 1 到 {count}，超时会随机发一张。"
 
-_MEME_PICK_PATTERN = re.compile(r"选([1-9])")
+_MEME_PICK_PATTERN = re.compile(r"(?:选)?([1-9])")
 
 WHEEL_JOIN_COST_REPLY = (
     " 参与成功，已扣除 {cost} 点好感度{note}，当前 {affection}，"
@@ -302,7 +304,7 @@ def format_meme_pick(
     note: str = "",
 ) -> str:
     options = "\n".join(
-        f"选{index}. {_meme_name(meme)}（种类：{_meme_tags(meme)}，"
+        f"{index}. {_meme_name(meme)}（种类：{_meme_tags(meme)}，"
         f"键名：{str(getattr(meme, 'key', '') or '').strip() or '未知'}）"
         for index, (meme, _kind) in enumerate(candidates, start=1)
     )
@@ -946,7 +948,16 @@ class WheelCoordinator:
         )
 
     async def _send_chosen_meme(
-        self, user_id: str, send, meme: Any, kind: str, *, bot, nickname: str, group_id: str
+        self,
+        user_id: str,
+        send,
+        meme: Any,
+        kind: str,
+        *,
+        bot,
+        nickname: str,
+        group_id: str,
+        prefix: str = WHEEL_MEME_PICK_CONFIRMED_REPLY,
     ) -> None:
         try:
             if self.memes is None:
@@ -971,7 +982,7 @@ class WheelCoordinator:
             return
         await send(
             MessageSegment.at(user_id)
-            + MessageSegment.text(WHEEL_MEME_PICK_CONFIRMED_REPLY)
+            + MessageSegment.text(prefix)
             + MessageSegment.image(image)
         )
 
@@ -1032,16 +1043,17 @@ class WheelCoordinator:
         ):
             return
         self._cancel_meme_pick(pick)
-        try:
-            await pick.send(
-                MessageSegment.at(pick.user_id)
-                + MessageSegment.text(WHEEL_MEME_PICK_TIMEOUT_REPLY)
-            )
-        except Exception:
-            logger.exception(
-                f"[mantou-affection] 转盘表情选择超时提示发送失败 "
-                f"group={pick.group_id} user={pick.user_id}"
-            )
+        meme, kind = self.rng.choice(pick.candidates)
+        await self._send_chosen_meme(
+            pick.user_id,
+            pick.send,
+            meme,
+            kind,
+            bot=pick.bot,
+            nickname=pick.nickname,
+            group_id=pick.group_id,
+            prefix=WHEEL_MEME_PICK_TIMEOUT_REPLY,
+        )
 
     async def _answer_meme_pick(self, pick: PendingMemePick, index: int) -> None:
         if (

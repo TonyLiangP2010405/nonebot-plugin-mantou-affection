@@ -471,15 +471,14 @@ def test_template_count_requires_direct_child_init(tmp_path: Path) -> None:
     assert manager._template_count(REPO) == 2
 
 
-async def test_mantou_cache_without_new_batch_is_refreshed_once(tmp_path: Path) -> None:
+async def test_mantou_cache_replaces_retired_templates_with_anime(tmp_path: Path) -> None:
     repo = EXTRA_MEME_REPOS[0]
     backend = FakeBackend()
     requests = []
     archive = make_zip(
         {
-            "mantou-main/memes/mantou_actions/__init__.py": b"# previous batch",
-            "mantou-main/memes/mantou_actions_next/__init__.py": b"# previous 1120 templates",
-            "mantou-main/memes/mantou_groups/__init__.py": b"# new group batch",
+            "mantou-main/memes/mantou_anime/__init__.py": b"# ten accepted anime clips",
+            "mantou-main/memes/mantou_anime_batch100/__init__.py": b"# another 100 anime clips",
         }
     )
 
@@ -490,14 +489,21 @@ async def test_mantou_cache_without_new_batch_is_refreshed_once(tmp_path: Path) 
     manager = MemeRepoManager(
         backend=backend, base_dir=tmp_path, repos=(repo,), opener=opener
     )
-    old_module = manager.memes_dir(repo) / "mantou_actions_next"
-    old_module.mkdir(parents=True)
-    (old_module / "__init__.py").touch()
+    for name in (
+        "mantou", "mantou_duel", "mantou_actions", "mantou_actions_next",
+        "mantou_groups", "mantou_scenes", "mantou_anime",
+    ):
+        old_module = manager.memes_dir(repo) / name
+        old_module.mkdir(parents=True)
+        (old_module / "__init__.py").touch()
     assert manager._template_count(repo) == 0
 
     await manager.ensure_loaded()
     assert len(requests) == 1
-    assert manager._template_count(repo) == 3
+    assert manager._template_count(repo) == 2
+    assert not (manager.memes_dir(repo) / "mantou_groups").exists()
+    assert not (manager.memes_dir(repo) / "mantou_actions").exists()
+    assert not (manager.memes_dir(repo) / "mantou_scenes").exists()
     assert backend.loaded_dirs == [manager.memes_dir(repo)]
 
     cached = MemeRepoManager(
