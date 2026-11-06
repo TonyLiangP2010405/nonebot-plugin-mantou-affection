@@ -30,24 +30,53 @@ BICKER_ROUNDS = 5
 BICKER_MODEL_TIMEOUT = 20.0
 BICKER_MAX_LINE = 60
 BICKER_MAX_REPLY = 200
+BICKER_MAX_STANCE = 40
 BICKER_PREFIX = "🎤 馒头斗嘴！"
 
 TOPIC_PROMPT = (
     "下面是本群最近的聊天记录：\n{recent}\n\n"
-    "请根据这些内容，出一道适合群友和馒头斗嘴的题目。\n"
-    "要求：一句话，不超过 40 字，必须和群友说过的话有关，不要解释，不要加引号。"
+    "请根据这些内容，出一道适合群友和馒头正反辩论的题目，并给出正反两方的立场。\n"
+    "要求：题目必须和群友说过的话有关；两方立场必须互相矛盾，不能是同一意思的两种说法；"
+    "每条不超过 30 字；不要解释，不要加引号。\n"
+    '只输出 JSON：{{"topic": "辩题", "group_side": "群友立场", '
+    '"bot_side": "馒头立场"}}'
 )
 REPLY_PROMPT = (
-    "你正在和群友斗嘴。题目：{topic}\n"
+    "你正在和群友打一场一对一的正反辩论，你是馒头。\n"
+    "辩题：{topic}\n"
+    "你的立场（馒头）：{bot_side}\n"
+    "对方的立场（群友）：{group_side}\n\n"
     "已经发生的对话：\n{transcript}\n\n"
-    "请只输出馒头接下来的一句回嘴，不超过 60 字，不要解释，不要加引号。"
+    "规则：\n"
+    "1. 你的立场从头到尾不能变，不能中立、不能改口、不能替对方说话。\n"
+    "2. 每一句都要先戳破对方上一句的具体说法，再用理由、例子、类比或反问把话拉回你的立场。\n"
+    "3. 禁止说「你说得对」「有道理」「我同意」「我服了」「确实」这类认输或附和的话，"
+    "也禁止只反问不表态。\n"
+    "4. 不要重复你已经说过的理由，每一回合都要换一个新的攻击点。\n"
+    "5. 可以损、可以阴阳、可以夸张，但必须是在为自己的立场辩护。\n\n"
+    "只输出馒头接下来的一句回嘴，不超过 60 字，不要解释，不要加引号。"
+)
+REPLY_RETRY_NOTE = (
+    "\n\n注意：你刚才那句是在附和对面的观点，等于放弃了自己的立场。"
+    "重写一句：立场不变，直接反驳对方上一句的具体说法，不要认输，不要附和。"
+)
+_CONCESSION = re.compile(
+    r"你说得(对|没错)|你说得有道理|你说服我了|我(同意|认输|错了)|"
+    r"确实是我(错|输)|是我(错|输)了|我服了"
 )
 JUDGE_PROMPT = (
     "你是一个完全中立的斗嘴裁判，不代表 A 或 B。\n"
-    "题目：{topic}\n\n{transcript}\n\n"
-    "请只根据对话表现评分（0-10 分）：切题、机智、是否接住对方上一句、"
-    "是否重复或跑题。\n"
-    "不要因为某一方更长或更像机器人就偏袒。\n"
+    "辩题：{topic}\n"
+    "A 的立场：{a_side}\n"
+    "B 的立场：{b_side}\n\n"
+    "{transcript}\n\n"
+    "只看辩论表现评分（0-10 分）：\n"
+    "- 立场一致性：有没有始终为自己那一方辩护，有没有反过来赞同对方、改口或中立；\n"
+    "- 反驳质量：有没有正面拆掉对方上一句的具体说法；\n"
+    "- 论据与机智：理由、例子、类比、反问是否有说服力；\n"
+    "- 切题：有没有跑题或重复自己。\n"
+    "不要评判哪一方的立场更正确，也不要因为某一方更长或更像机器人就偏袒。\n"
+    "reason 要指出决定胜负的具体回合和原因，说明谁在哪一句守住了或丢了立场。\n"
     '只输出 JSON：{{"a_score": 0, "b_score": 0, "winner": "A", '
     '"reason": "一句话说明胜负原因"}}\n'
 )
@@ -137,6 +166,13 @@ class BickerJudgement:
     bot_score: int | None = None
 
 
+@dataclass(frozen=True)
+class BickerTopic:
+    topic: str
+    group_side: str
+    bot_side: str
+
+
 @dataclass
 class PendingBicker:
     group_id: str
@@ -144,12 +180,15 @@ class PendingBicker:
     trigger_name: str
     topic: str
     send: Send
+    group_side: str = ""
+    bot_side: str = ""
     phase: str = "preparing"
     bets: dict[str, BickerBet] = field(default_factory=dict)
     transcript: list[tuple[str, str]] = field(default_factory=list)
     round: int = 0
     accepting: bool = True
     awaiting_reply: bool = False
+    last_message_id: int | None = None
     bet_task: asyncio.Task | None = None
     round_task: asyncio.Task | None = None
 
@@ -160,6 +199,44 @@ def _first_line(text: str) -> str:
         if cleaned:
             return cleaned[:BICKER_MAX_LINE]
     return ""
+
+
+def _clip(text: str, limit: int) -> str:
+    return text.strip().strip("“”\"'").strip()[:limit]
+
+
+def _fallback_stances(topic: str) -> tuple[str, str]:
+    return f"支持「{topic}」", f"反对「{topic}」"
+
+
+def parse_topic(reply: str) -> BickerTopic | None:
+    start = reply.find("{")
+    end = reply.rfind("}")
+    if start != -1 and end > start:
+        try:
+            payload: Any = json.loads(reply[start : end + 1])
+        except (TypeError, ValueError):
+            payload = None
+        if isinstance(payload, dict):
+            topic = _first_line(str(payload.get("topic") or ""))
+            group_side = _clip(
+                str(payload.get("group_side") or ""), BICKER_MAX_STANCE
+            )
+            bot_side = _clip(str(payload.get("bot_side") or ""), BICKER_MAX_STANCE)
+            if not topic:
+                return None
+            if not group_side or not bot_side or group_side == bot_side:
+                group_side, bot_side = _fallback_stances(topic)
+            return BickerTopic(topic, group_side, bot_side)
+    topic = _first_line(reply)
+    if not topic:
+        return None
+    group_side, bot_side = _fallback_stances(topic)
+    return BickerTopic(topic, group_side, bot_side)
+
+
+def _concedes(line: str) -> bool:
+    return bool(_CONCESSION.search(line))
 
 
 def format_transcript(transcript: list[tuple[str, str]]) -> str:
@@ -244,10 +321,12 @@ class BickerCoordinator:
             self.pending.pop(key, None)
             return False
         topic = await self._generate_topic(key, recent)
-        if not topic:
+        if topic is None:
             self.pending.pop(key, None)
             return False
-        pending.topic = topic
+        pending.topic = topic.topic
+        pending.group_side = topic.group_side
+        pending.bot_side = topic.bot_side
         pending.phase = "betting"
         try:
             await send(self.opening_message(pending))
@@ -260,7 +339,7 @@ class BickerCoordinator:
 
     async def _generate_topic(
         self, group_id: str, recent: list[tuple[str, str]]
-    ) -> str | None:
+    ) -> BickerTopic | None:
         lines = "\n".join(f"{name}: {text}" for name, text in recent[:30])
         try:
             reply = await self.memory.complete(
@@ -269,7 +348,7 @@ class BickerCoordinator:
         except Exception:
             logger.exception("[mantou-affection] 生成斗嘴题目失败")
             return None
-        return _first_line(reply) or None
+        return parse_topic(reply)
 
     def opening_message(self, pending: PendingBicker) -> Message:
         options = "\n".join(
@@ -279,6 +358,8 @@ class BickerCoordinator:
         text = (
             f" {BICKER_PREFIX}\n"
             f"题目：{pending.topic}\n"
+            f"群友立场：{pending.group_side}\n"
+            f"馒头立场：{pending.bot_side}\n"
             f"{int(self.bet_window)} 秒内可以押注，回复编号，每人一次：\n"
             f"{options}\n"
             "好感不足所选点数不能押；当事人不能押注；没人押注也照常斗嘴。"
@@ -368,6 +449,8 @@ class BickerCoordinator:
                 MessageSegment.at(pending.trigger_id)
                 + MessageSegment.text(
                     f" 题目：{pending.topic}\n"
+                    f"你的立场：{pending.group_side}\n"
+                    f"我的立场：{pending.bot_side}\n"
                     f"来，说说你的看法。请在 {int(self.round_timeout)} 秒内回嘴。"
                 )
             )
@@ -403,7 +486,12 @@ class BickerCoordinator:
         )
 
     async def handle_debate(
-        self, group_id: str, user_id: str, text: str
+        self,
+        group_id: str,
+        user_id: str,
+        text: str,
+        *,
+        message_id: str | int | None = None,
     ) -> bool:
         if not self.is_debater_turn(group_id, user_id):
             return False
@@ -414,6 +502,11 @@ class BickerCoordinator:
         pending.awaiting_reply = True
         if pending.round_task is not None:
             pending.round_task.cancel()
+        if message_id is not None:
+            try:
+                pending.last_message_id = int(message_id)
+            except (TypeError, ValueError):
+                pending.last_message_id = None
         pending.transcript.append(("群友", line))
         pending.round += 1
         try:
@@ -423,8 +516,12 @@ class BickerCoordinator:
             await self._cancel(pending)
             return True
         pending.transcript.append(("馒头", reply))
+        segments: list[MessageSegment] = []
+        if pending.last_message_id is not None:
+            segments.append(MessageSegment.reply(pending.last_message_id))
+        segments.append(MessageSegment.text(f" {reply}"))
         try:
-            await pending.send(Message(MessageSegment.text(f" {reply}")))
+            await pending.send(Message(segments))
         except Exception:
             logger.exception("[mantou-affection] 发送斗嘴回应失败")
         if pending.round >= BICKER_ROUNDS:
@@ -442,6 +539,8 @@ class BickerCoordinator:
     async def _generate_reply(self, pending: PendingBicker) -> str:
         prompt = REPLY_PROMPT.format(
             topic=pending.topic,
+            group_side=pending.group_side,
+            bot_side=pending.bot_side,
             transcript=format_transcript(pending.transcript),
         )
         reply = await self.memory.complete(
@@ -450,6 +549,20 @@ class BickerCoordinator:
         line = _first_line(reply)
         if not line:
             raise GroupMemoryUnavailable("斗嘴回应为空")
+        if not _concedes(line):
+            return line
+        try:
+            retry = await self.memory.complete(
+                pending.group_id,
+                prompt + REPLY_RETRY_NOTE,
+                timeout=self.model_timeout,
+            )
+        except Exception:
+            logger.exception("[mantou-affection] 重写斗嘴回应失败")
+            return line
+        retry_line = _first_line(retry)
+        if retry_line and not _concedes(retry_line):
+            return retry_line
         return line
 
     async def _finish(
@@ -486,8 +599,11 @@ class BickerCoordinator:
 
     async def _judge(self, pending: PendingBicker) -> BickerJudgement | None:
         group_is_a = self.rng.random() < 0.5
+        a_side, b_side = self._stance_pair(pending, group_is_a)
         prompt = JUDGE_PROMPT.format(
             topic=pending.topic,
+            a_side=a_side,
+            b_side=b_side,
             transcript=self._anonymized_transcript(
                 pending.transcript, group_is_a
             ),
@@ -496,6 +612,12 @@ class BickerCoordinator:
             pending.group_id, prompt, timeout=self.model_timeout
         )
         return self._parse_judgement(reply, group_is_a)
+
+    @staticmethod
+    def _stance_pair(pending: PendingBicker, group_is_a: bool) -> tuple[str, str]:
+        if group_is_a:
+            return pending.group_side, pending.bot_side
+        return pending.bot_side, pending.group_side
 
     @staticmethod
     def _anonymized_transcript(

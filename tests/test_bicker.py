@@ -12,6 +12,7 @@ from nonebot_plugin_mantou_affection.bicker import (
     BickerCoordinator,
     GroupMemoryAdapter,
     GroupMemoryUnavailable,
+    parse_topic,
 )
 from nonebot_plugin_mantou_affection.config import Config
 from nonebot_plugin_mantou_affection.service import AffectionService
@@ -599,3 +600,140 @@ async def test_judge_maps_anonymized_winner_back_to_bot(tmp_path: Path) -> None:
     assert "馒头赢" in body
     assert "馒头更有梗" in body
     assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == 45
+
+
+TOPIC_JSON = (
+    '{"topic": "早睡到底算不算自律", "group_side": "早睡都是假的", '
+    '"bot_side": "早睡才是真自律"}'
+)
+
+
+def test_parse_topic_reads_opposing_stances() -> None:
+    parsed = parse_topic(TOPIC_JSON)
+    assert parsed is not None
+    assert parsed.topic == "早睡到底算不算自律"
+    assert parsed.group_side == "早睡都是假的"
+    assert parsed.bot_side == "早睡才是真自律"
+
+
+def test_parse_topic_falls_back_to_opposing_stances() -> None:
+    parsed = parse_topic("凌晨三点睡到底健不健康")
+    assert parsed is not None
+    assert parsed.topic == "凌晨三点睡到底健不健康"
+    assert parsed.group_side == "支持「凌晨三点睡到底健不健康」"
+    assert parsed.bot_side == "反对「凌晨三点睡到底健不健康」"
+
+
+def test_parse_topic_rejects_identical_stances() -> None:
+    parsed = parse_topic(
+        '{"topic": "早睡算不算自律", "group_side": "算自律", "bot_side": "算自律"}'
+    )
+    assert parsed is not None
+    assert parsed.group_side == "支持「早睡算不算自律」"
+    assert parsed.bot_side == "反对「早睡算不算自律」"
+
+
+async def test_start_posts_both_stances(tmp_path: Path) -> None:
+    coordinator, _ = _coordinator(tmp_path, FakeMemory([TOPIC_JSON]))
+    pending, sent = await _start(coordinator)
+    body = sent[0].extract_plain_text()
+    assert "群友立场：早睡都是假的" in body
+    assert "馒头立场：早睡才是真自律" in body
+    assert pending.group_side == "早睡都是假的"
+    assert pending.bot_side == "早睡才是真自律"
+    pending.bet_task.cancel()
+
+
+async def test_debate_opening_states_both_stances(tmp_path: Path) -> None:
+    coordinator, service = _coordinator(tmp_path, FakeMemory([TOPIC_JSON, "回1"]))
+    await give(service, TRIGGER_ID, 50)
+    pending, sent = await _start(coordinator)
+    await asyncio.wait_for(pending.bet_task, 2)
+
+    body = sent[-1].extract_plain_text()
+    assert "你的立场：早睡都是假的" in body
+    assert "我的立场：早睡才是真自律" in body
+    pending.round_task.cancel()
+
+
+async def test_reply_prompt_holds_bot_stance(tmp_path: Path) -> None:
+    memory = FakeMemory([TOPIC_JSON, "回1"])
+    coordinator, service = _coordinator(tmp_path, memory)
+    await give(service, TRIGGER_ID, 50)
+    pending, _sent = await _start(coordinator)
+    await asyncio.wait_for(pending.bet_task, 2)
+    await coordinator.handle_debate(GROUP_ID, TRIGGER_ID, "早睡根本不现实")
+
+    prompt = memory.calls[-1]
+    assert "你的立场（馒头）：早睡才是真自律" in prompt
+    assert "对方的立场（群友）：早睡都是假的" in prompt
+    assert "立场从头到尾不能变" in prompt
+    pending.round_task.cancel()
+
+
+async def test_concession_reply_is_regenerated(tmp_path: Path) -> None:
+    memory = FakeMemory(
+        [TOPIC_JSON, "你说得对，我服了", "我可不认，你先把证据拿出来"]
+    )
+    coordinator, service = _coordinator(tmp_path, memory)
+    await give(service, TRIGGER_ID, 50)
+    pending, _sent = await _start(coordinator)
+    await asyncio.wait_for(pending.bet_task, 2)
+    await coordinator.handle_debate(GROUP_ID, TRIGGER_ID, "早睡根本不现实")
+
+    assert [line for role, line in pending.transcript if role == "馒头"] == [
+        "我可不认，你先把证据拿出来"
+    ]
+    assert len(memory.calls) == 3
+    assert "放弃了自己的立场" in memory.calls[-1]
+    pending.round_task.cancel()
+
+
+async def test_judge_prompt_scores_stance_consistency(tmp_path: Path) -> None:
+    judge = '{"a_score": 7, "b_score": 6, "winner": "A", "reason": "A 守住了立场"}'
+    memory = FakeMemory([TOPIC_JSON, "回1", "回2", "回3", "回4", "回5", judge])
+    coordinator, service = _coordinator(tmp_path, memory, rng=FixedRng(0.0))
+    await give(service, TRIGGER_ID, 50)
+    pending, _sent = await _start(coordinator)
+    await asyncio.wait_for(pending.bet_task, 2)
+    for index in range(1, 6):
+        await coordinator.handle_debate(GROUP_ID, TRIGGER_ID, f"我说{index}")
+
+    prompt = memory.calls[-1]
+    assert "A 的立场：早睡都是假的" in prompt
+    assert "B 的立场：早睡才是真自律" in prompt
+    assert "立场一致性" in prompt
+
+
+async def test_debate_reply_quotes_the_group_message(tmp_path: Path) -> None:
+    memory = FakeMemory([TOPIC_JSON, "回1"])
+    coordinator, service = _coordinator(tmp_path, memory)
+    await give(service, TRIGGER_ID, 50)
+    pending, sent = await _start(coordinator)
+    await asyncio.wait_for(pending.bet_task, 2)
+    sent.clear()
+
+    await coordinator.handle_debate(
+        GROUP_ID, TRIGGER_ID, "早睡根本不现实", message_id=4321
+    )
+
+    quoted = [message for message in sent if message[0].type == "reply"]
+    assert len(quoted) == 1
+    assert quoted[0][0].data["id"] == "4321"
+    assert "回1" in quoted[0].extract_plain_text()
+    pending.round_task.cancel()
+
+
+async def test_debate_reply_is_plain_without_message_id(tmp_path: Path) -> None:
+    memory = FakeMemory([TOPIC_JSON, "回1"])
+    coordinator, service = _coordinator(tmp_path, memory)
+    await give(service, TRIGGER_ID, 50)
+    pending, sent = await _start(coordinator)
+    await asyncio.wait_for(pending.bet_task, 2)
+    sent.clear()
+
+    await coordinator.handle_debate(GROUP_ID, TRIGGER_ID, "早睡根本不现实")
+
+    assert sent[0][0].type == "text"
+    assert "回1" in sent[0].extract_plain_text()
+    pending.round_task.cancel()

@@ -1393,4 +1393,6 @@ async def test_ambient_routes_debate_line_before_other_activities(
         ("群友", "我偏要凌晨三点睡"),
         ("馒头", "馒头的回应"),
     ]
+    assert sent[0][0].type == "reply"
+    assert sent[0][0].data["id"] == "1"
     assert "馒头的回应" in sent[0].extract_plain_text()

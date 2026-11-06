@@ -601,7 +601,10 @@ def register_ambient(
         if bicker is not None and bicker.is_debater_turn(group_id, user_id):
             try:
                 await bicker.handle_debate(
-                    group_id, user_id, event.message.extract_plain_text()
+                    group_id,
+                    user_id,
+                    event.message.extract_plain_text(),
+                    message_id=event.message_id,
                 )
             except Exception:
                 logger.exception("[mantou-affection] 处理斗嘴回嘴失败")
