@@ -8,6 +8,7 @@ import sys
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from nonebot import get_plugin, logger
@@ -26,6 +27,8 @@ FLATTER_VIOLATION_DELTA = -6
 FLATTER_MAX_SCORE = 100
 FLATTER_LAZY_CAP = 20
 FLATTER_OFFTOPIC_CAP = 30
+
+BUNDLED_THEMES_PATH = Path(__file__).parent / "resources" / "flatter_themes.json"
 
 FLATTER_THEMES = (
     "夸桃神的游戏技术",
@@ -73,6 +76,43 @@ Send = Callable[[Message | str], Awaitable[object]]
 
 class GroupMemoryUnavailable(RuntimeError):
     """群聊记忆插件未加载、未配置模型，或模型没有返回可用内容。"""
+
+
+class FlatterThemeLibrary:
+    """献媚主题池：优先读打包的 JSON，读取失败或为空时退回内置的 12 个。"""
+
+    def __init__(self, path: Path | None = None):
+        self._themes: list[str] = list(FLATTER_THEMES)
+        if path is not None:
+            self._load(path)
+
+    def _load(self, path: Path) -> None:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            logger.warning("[mantou-affection] 读取献媚主题失败，使用内置主题")
+            return
+        themes = payload.get("themes") if isinstance(payload, dict) else None
+        if not isinstance(themes, list):
+            return
+        loaded: list[str] = []
+        seen: set[str] = set()
+        for item in themes:
+            if not isinstance(item, str):
+                continue
+            text = item.strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            loaded.append(text)
+        if loaded:
+            self._themes = loaded
+
+    def pick(self, rng: random.Random) -> str:
+        return rng.choice(self._themes)
+
+    def __len__(self) -> int:
+        return len(self._themes)
 
 
 @dataclass
@@ -261,6 +301,7 @@ class FlatterCoordinator:
         *,
         events: Any | None = None,
         rng: random.Random | None = None,
+        themes: FlatterThemeLibrary | None = None,
         model_timeout: float = FLATTER_MODEL_TIMEOUT,
     ):
         self.service = service
@@ -268,6 +309,7 @@ class FlatterCoordinator:
         self.memory = memory or GroupMemoryAdapter()
         self.events = events
         self.rng = rng or random.Random()
+        self.themes = themes or FlatterThemeLibrary(BUNDLED_THEMES_PATH)
         self.model_timeout = model_timeout
         self.window = float(config.mantou_affection_bicker_bet_window)
         self.pending: dict[str, PendingFlatter] = {}
@@ -288,7 +330,7 @@ class FlatterCoordinator:
             return False
         pending = PendingFlatter(
             group_id=key,
-            theme=self.rng.choice(FLATTER_THEMES),
+            theme=self.themes.pick(self.rng),
             send=send,
         )
         self.pending[key] = pending

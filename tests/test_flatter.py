@@ -8,8 +8,10 @@ from nonebot.adapters.onebot.v11 import Message
 
 from nonebot_plugin_mantou_affection.config import Config
 from nonebot_plugin_mantou_affection.flatter import (
+    BUNDLED_THEMES_PATH,
     FlatterCoordinator,
     FlatterEntry,
+    FlatterThemeLibrary,
     GroupMemoryUnavailable,
     apply_flag_cap,
     parse_scores,
@@ -76,6 +78,43 @@ def scores_json(*items: tuple[int, int, str, str]) -> str:
         for index, score, flag, reason in items
     )
     return '{"scores": [' + parts + "]}"
+
+
+def test_theme_library_loads_bundled_pool() -> None:
+    library = FlatterThemeLibrary(BUNDLED_THEMES_PATH)
+    assert len(library) == 1000
+    themes = library._themes
+    assert len(set(themes)) == 1000
+    assert all(theme.strip() for theme in themes)
+
+
+def test_theme_library_falls_back_on_bad_file(tmp_path: Path) -> None:
+    broken = tmp_path / "broken.json"
+    broken.write_text("not json", encoding="utf-8")
+    library = FlatterThemeLibrary(broken)
+    assert len(library) == 12
+
+
+def test_theme_library_dedupes_and_skips_bad_entries(tmp_path: Path) -> None:
+    path = tmp_path / "themes.json"
+    path.write_text(
+        '{"themes": ["夸桃神", "夸桃神", "", 3, "  夸桃神的歌喉  "]}',
+        encoding="utf-8",
+    )
+    library = FlatterThemeLibrary(path)
+    assert len(library) == 2
+    assert library._themes == ["夸桃神", "夸桃神的歌喉"]
+
+
+async def test_start_uses_injected_theme_library(tmp_path: Path) -> None:
+    path = tmp_path / "themes.json"
+    path.write_text('{"themes": ["只用这一条主题"]}', encoding="utf-8")
+    coordinator, _ = _coordinator(tmp_path, FakeMemory([]))
+    coordinator.themes = FlatterThemeLibrary(path)
+    pending, sent = await _start(coordinator)
+
+    assert "主题：只用这一条主题" in sent[0].extract_plain_text()
+    pending.task.cancel()
 
 
 def test_rank_delta_table() -> None:
