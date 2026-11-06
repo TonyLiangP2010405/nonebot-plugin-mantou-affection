@@ -11,11 +11,11 @@ from nonebot.message import event_preprocessor
 from nonebot.typing import T_State
 
 from .bet import BUNDLED_ROUNDS_PATH, BetCoordinator, BetLibrary
-from .bicker import BickerCoordinator
 from .commands import GROUP_ONLY
 from .config import Config
 from .events import Event, EventLibrary, EventOption
 from .findchar import BUNDLED_PUZZLES_PATH, FindCharCoordinator, FindCharLibrary
+from .flatter import FlatterCoordinator
 from .group_quiz import BUNDLED_GROUP_QUIZ_PATH, GroupQuizCoordinator
 from .logic import (
     NEWBIE_PROTECTION_NOTE,
@@ -125,7 +125,7 @@ class EventCoordinator:
         pk: PkCoordinator | None = None,
         wheel: WheelCoordinator | None = None,
         group_quiz: GroupQuizCoordinator | None = None,
-        bicker: BickerCoordinator | None = None,
+        flatter: FlatterCoordinator | None = None,
     ):
         self.service = service
         self.config = config
@@ -137,7 +137,7 @@ class EventCoordinator:
         self.pk = pk
         self.wheel = wheel
         self.group_quiz = group_quiz
-        self.bicker = bicker
+        self.flatter = flatter
         self.pending: dict[str, PendingEvent] = {}
 
     def attach_find_char(self, findchar: FindCharCoordinator) -> None:
@@ -163,13 +163,13 @@ class EventCoordinator:
 
         self.group_quiz = group_quiz
 
-    def attach_bicker(self, bicker: BickerCoordinator) -> None:
-        """接入馒头斗嘴，让它和其余活动共用同一个群的席位。"""
+    def attach_flatter(self, flatter: FlatterCoordinator) -> None:
+        """接入献媚桃神，让它和其余活动共用同一个群的席位。"""
 
-        self.bicker = bicker
+        self.flatter = flatter
 
     def busy(self, group_id: str) -> bool:
-        """本群是否已经有待结算的活动：随机事件、找字、博弈、问答、群友问答、转盘或斗嘴。"""
+        """本群是否已经有待结算的活动：随机事件、找字、博弈、问答、群友问答、转盘或献媚。"""
 
         key = str(group_id)
         if key in self.pending:
@@ -182,7 +182,7 @@ class EventCoordinator:
                 self.pk,
                 self.group_quiz,
                 self.wheel,
-                self.bicker,
+                self.flatter,
             )
         )
 
@@ -502,21 +502,21 @@ def register_ambient(
     pk: PkCoordinator | None = None,
     wheel: WheelCoordinator | None = None,
     group_quiz: GroupQuizCoordinator | None = None,
-    bicker: BickerCoordinator | None = None,
+    flatter: FlatterCoordinator | None = None,
 ) -> tuple:
-    """群友发言时按概率触发找字、博弈、随机问答、群友问答、命运齿轮转盘、馒头斗嘴或馒头小动作。
+    """群友发言时按概率触发找字、博弈、随机问答、群友问答、命运齿轮转盘、献媚桃神或馒头小动作。
 
     找字和博弈保留各自的好感度门槛；随机问答和群友问答不看榜单或好感度，分别默认每次
     群消息有 1%、0.05% 概率给当前发言者出一道题。命运齿轮转盘只看好感大于 0 和它自己的
-    独立概率，不参与小动作的抽签；馒头斗嘴从群聊记忆出题，押注截止后打 3 个回合。几种
+    独立概率，不参与小动作的抽签；献媚桃神让群友给桃神写一句献媚，截止后由模型统一打分。几种
     活动互斥，不会在同一条消息上同时触发；所有数字答案都走这里的答案路由，
     「参与 / 运作 / 不运作」也由同一个 answer matcher 转给转盘。事件预处理器只给博弈
     记录最近发言表。
     """
 
     coordinator = events or EventCoordinator(service, config)
-    if bicker is not None:
-        coordinator.attach_bicker(bicker)
+    if flatter is not None:
+        coordinator.attach_flatter(flatter)
     find_char = findchar or FindCharCoordinator(
         service,
         config,
@@ -575,7 +575,7 @@ def register_ambient(
             text = event.message.extract_plain_text()
             if await wheel_coordinator.answer(group_id, user_id, name, text):
                 return
-            if bicker is not None and await bicker.answer(
+            if flatter is not None and await flatter.answer(
                 group_id, user_id, name, text
             ):
                 return
@@ -597,18 +597,6 @@ def register_ambient(
         user_id = str(event.user_id)
         nickname = _sender_name(event)
         bet_coordinator.note_message(group_id, user_id, nickname)
-
-        if bicker is not None and bicker.is_debater_turn(group_id, user_id):
-            try:
-                await bicker.handle_debate(
-                    group_id,
-                    user_id,
-                    event.message.extract_plain_text(),
-                    message_id=event.message_id,
-                )
-            except Exception:
-                logger.exception("[mantou-affection] 处理斗嘴回嘴失败")
-            return
 
         try:
             find_char_ready = await service.find_char_triggered(group_id, user_id)
@@ -724,20 +712,18 @@ def register_ambient(
                 return
 
         try:
-            bicker_ready = await service.bicker_triggered()
+            flatter_ready = await service.flatter_triggered()
         except Exception:
-            logger.exception("[mantou-affection] 判定馒头斗嘴失败")
-            bicker_ready = False
-        if bicker is not None and bicker_ready:
+            logger.exception("[mantou-affection] 判定献媚桃神失败")
+            flatter_ready = False
+        if flatter is not None and flatter_ready:
             try:
-                started = await bicker.start(
+                started = await flatter.start(
                     group_id=group_id,
-                    user_id=user_id,
-                    nickname=nickname,
                     send=ambient.send,
                 )
             except Exception:
-                logger.exception("[mantou-affection] 发起馒头斗嘴失败")
+                logger.exception("[mantou-affection] 发起献媚桃神失败")
                 started = False
             if started:
                 return

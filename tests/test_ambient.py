@@ -18,13 +18,13 @@ from nonebot_plugin_mantou_affection.ambient import (
     PendingEvent,
     register_ambient,
 )
-from nonebot_plugin_mantou_affection.bicker import (
-    BickerCoordinator,
-    GroupMemoryUnavailable,
-)
 from nonebot_plugin_mantou_affection.config import Config
 from nonebot_plugin_mantou_affection.copywriting import AffectionTextLibrary
 from nonebot_plugin_mantou_affection.events import EventLibrary
+from nonebot_plugin_mantou_affection.flatter import (
+    FlatterCoordinator,
+    GroupMemoryUnavailable,
+)
 from nonebot_plugin_mantou_affection.logic import UPSET_EVENT_RATIOS, snapshot_for
 from nonebot_plugin_mantou_affection.models import Profile
 from nonebot_plugin_mantou_affection.service import AffectionService
@@ -1333,7 +1333,7 @@ async def test_normal_event_message_still_lists_three_options(
     assert "4." not in message
 
 
-async def test_ambient_starts_bicker_when_probability_hits(
+async def test_ambient_starts_flatter_when_probability_hits(
     tmp_path: Path, monkeypatch
 ) -> None:
     config = Config(
@@ -1348,19 +1348,18 @@ async def test_ambient_starts_bicker_when_probability_hits(
     )
     service = _service(tmp_path, config=config)
     events = EventCoordinator(service, config)
-    memory = FakeMemory(["凌晨三点睡到底健不健康"])
-    bicker = BickerCoordinator(service, config, memory, events=events)
-    ambient, _ = register_ambient(service, config, events, bicker=bicker)
+    flatter = FlatterCoordinator(service, config, FakeMemory([]), events=events)
+    ambient, _ = register_ambient(service, config, events, flatter=flatter)
     sent = _capture_send(ambient, monkeypatch)
 
     await ambient.handlers[0].call(_event())
 
-    assert "馒头斗嘴" in sent[-1].extract_plain_text()
-    assert GROUP_ID in bicker.pending
-    bicker.pending[GROUP_ID].bet_task.cancel()
+    assert "献媚桃神" in sent[-1].extract_plain_text()
+    assert GROUP_ID in flatter.pending
+    flatter.pending[GROUP_ID].task.cancel()
 
 
-async def test_ambient_routes_debate_line_before_other_activities(
+async def test_ambient_routes_flatter_entry_before_other_activities(
     tmp_path: Path, monkeypatch
 ) -> None:
     config = Config(
@@ -1374,25 +1373,18 @@ async def test_ambient_routes_debate_line_before_other_activities(
     )
     service = _service(tmp_path, config=config)
     events = EventCoordinator(service, config)
-    memory = FakeMemory(["题目", "馒头的回应"])
-    bicker = BickerCoordinator(service, config, memory, events=events)
-    bicker.bet_window = 0.01
-    ambient, _ = register_ambient(service, config, events, bicker=bicker)
+    flatter = FlatterCoordinator(service, config, FakeMemory([]), events=events)
+    ambient, answer = register_ambient(service, config, events, flatter=flatter)
     sent = _capture_send(ambient, monkeypatch)
 
-    await bicker.start(
-        group_id=GROUP_ID, user_id=TRIGGER_ID, nickname="桃友", send=ambient.send
-    )
-    pending = bicker.pending[GROUP_ID]
-    await asyncio.wait_for(pending.bet_task, 2)
+    await flatter.start(group_id=GROUP_ID, send=ambient.send)
+    pending = flatter.pending[GROUP_ID]
     sent.clear()
 
-    await ambient.handlers[0].call(_event(text="我偏要凌晨三点睡", user_id=TRIGGER_ID))
+    await answer.handlers[0].call(
+        _event(text="桃神七点开播从不迟到", user_id=TRIGGER_ID)
+    )
 
-    assert pending.transcript == [
-        ("群友", "我偏要凌晨三点睡"),
-        ("馒头", "馒头的回应"),
-    ]
-    assert sent[0][0].type == "reply"
-    assert sent[0][0].data["id"] == "1"
-    assert "馒头的回应" in sent[0].extract_plain_text()
+    assert pending.entries[TRIGGER_ID].text == "桃神七点开播从不迟到"
+    assert "献媚已收下" in sent[-1].extract_plain_text()
+    pending.task.cancel()

@@ -65,7 +65,7 @@ def test_wheel_defaults() -> None:
     assert config.mantou_affection_wheel_timeout == 60
 
 
-def test_bicker_defaults() -> None:
+def test_flatter_defaults() -> None:
     config = Config()
     assert config.mantou_affection_bicker_chance == 0.0005
     assert config.mantou_affection_bicker_bet_window == 60
@@ -129,7 +129,7 @@ def test_registered_matchers_include_probability_command() -> None:
         wheel_cmd,
         group_quiz_cmd,
         meme_whitelist_cmd,
-        bicker_cmd,
+        flatter_cmd,
     ) = matchers
     assert probability_cmd.priority == 10
     assert probability_cmd.block is True
@@ -152,7 +152,7 @@ def test_registered_matchers_include_probability_command() -> None:
         wheel_cmd: "handle_wheel_probability",
         group_quiz_cmd: "handle_group_quiz_probability",
         meme_whitelist_cmd: "handle_meme_whitelist",
-        bicker_cmd: "handle_bicker_probability",
+        flatter_cmd: "handle_flatter_probability",
     }
     for matcher, handler_name in expected_handlers.items():
         assert matcher.priority == 10
@@ -261,24 +261,24 @@ async def test_wheel_probability_command_query_and_set(tmp_path: Path, monkeypat
     assert await service.wheel_probability() == 0.002
 
 
-async def test_bicker_probability_command_query_and_set(tmp_path: Path, monkeypatch) -> None:
+async def test_flatter_probability_command_query_and_set(tmp_path: Path, monkeypatch) -> None:
     service = AffectionService(AffectionStore(tmp_path / "affection.json"), Config())
-    bicker_cmd = register_commands(service, Config())[14]
+    flatter_cmd = register_commands(service, Config())[14]
     sent = []
 
     async def fake_finish(message: Message | str = "", **kwargs) -> None:
         sent.append(str(message))
 
-    monkeypatch.setattr(bicker_cmd, "finish", fake_finish)
-    handler = bicker_cmd.handlers[0]
+    monkeypatch.setattr(flatter_cmd, "finish", fake_finish)
+    handler = flatter_cmd.handlers[0]
     await handler.call(Message(""))
-    assert "当前馒头斗嘴概率：0.05%" in sent[-1]
+    assert "当前献媚桃神概率：0.05%" in sent[-1]
     await handler.call(Message("0.2%"))
     assert "已调整为 0.2%" in sent[-1]
-    assert await service.bicker_probability() == 0.002
+    assert await service.flatter_probability() == 0.002
     await handler.call(Message("not-a-probability"))
     assert "请输入 0~1" in sent[-1]
-    assert await service.bicker_probability() == 0.002
+    assert await service.flatter_probability() == 0.002
 
 
 def _meme_whitelist_handler(tmp_path: Path, monkeypatch) -> tuple:
