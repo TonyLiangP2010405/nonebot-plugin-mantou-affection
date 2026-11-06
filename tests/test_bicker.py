@@ -46,6 +46,15 @@ class FakeMemory:
         return self.responses.pop(0)
 
 
+class FixedRng(random.Random):
+    def __init__(self, value: float):
+        super().__init__(0)
+        self.value = value
+
+    def random(self) -> float:
+        return self.value
+
+
 def _coordinator(tmp_path: Path, memory, *, config=None, rng=None, events=None):
     config = config or Config(mantou_affection_newbie_protection_below=0)
     service = AffectionService(
@@ -533,3 +542,60 @@ async def test_pool_zero_returns_principal_only(tmp_path: Path) -> None:
 
     assert (await service.profile(GROUP_ID, OTHER_ID)).affection == 50
     assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == 53
+
+
+async def test_proportional_payout_rewards_larger_stake(tmp_path: Path) -> None:
+    memory = FakeMemory(["题目", "回1", "回2", "回3", "回4", "回5", "群友赢"])
+    coordinator, service = _coordinator(tmp_path, memory)
+    await give(service, TRIGGER_ID, 50)
+    await give(service, OTHER_ID, 50)
+    await give(service, "93004", 50)
+    await give(service, "93005", 50)
+    pending, _sent = await _start(coordinator)
+    await coordinator.answer(GROUP_ID, OTHER_ID, "甲", "3")  # 赢 5
+    await coordinator.answer(GROUP_ID, "93004", "乙", "1")  # 赢 1
+    await coordinator.answer(GROUP_ID, "93005", "丙", "6")  # 输 5
+    await asyncio.wait_for(pending.bet_task, 2)
+    for index in range(1, 6):
+        await coordinator.handle_debate(GROUP_ID, TRIGGER_ID, f"我说{index}")
+
+    assert (await service.profile(GROUP_ID, OTHER_ID)).affection == 55
+    assert (await service.profile(GROUP_ID, "93004")).affection == 50
+    assert (await service.profile(GROUP_ID, "93005")).affection == 45
+    assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == 53
+
+
+async def test_judge_returns_analysis_and_scores(tmp_path: Path) -> None:
+    judge = (
+        '{"a_score": 8, "b_score": 5, "winner": "A", '
+        '"reason": "A 更切题，B 第 3 回合跑题了"}'
+    )
+    memory = FakeMemory(["题目", "回1", "回2", "回3", "回4", "回5", judge])
+    coordinator, service = _coordinator(tmp_path, memory, rng=FixedRng(0.0))
+    await give(service, TRIGGER_ID, 50)
+    pending, sent = await _start(coordinator)
+    await asyncio.wait_for(pending.bet_task, 2)
+    for index in range(1, 6):
+        await coordinator.handle_debate(GROUP_ID, TRIGGER_ID, f"我说{index}")
+
+    body = sent[-1].extract_plain_text()
+    assert "裁判点评" in body
+    assert "评分：群友 8 / 馒头 5" in body
+    assert "群友更切题" in body
+    assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == 53
+
+
+async def test_judge_maps_anonymized_winner_back_to_bot(tmp_path: Path) -> None:
+    judge = '{"a_score": 9, "b_score": 4, "winner": "A", "reason": "A 更有梗"}'
+    memory = FakeMemory(["题目", "回1", "回2", "回3", "回4", "回5", judge])
+    coordinator, service = _coordinator(tmp_path, memory, rng=FixedRng(0.9))
+    await give(service, TRIGGER_ID, 50)
+    pending, sent = await _start(coordinator)
+    await asyncio.wait_for(pending.bet_task, 2)
+    for index in range(1, 6):
+        await coordinator.handle_debate(GROUP_ID, TRIGGER_ID, f"我说{index}")
+
+    body = sent[-1].extract_plain_text()
+    assert "馒头赢" in body
+    assert "馒头更有梗" in body
+    assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == 45

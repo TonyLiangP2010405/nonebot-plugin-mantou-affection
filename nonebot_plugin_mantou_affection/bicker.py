@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import random
+import re
 import sys
 import time
 from collections.abc import Awaitable, Callable
@@ -41,8 +43,13 @@ REPLY_PROMPT = (
     "请只输出馒头接下来的一句回嘴，不超过 60 字，不要解释，不要加引号。"
 )
 JUDGE_PROMPT = (
-    "下面是馒头和群友的 5 回合斗嘴记录。\n题目：{topic}\n\n{transcript}\n\n"
-    "请判断谁更占上风。只回复「群友赢」或「馒头赢」，不要解释。"
+    "你是一个完全中立的斗嘴裁判，不代表 A 或 B。\n"
+    "题目：{topic}\n\n{transcript}\n\n"
+    "请只根据对话表现评分（0-10 分）：切题、机智、是否接住对方上一句、"
+    "是否重复或跑题。\n"
+    "不要因为某一方更长或更像机器人就偏袒。\n"
+    '只输出 JSON：{{"a_score": 0, "b_score": 0, "winner": "A", '
+    '"reason": "一句话说明胜负原因"}}\n'
 )
 
 Send = Callable[[Message | str], Awaitable[object]]
@@ -122,6 +129,14 @@ class BickerBet:
     placed_at: float
 
 
+@dataclass(frozen=True)
+class BickerJudgement:
+    group_won: bool
+    reason: str
+    group_score: int | None = None
+    bot_score: int | None = None
+
+
 @dataclass
 class PendingBicker:
     group_id: str
@@ -149,6 +164,22 @@ def _first_line(text: str) -> str:
 
 def format_transcript(transcript: list[tuple[str, str]]) -> str:
     return "\n".join(f"{role}: {text}" for role, text in transcript)
+
+
+def _score(value: Any) -> int | None:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return max(0, min(10, number))
+
+
+def _localize_reason(reason: str, group_is_a: bool) -> str:
+    group_label = "群友" if group_is_a else "馒头"
+    bot_label = "馒头" if group_is_a else "群友"
+    reason = re.sub(r"(?<![A-Za-z])A(?![A-Za-z])\s*", group_label, reason)
+    reason = re.sub(r"(?<![A-Za-z])B(?![A-Za-z])\s*", bot_label, reason)
+    return reason[:100]
 
 
 class BickerCoordinator:
@@ -366,7 +397,10 @@ class BickerCoordinator:
             or pending.round != round_index
         ):
             return
-        await self._finish(pending, trigger_won=False)
+        await self._finish(
+            pending,
+            judgement=BickerJudgement(group_won=False, reason="群友超时未回嘴"),
+        )
 
     async def handle_debate(
         self, group_id: str, user_id: str, text: str
@@ -419,7 +453,7 @@ class BickerCoordinator:
         return line
 
     async def _finish(
-        self, pending: PendingBicker, *, trigger_won: bool | None = None
+        self, pending: PendingBicker, *, judgement: BickerJudgement | None = None
     ) -> None:
         if pending.phase != "debating" or not pending.accepting:
             return
@@ -430,38 +464,118 @@ class BickerCoordinator:
             and pending.round_task is not asyncio.current_task()
         ):
             pending.round_task.cancel()
-        if trigger_won is None:
+        if judgement is None:
             try:
-                trigger_won = await self._judge(pending)
+                judgement = await self._judge(pending)
             except Exception:
                 logger.exception("[mantou-affection] 判定斗嘴输赢失败")
                 await self._cancel(pending)
                 return
-        if trigger_won is None:
+        if judgement is None:
             await self._cancel(pending)
             return
         try:
-            await self._settle(pending, trigger_won=trigger_won)
+            await self._settle(
+                pending,
+                trigger_won=judgement.group_won,
+                judgement=judgement,
+            )
         except Exception:
             logger.exception("[mantou-affection] 斗嘴结算失败")
             self.pending.pop(pending.group_id, None)
 
-    async def _judge(self, pending: PendingBicker) -> bool | None:
+    async def _judge(self, pending: PendingBicker) -> BickerJudgement | None:
+        group_is_a = self.rng.random() < 0.5
         prompt = JUDGE_PROMPT.format(
             topic=pending.topic,
-            transcript=format_transcript(pending.transcript),
+            transcript=self._anonymized_transcript(
+                pending.transcript, group_is_a
+            ),
         )
         reply = await self.memory.complete(
             pending.group_id, prompt, timeout=self.model_timeout
         )
-        group_won = "群友赢" in reply
-        bot_won = "馒头赢" in reply
-        if group_won == bot_won:
+        return self._parse_judgement(reply, group_is_a)
+
+    @staticmethod
+    def _anonymized_transcript(
+        transcript: list[tuple[str, str]], group_is_a: bool
+    ) -> str:
+        group_label = "A" if group_is_a else "B"
+        bot_label = "B" if group_is_a else "A"
+        return "\n".join(
+            f"{group_label if role == '群友' else bot_label}: {text}"
+            for role, text in transcript
+        )
+
+    def _parse_judgement(
+        self, reply: str, group_is_a: bool
+    ) -> BickerJudgement | None:
+        payload: Any = None
+        start = reply.find("{")
+        end = reply.rfind("}")
+        if start != -1 and end > start:
+            try:
+                payload = json.loads(reply[start : end + 1])
+            except (TypeError, ValueError):
+                payload = None
+        if isinstance(payload, dict):
+            a_score = _score(payload.get("a_score"))
+            b_score = _score(payload.get("b_score"))
+            group_score = a_score if group_is_a else b_score
+            bot_score = b_score if group_is_a else a_score
+            winner = str(payload.get("winner", "")).strip()
+            reason = _localize_reason(
+                str(payload.get("reason", "")).strip(), group_is_a
+            )
+            if winner.upper() in {"A", "B"}:
+                group_won = (winner.upper() == "A") == group_is_a
+                return BickerJudgement(
+                    group_won,
+                    reason or "裁判没有给出具体理由",
+                    group_score,
+                    bot_score,
+                )
+            if "群友" in winner:
+                return BickerJudgement(
+                    True,
+                    reason or "裁判没有给出具体理由",
+                    group_score,
+                    bot_score,
+                )
+            if "馒头" in winner:
+                return BickerJudgement(
+                    False,
+                    reason or "裁判没有给出具体理由",
+                    group_score,
+                    bot_score,
+                )
+            if a_score is not None and b_score is not None:
+                if a_score == b_score:
+                    group_won = self.rng.random() < 0.5
+                    reason = (reason or "双方评分相同") + "，按平局掷骰判定"
+                    return BickerJudgement(
+                        group_won, reason, group_score, bot_score
+                    )
+                group_won = (a_score > b_score) == group_is_a
+                return BickerJudgement(
+                    group_won,
+                    reason or "裁判没有给出具体理由",
+                    group_score,
+                    bot_score,
+                )
+        group_won_text = "群友赢" in reply
+        bot_won_text = "馒头赢" in reply
+        if group_won_text == bot_won_text:
             return None
-        return group_won
+        return BickerJudgement(group_won_text, "裁判没有给出具体理由")
 
     async def _settle(
-        self, pending: PendingBicker, *, trigger_won: bool
+        self,
+        pending: PendingBicker,
+        *,
+        trigger_won: bool,
+        judgement: BickerJudgement | None = None,
     ) -> None:
         pending.phase = "settled"
         pending.accepting = False
@@ -479,12 +593,28 @@ class BickerCoordinator:
             segments.append(MessageSegment.at(user_id))
             segments.append(MessageSegment.text(f" {line}"))
 
+        def add_text(line: str) -> None:
+            if segments:
+                segments.append(MessageSegment.text("\n"))
+            segments.append(MessageSegment.text(f" {line}"))
+
         result = "群友赢" if trigger_won else "馒头赢"
         add(
             pending.trigger_id,
             f"斗嘴结果：{result}，好感度 {applied:+d}，"
             f"当前 {profile.affection}{note}",
         )
+        if judgement is not None:
+            score_text = ""
+            if (
+                judgement.group_score is not None
+                and judgement.bot_score is not None
+            ):
+                score_text = (
+                    f"（评分：群友 {judgement.group_score} / "
+                    f"馒头 {judgement.bot_score}）"
+                )
+            add_text(f"裁判点评{score_text}：{judgement.reason}")
         winners = [
             bet for bet in pending.bets.values() if bet.side == trigger_won
         ]
@@ -506,12 +636,20 @@ class BickerCoordinator:
                 )
         elif winners:
             pool = sum(bet.actual for bet in losers)
-            share, remainder = divmod(pool, len(winners))
-            for index, bet in enumerate(
-                sorted(winners, key=lambda item: item.placed_at)
-            ):
-                amount = bet.actual + share + (remainder if index == 0 else 0)
-                refund, refund_profile, _ = await self.service.adjust(
+            winner_stake = sum(bet.actual for bet in winners)
+            profits = {
+                bet.user_id: pool * bet.actual // winner_stake
+                for bet in winners
+            }
+            remainder = pool - sum(profits.values())
+            for bet in sorted(
+                winners, key=lambda item: (-item.actual, item.placed_at)
+            )[:remainder]:
+                profits[bet.user_id] += 1
+            for bet in sorted(winners, key=lambda item: item.placed_at):
+                profit = profits[bet.user_id]
+                amount = bet.actual + profit
+                _refund, refund_profile, _ = await self.service.adjust(
                     pending.group_id,
                     bet.user_id,
                     bet.nickname,
@@ -520,8 +658,8 @@ class BickerCoordinator:
                 )
                 add(
                     bet.user_id,
-                    f"押注 {bet.stake} 点押中，到账 {refund:+d}，"
-                    f"当前 {refund_profile.affection}",
+                    f"押注 {bet.stake} 点押中，本金 {bet.actual} 点已退回，"
+                    f"按比例分得 {profit} 点，当前 {refund_profile.affection}",
                 )
             for bet in losers:
                 loser_profile = await self.service.profile(
