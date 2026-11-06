@@ -23,8 +23,9 @@ FLATTER_MAX_REASON = 60
 FLATTER_MODEL_TIMEOUT = 25.0
 FLATTER_BATCH_SIZE = 20
 FLATTER_VIOLATION_DELTA = -3
-FLATTER_LAZY_CAP = 2
-FLATTER_OFFTOPIC_CAP = 3
+FLATTER_MAX_SCORE = 100
+FLATTER_LAZY_CAP = 20
+FLATTER_OFFTOPIC_CAP = 30
 
 FLATTER_THEMES = (
     "夸桃神的游戏技术",
@@ -47,19 +48,20 @@ FLATTER_PROMPT = (
     "晚上 7 点开播，日常自称「小小桃咕咕」。\n"
     "本局主题：{theme}\n\n"
     "群友的献媚：\n{entries}\n\n"
-    "按 0-10 分评分，四个维度：\n"
-    "- 具体度 0-4：有没有桃神的具体梗（星露谷、七点开播、咕咕、直播名场面）；\n"
-    "- 新意 0-3：新角度、比喻、谐音、反差；复读和网络套话 0 分；\n"
-    "- 真诚不尬 0-2：像真心夸，不油腻、不阴阳；\n"
-    "- 节目效果 0-1：群友想笑、想接梗。\n"
+    "按 0-100 分评分，四个维度：\n"
+    "- 具体度 0-40：有没有桃神的具体梗（星露谷、七点开播、咕咕、直播名场面）；\n"
+    "- 新意 0-30：新角度、比喻、谐音、反差；复读和网络套话 0 分；\n"
+    "- 真诚不尬 0-20：像真心夸，不油腻、不阴阳；\n"
+    "- 节目效果 0-10：群友想笑、想接梗。\n"
+    "分数要拉开差距，不要都挤在中间。\n"
     "给每条一个 flag：\n"
     "- ok：正常；\n"
-    "- lazy：纯表情、少于 6 字、空泛套话（最高 2 分）；\n"
-    "- offtopic：完全没提桃神或主播（最高 3 分）；\n"
+    "- lazy：纯表情、少于 6 字、空泛套话（最高 20 分）；\n"
+    "- offtopic：完全没提桃神或主播（最高 30 分）；\n"
     "- rude：阴阳怪气、明夸暗贬、擦边、冒犯、涉及现实隐私（0 分）；\n"
     "- copy：复读别人（0 分）。\n"
     "不要因为写得短就判 rude；不确定时用 ok。\n"
-    '只输出 JSON：{{"scores": [{{"id": 1, "score": 8, "flag": "ok", '
+    '只输出 JSON：{{"scores": [{{"id": 1, "score": 80, "flag": "ok", '
     '"reason": "一句话点评"}}]}}'
 )
 
@@ -163,7 +165,7 @@ def _clamp_score(value: Any) -> int:
         number = int(float(value))
     except (TypeError, ValueError):
         return 0
-    return max(0, min(10, number))
+    return max(0, min(FLATTER_MAX_SCORE, number))
 
 
 def parse_scores(

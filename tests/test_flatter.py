@@ -96,11 +96,11 @@ def test_rank_delta_table() -> None:
 
 
 def test_apply_flag_cap() -> None:
-    assert apply_flag_cap(9, "ok") == 9
-    assert apply_flag_cap(9, "lazy") == 2
-    assert apply_flag_cap(9, "offtopic") == 3
-    assert apply_flag_cap(9, "rude") == 0
-    assert apply_flag_cap(9, "copy") == 0
+    assert apply_flag_cap(90, "ok") == 90
+    assert apply_flag_cap(90, "lazy") == 20
+    assert apply_flag_cap(90, "offtopic") == 30
+    assert apply_flag_cap(90, "rude") == 0
+    assert apply_flag_cap(90, "copy") == 0
 
 
 def test_parse_scores_reads_flags_and_reasons() -> None:
@@ -109,10 +109,10 @@ def test_parse_scores_reads_flags_and_reasons() -> None:
         FlatterEntry(BOB, "乙", "桃神唱歌真好听", 1.0),
     ]
     parsed = parse_scores(
-        scores_json((1, 9, "ok", "很具体"), (2, 4, "lazy", "太短")),
+        scores_json((1, 90, "ok", "很具体"), (2, 40, "lazy", "太短")),
         entries,
     )
-    assert parsed[ALICE].score == 9
+    assert parsed[ALICE].score == 90
     assert parsed[ALICE].flag == "ok"
     assert parsed[ALICE].reason == "很具体"
     assert parsed[BOB].flag == "lazy"
@@ -124,10 +124,10 @@ def test_parse_scores_ignores_bad_payloads() -> None:
     assert parse_scores('{"scores": "nope"}', entries) == {}
     assert parse_scores('{"scores": [{"id": 9}]}', entries) == {}
     parsed = parse_scores(
-        '{"scores": [{"id": 1, "score": 99, "flag": "weird", "reason": ""}]}',
+        '{"scores": [{"id": 1, "score": 999, "flag": "weird", "reason": ""}]}',
         entries,
     )
-    assert parsed[ALICE].score == 10
+    assert parsed[ALICE].score == 100
     assert parsed[ALICE].flag == "ok"
     assert parsed[ALICE].reason == "桃神点了点头"
 
@@ -199,7 +199,7 @@ async def test_close_without_entries_cancels(tmp_path: Path) -> None:
 
 
 async def test_ranking_settles_front_up_and_back_down(tmp_path: Path) -> None:
-    judge = scores_json((1, 9, "ok", "梗很密"), (2, 6, "ok", "中规中矩"), (3, 2, "ok", "太敷衍"))
+    judge = scores_json((1, 90, "ok", "梗很密"), (2, 60, "ok", "中规中矩"), (3, 20, "ok", "太敷衍"))
     memory = FakeMemory([judge])
     coordinator, service = _coordinator(tmp_path, memory)
     await give(service, ALICE, 50)
@@ -220,7 +220,7 @@ async def test_ranking_settles_front_up_and_back_down(tmp_path: Path) -> None:
 
 
 async def test_tied_scores_break_by_submission_time(tmp_path: Path) -> None:
-    judge = scores_json((1, 8, "ok", "好"), (2, 8, "ok", "也好"), (3, 3, "ok", "一般"))
+    judge = scores_json((1, 80, "ok", "好"), (2, 80, "ok", "也好"), (3, 30, "ok", "一般"))
     coordinator, service = _coordinator(tmp_path, FakeMemory([judge]))
     await give(service, ALICE, 50)
     await give(service, BOB, 50)
@@ -238,7 +238,7 @@ async def test_tied_scores_break_by_submission_time(tmp_path: Path) -> None:
 
 
 async def test_violation_loses_three_and_is_not_ranked(tmp_path: Path) -> None:
-    judge = scores_json((1, 7, "ok", "真诚"), (2, 0, "rude", "阴阳怪气"))
+    judge = scores_json((1, 70, "ok", "真诚"), (2, 0, "rude", "阴阳怪气"))
     coordinator, service = _coordinator(tmp_path, FakeMemory([judge]))
     await give(service, ALICE, 50)
     await give(service, BOB, 50)
@@ -255,7 +255,7 @@ async def test_violation_loses_three_and_is_not_ranked(tmp_path: Path) -> None:
 
 
 async def test_copy_is_penalized_even_if_model_scores_high(tmp_path: Path) -> None:
-    judge = scores_json((1, 8, "ok", "好"), (2, 9, "ok", "抄得好"))
+    judge = scores_json((1, 80, "ok", "好"), (2, 90, "ok", "抄得好"))
     coordinator, service = _coordinator(tmp_path, FakeMemory([judge]))
     await give(service, ALICE, 50)
     await give(service, BOB, 50)
@@ -270,7 +270,7 @@ async def test_copy_is_penalized_even_if_model_scores_high(tmp_path: Path) -> No
 
 
 async def test_lazy_entry_is_capped_and_ranked_last(tmp_path: Path) -> None:
-    judge = scores_json((1, 6, "ok", "不错"), (2, 9, "lazy", "空话"))
+    judge = scores_json((1, 60, "ok", "不错"), (2, 90, "lazy", "空话"))
     coordinator, service = _coordinator(tmp_path, FakeMemory([judge]))
     await give(service, ALICE, 50)
     await give(service, BOB, 50)
@@ -298,8 +298,8 @@ async def test_model_failure_cancels_without_affection_change(tmp_path: Path) ->
 
 
 async def test_scoring_is_batched_over_twenty_entries(tmp_path: Path) -> None:
-    first = scores_json(*[(index, 5, "ok", "还行") for index in range(1, 21)])
-    second = scores_json((21, 5, "ok", "还行"))
+    first = scores_json(*[(index, 50, "ok", "还行") for index in range(1, 21)])
+    second = scores_json((21, 50, "ok", "还行"))
     memory = FakeMemory([first, second])
     coordinator, service = _coordinator(tmp_path, memory)
     await give(service, ALICE, 50)
@@ -318,7 +318,7 @@ async def test_scoring_is_batched_over_twenty_entries(tmp_path: Path) -> None:
 
 
 async def test_scoring_prompt_excludes_nicknames(tmp_path: Path) -> None:
-    judge = scores_json((1, 8, "ok", "好"))
+    judge = scores_json((1, 80, "ok", "好"))
     memory = FakeMemory([judge])
     coordinator, service = _coordinator(tmp_path, memory)
     await give(service, ALICE, 50)
@@ -333,7 +333,7 @@ async def test_scoring_prompt_excludes_nicknames(tmp_path: Path) -> None:
 
 
 async def test_second_entry_after_close_is_ignored(tmp_path: Path) -> None:
-    judge = scores_json((1, 8, "ok", "好"))
+    judge = scores_json((1, 80, "ok", "好"))
     coordinator, service = _coordinator(tmp_path, FakeMemory([judge]))
     await give(service, ALICE, 50)
     pending, _sent = await _start(coordinator)
@@ -346,8 +346,8 @@ async def test_second_entry_after_close_is_ignored(tmp_path: Path) -> None:
 def test_parse_scores_accepts_string_ids_and_float_scores() -> None:
     entries = [FlatterEntry(ALICE, "甲", "文本", 0.0)]
     parsed = parse_scores(
-        '{"scores": [{"id": "1", "score": 8.5, "flag": "ok", "reason": "好"}]}',
+        '{"scores": [{"id": "1", "score": 85.5, "flag": "ok", "reason": "好"}]}',
         entries,
     )
-    assert parsed[ALICE].score == 8
+    assert parsed[ALICE].score == 85
     assert parsed[ALICE].flag == "ok"
