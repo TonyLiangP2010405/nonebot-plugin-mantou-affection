@@ -16,6 +16,7 @@ from nonebot_plugin_mantou_affection.flatter import (
     apply_flag_cap,
     parse_scores,
     rank_delta,
+    split_join,
 )
 from nonebot_plugin_mantou_affection.service import AffectionService
 from nonebot_plugin_mantou_affection.storage import AffectionStore
@@ -51,7 +52,7 @@ def _coordinator(tmp_path: Path, memory, *, config=None):
         rng=random.Random(0),
     )
     coordinator = FlatterCoordinator(service, config, memory)
-    coordinator.window = 0.01
+    coordinator.window = 0.03
     return coordinator, service
 
 
@@ -70,6 +71,16 @@ async def _start(coordinator):
 
     assert await coordinator.start(group_id=GROUP_ID, send=send)
     return coordinator.pending[GROUP_ID], sent
+
+
+async def _join(coordinator, pending, *users: tuple[str, str]) -> None:
+    for user_id, name in users:
+        assert await coordinator.answer(GROUP_ID, user_id, name, "参与") is True
+    for _ in range(400):
+        if pending.phase != "signup":
+            return
+        await asyncio.sleep(0.005)
+    raise AssertionError("报名阶段没有结束")
 
 
 def scores_json(*items: tuple[int, int, str, str]) -> str:
@@ -104,6 +115,15 @@ def test_theme_library_dedupes_and_skips_bad_entries(tmp_path: Path) -> None:
     library = FlatterThemeLibrary(path)
     assert len(library) == 2
     assert library._themes == ["夸桃神", "夸桃神的歌喉"]
+
+
+def test_split_join_recognizes_signup_words() -> None:
+    assert split_join("参与") == (True, "")
+    assert split_join("  报名 ") == (True, "")
+    assert split_join("参加！") == (True, "")
+    assert split_join("参与，桃神今晚必开播") == (True, "桃神今晚必开播")
+    assert split_join("我要参与") == (True, "")
+    assert split_join("桃神真棒") == (False, "")
 
 
 async def test_start_uses_injected_theme_library(tmp_path: Path) -> None:
@@ -192,20 +212,80 @@ async def test_start_posts_theme_and_rules(tmp_path: Path) -> None:
     body = sent[0].extract_plain_text()
     assert "献媚桃神" in body
     assert "主题：" in body
+    assert "先发「参与」报名" in body
     assert "第 1 名 +6" in body
     assert "倒数第 1 名 -6" in body
+    assert pending.phase == "signup"
+    pending.task.cancel()
+
+
+async def test_signup_then_collecting_after_window(tmp_path: Path) -> None:
+    coordinator, _ = _coordinator(tmp_path, FakeMemory([]))
+    pending, sent = await _start(coordinator)
+
+    assert await coordinator.answer(GROUP_ID, ALICE, "甲", "参与") is True
+    assert ALICE in pending.registered
+    assert "报名成功" in sent[-1].extract_plain_text()
+    assert pending.entries == {}
+
+    await _join(coordinator, pending, (BOB, "乙"))
     assert pending.phase == "collecting"
+    assert "现在开始献媚" in sent[-1].extract_plain_text()
+    pending.task.cancel()
+
+
+async def test_signup_message_with_extra_text_still_registers(tmp_path: Path) -> None:
+    coordinator, _ = _coordinator(tmp_path, FakeMemory([]))
+    pending, sent = await _start(coordinator)
+
+    assert await coordinator.answer(GROUP_ID, ALICE, "甲", "参与 桃神今晚必开播") is True
+    assert ALICE in pending.registered
+    assert pending.entries == {}
+    assert "喊开始再发" in sent[-1].extract_plain_text()
+    pending.task.cancel()
+
+
+async def test_signup_ignores_plain_chat(tmp_path: Path) -> None:
+    coordinator, _ = _coordinator(tmp_path, FakeMemory([]))
+    pending, _sent = await _start(coordinator)
+
+    assert await coordinator.answer(GROUP_ID, ALICE, "甲", "桃神今天真好看") is False
+    assert pending.registered == {}
+    pending.task.cancel()
+
+
+async def test_unregistered_chat_is_not_an_entry(tmp_path: Path) -> None:
+    coordinator, _ = _coordinator(tmp_path, FakeMemory([]))
+    pending, _sent = await _start(coordinator)
+    await _join(coordinator, pending, (ALICE, "甲"))
+
+    assert await coordinator.answer(GROUP_ID, BOB, "乙", "桃神唱歌真好听") is False
+    assert BOB not in pending.entries
+    assert await coordinator.answer(GROUP_ID, ALICE, "甲", "桃神开播比闹钟准") is True
+    assert ALICE in pending.entries
     pending.task.cancel()
 
 
 async def test_answer_records_one_entry_per_user(tmp_path: Path) -> None:
     coordinator, _ = _coordinator(tmp_path, FakeMemory([]))
     pending, sent = await _start(coordinator)
+    await _join(coordinator, pending, (ALICE, "甲"))
 
     assert await coordinator.answer(GROUP_ID, ALICE, "甲", "桃神七点开播从不迟到") is True
     assert await coordinator.answer(GROUP_ID, ALICE, "甲", "再来一句") is True
     assert pending.entries[ALICE].text == "桃神七点开播从不迟到"
     assert "已经献过媚" in sent[-1].extract_plain_text()
+    pending.task.cancel()
+
+
+async def test_repeated_join_word_is_not_an_entry(tmp_path: Path) -> None:
+    coordinator, _ = _coordinator(tmp_path, FakeMemory([]))
+    pending, sent = await _start(coordinator)
+    await _join(coordinator, pending, (ALICE, "甲"))
+
+    assert await coordinator.answer(GROUP_ID, ALICE, "甲", "参与") is True
+    assert pending.entries == {}
+    assert "直接发你的献媚" in sent[-1].extract_plain_text()
     pending.task.cancel()
 
 
@@ -215,13 +295,14 @@ async def test_answer_ignores_commands_and_empty_text(tmp_path: Path) -> None:
 
     assert await coordinator.answer(GROUP_ID, ALICE, "甲", "/馒头好感") is False
     assert await coordinator.answer(GROUP_ID, ALICE, "甲", "   ") is False
-    assert pending.entries == {}
+    assert pending.registered == {}
     pending.task.cancel()
 
 
 async def test_duplicate_text_marks_copy(tmp_path: Path) -> None:
     coordinator, _ = _coordinator(tmp_path, FakeMemory([]))
     pending, _sent = await _start(coordinator)
+    await _join(coordinator, pending, (ALICE, "甲"), (BOB, "乙"))
 
     await coordinator.answer(GROUP_ID, ALICE, "甲", "桃神唱歌太好听了")
     await coordinator.answer(GROUP_ID, BOB, "乙", "桃神唱歌，太好听了！")
@@ -231,13 +312,30 @@ async def test_duplicate_text_marks_copy(tmp_path: Path) -> None:
     pending.task.cancel()
 
 
-async def test_close_without_entries_cancels(tmp_path: Path) -> None:
+async def test_close_without_signups_cancels(tmp_path: Path) -> None:
     coordinator, _ = _coordinator(tmp_path, FakeMemory([]))
     pending, sent = await _start(coordinator)
     await asyncio.wait_for(pending.task, 2)
 
-    assert "没人献媚" in sent[-1].extract_plain_text()
+    assert "没人报名" in sent[-1].extract_plain_text()
     assert GROUP_ID not in coordinator.pending
+
+
+async def test_signup_without_entry_keeps_affection(tmp_path: Path) -> None:
+    judge = scores_json((1, 80, "ok", "好"))
+    coordinator, service = _coordinator(tmp_path, FakeMemory([judge]))
+    await give(service, ALICE, 50)
+    await give(service, BOB, 50)
+    pending, sent = await _start(coordinator)
+    await _join(coordinator, pending, (ALICE, "甲"), (BOB, "乙"))
+
+    await coordinator.answer(GROUP_ID, ALICE, "甲", "桃神开播比闹钟准")
+    await asyncio.wait_for(pending.task, 2)
+
+    body = sent[-1].extract_plain_text()
+    assert "报名没献媚（不扣分）：乙" in body
+    assert (await service.profile(GROUP_ID, ALICE)).affection == 53
+    assert (await service.profile(GROUP_ID, BOB)).affection == 50
 
 
 async def test_ranking_settles_front_up_and_back_down(tmp_path: Path) -> None:
@@ -248,6 +346,7 @@ async def test_ranking_settles_front_up_and_back_down(tmp_path: Path) -> None:
     await give(service, BOB, 50)
     await give(service, CAROL, 50)
     pending, sent = await _start(coordinator)
+    await _join(coordinator, pending, (ALICE, "甲"), (BOB, "乙"), (CAROL, "丙"))
 
     await coordinator.answer(GROUP_ID, ALICE, "甲", "桃神的星露谷能种出全服最好的土豆")
     await coordinator.answer(GROUP_ID, BOB, "乙", "桃神唱歌还行")
@@ -268,6 +367,7 @@ async def test_tied_scores_break_by_submission_time(tmp_path: Path) -> None:
     await give(service, BOB, 50)
     await give(service, CAROL, 50)
     pending, _sent = await _start(coordinator)
+    await _join(coordinator, pending, (ALICE, "甲"), (BOB, "乙"), (CAROL, "丙"))
 
     await coordinator.answer(GROUP_ID, ALICE, "甲", "桃神开播比闹钟准")
     await coordinator.answer(GROUP_ID, BOB, "乙", "桃神的咕咕是群里的起床号")
@@ -279,12 +379,13 @@ async def test_tied_scores_break_by_submission_time(tmp_path: Path) -> None:
     assert (await service.profile(GROUP_ID, CAROL)).affection == 47
 
 
-async def test_violation_loses_three_and_is_not_ranked(tmp_path: Path) -> None:
+async def test_violation_loses_six_and_is_not_ranked(tmp_path: Path) -> None:
     judge = scores_json((1, 70, "ok", "真诚"), (2, 0, "rude", "阴阳怪气"))
     coordinator, service = _coordinator(tmp_path, FakeMemory([judge]))
     await give(service, ALICE, 50)
     await give(service, BOB, 50)
     pending, sent = await _start(coordinator)
+    await _join(coordinator, pending, (ALICE, "甲"), (BOB, "乙"))
 
     await coordinator.answer(GROUP_ID, ALICE, "甲", "桃神今天状态真好")
     await coordinator.answer(GROUP_ID, BOB, "乙", "桃神也就那样吧")
@@ -302,6 +403,7 @@ async def test_copy_is_penalized_even_if_model_scores_high(tmp_path: Path) -> No
     await give(service, ALICE, 50)
     await give(service, BOB, 50)
     pending, _sent = await _start(coordinator)
+    await _join(coordinator, pending, (ALICE, "甲"), (BOB, "乙"))
 
     await coordinator.answer(GROUP_ID, ALICE, "甲", "桃神是星露谷的神")
     await coordinator.answer(GROUP_ID, BOB, "乙", "桃神是星露谷的神！")
@@ -317,6 +419,7 @@ async def test_lazy_entry_is_capped_and_ranked_last(tmp_path: Path) -> None:
     await give(service, ALICE, 50)
     await give(service, BOB, 50)
     pending, _sent = await _start(coordinator)
+    await _join(coordinator, pending, (ALICE, "甲"), (BOB, "乙"))
 
     await coordinator.answer(GROUP_ID, ALICE, "甲", "桃神昨晚的星露谷直播笑死我了")
     await coordinator.answer(GROUP_ID, BOB, "乙", "桃神最棒")
@@ -330,6 +433,7 @@ async def test_model_failure_cancels_without_affection_change(tmp_path: Path) ->
     coordinator, service = _coordinator(tmp_path, FakeMemory([]))
     await give(service, ALICE, 50)
     pending, sent = await _start(coordinator)
+    await _join(coordinator, pending, (ALICE, "甲"))
 
     await coordinator.answer(GROUP_ID, ALICE, "甲", "桃神今天真好看")
     await asyncio.wait_for(pending.task, 2)
@@ -344,14 +448,23 @@ async def test_scoring_is_batched_over_twenty_entries(tmp_path: Path) -> None:
     second = scores_json((21, 50, "ok", "还行"))
     memory = FakeMemory([first, second])
     coordinator, service = _coordinator(tmp_path, memory)
+    coordinator.window = 0.2
     await give(service, ALICE, 50)
     pending, _sent = await _start(coordinator)
 
     for index in range(21):
         user = f"93{index:03d}"
         await give(service, user, 50)
+        assert await coordinator.answer(GROUP_ID, user, f"群友{index}", "参与") is True
+    for _ in range(400):
+        if pending.phase == "collecting":
+            break
+        await asyncio.sleep(0.005)
+    assert pending.phase == "collecting"
+    for index in range(21):
+        user = f"93{index:03d}"
         await coordinator.answer(GROUP_ID, user, f"群友{index}", f"桃神第{index}好")
-    await asyncio.wait_for(pending.task, 2)
+    await asyncio.wait_for(pending.task, 5)
 
     assert len(memory.calls) == 2
     assert "20. 桃神第19好" in memory.calls[0]
@@ -365,6 +478,7 @@ async def test_scoring_prompt_excludes_nicknames(tmp_path: Path) -> None:
     coordinator, service = _coordinator(tmp_path, memory)
     await give(service, ALICE, 50)
     pending, _sent = await _start(coordinator)
+    await _join(coordinator, pending, (ALICE, "甲"))
 
     await coordinator.answer(GROUP_ID, ALICE, "甲", "桃神开播比闹钟准")
     await asyncio.wait_for(pending.task, 2)
@@ -374,11 +488,12 @@ async def test_scoring_prompt_excludes_nicknames(tmp_path: Path) -> None:
     assert "甲：" not in prompt
 
 
-async def test_second_entry_after_close_is_ignored(tmp_path: Path) -> None:
+async def test_entry_after_close_is_ignored(tmp_path: Path) -> None:
     judge = scores_json((1, 80, "ok", "好"))
     coordinator, service = _coordinator(tmp_path, FakeMemory([judge]))
     await give(service, ALICE, 50)
     pending, _sent = await _start(coordinator)
+    await _join(coordinator, pending, (ALICE, "甲"))
     await coordinator.answer(GROUP_ID, ALICE, "甲", "桃神开播比闹钟准")
     await asyncio.wait_for(pending.task, 2)
 

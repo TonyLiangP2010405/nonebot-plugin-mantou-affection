@@ -1374,11 +1374,18 @@ async def test_ambient_routes_flatter_entry_before_other_activities(
     service = _service(tmp_path, config=config)
     events = EventCoordinator(service, config)
     flatter = FlatterCoordinator(service, config, FakeMemory([]), events=events)
+    flatter.window = 0.03
     ambient, answer = register_ambient(service, config, events, flatter=flatter)
     sent = _capture_send(ambient, monkeypatch)
 
     await flatter.start(group_id=GROUP_ID, send=ambient.send)
     pending = flatter.pending[GROUP_ID]
+    await answer.handlers[0].call(_event(text="参与", user_id=TRIGGER_ID))
+    for _ in range(400):
+        if pending.phase == "collecting":
+            break
+        await asyncio.sleep(0.005)
+    assert pending.phase == "collecting"
     sent.clear()
 
     await answer.handlers[0].call(

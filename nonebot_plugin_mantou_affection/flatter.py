@@ -27,6 +27,11 @@ FLATTER_VIOLATION_DELTA = -6
 FLATTER_MAX_SCORE = 100
 FLATTER_LAZY_CAP = 20
 FLATTER_OFFTOPIC_CAP = 30
+FLATTER_PHASE_SIGNUP = "signup"
+FLATTER_PHASE_COLLECTING = "collecting"
+FLATTER_PHASE_JUDGING = "judging"
+FLATTER_PHASE_SETTLED = "settled"
+FLATTER_JOIN_WORDS = ("我要参与", "我要报名", "参与", "报名", "参加")
 
 BUNDLED_THEMES_PATH = Path(__file__).parent / "resources" / "flatter_themes.json"
 
@@ -190,7 +195,8 @@ class PendingFlatter:
     group_id: str
     theme: str
     send: Send
-    phase: str = "collecting"
+    phase: str = FLATTER_PHASE_SIGNUP
+    registered: dict[str, str] = field(default_factory=dict)
     entries: dict[str, FlatterEntry] = field(default_factory=dict)
     accepting: bool = True
     task: asyncio.Task | None = None
@@ -198,6 +204,21 @@ class PendingFlatter:
 
 def _normalize(text: str) -> str:
     return NON_TEXT.sub("", text).lower()
+
+
+def split_join(line: str) -> tuple[bool, str]:
+    """把「参与」和后面的内容拆开；不是报名口令时返回 (False, "")。"""
+
+    text = line.strip()
+    for word in FLATTER_JOIN_WORDS:
+        if text == word:
+            return True, ""
+        if text.startswith(word):
+            rest = text[len(word) :].lstrip(" ，,：:、!！。.")
+            if not NON_TEXT.sub("", rest):
+                rest = ""
+            return True, rest
+    return False, ""
 
 
 def _clamp_score(value: Any) -> int:
@@ -340,14 +361,15 @@ class FlatterCoordinator:
             logger.exception("[mantou-affection] 发送献媚桃神开场失败")
             self.pending.pop(key, None)
             return False
-        pending.task = asyncio.create_task(self._close(pending))
+        pending.task = asyncio.create_task(self._run(pending))
         return True
 
     def opening_message(self, pending: PendingFlatter) -> Message:
         text = (
             f" {FLATTER_PREFIX}\n"
             f"主题：{pending.theme}\n"
-            f"{int(self.window)} 秒内直接发一句话献媚，每人一条。\n"
+            f"先发「参与」报名，{int(self.window)} 秒后报名截止，再开始献媚。\n"
+            f"报名后等桃神喊开始，再发一句话献媚，每人一条。\n"
             "按桃神打分排名，同分按提交时间先后排，不并列：第 1 名 +6，第 2 名 +4，第 3 名 +3；"
             "中间 0；倒数第 1 名 -6，倒数第 2 名 -4，倒数第 3 名 -2。\n"
             "空话/纯表情最多 20 分，跑题最多 30 分，"
@@ -367,48 +389,96 @@ class FlatterCoordinator:
     ) -> bool:
         async with self._lock:
             pending = self.pending.get(str(group_id))
-            if (
-                pending is None
-                or pending.phase != "collecting"
-                or not pending.accepting
-            ):
+            if pending is None or not pending.accepting:
                 return False
             line = text.strip()
             if not line or line.startswith(("/", "／")):
                 return False
             user = str(user_id)
-            if user in pending.entries:
+            if pending.phase == FLATTER_PHASE_SIGNUP:
+                return await self._sign_up(pending, user, nickname, line)
+            if pending.phase != FLATTER_PHASE_COLLECTING:
+                return False
+            if user not in pending.registered:
+                return False
+            joined, rest = split_join(line)
+            if joined and not rest:
                 await self._send_text(
-                    pending, " 你已经献过媚了，等截止后一起打分。"
+                    pending, " 你已经报过名了，直接发你的献媚就行。"
                 )
                 return True
-            name = normalize_nickname(nickname, user)
-            normalized = _normalize(line)
-            entry = FlatterEntry(
-                user_id=user,
-                nickname=name,
-                text=line[:FLATTER_MAX_LINE],
-                submitted_at=time.monotonic(),
-                copy=any(
-                    _normalize(item.text) == normalized
-                    for item in pending.entries.values()
-                ),
-            )
-            pending.entries[user] = entry
+            return await self._record(pending, user, nickname, line)
+
+    async def _sign_up(
+        self, pending: PendingFlatter, user: str, nickname: str, line: str
+    ) -> bool:
+        joined, rest = split_join(line)
+        if not joined:
+            return False
+        if user in pending.registered:
             await self._send_text(
-                pending,
-                f" 献媚已收下（第 {len(pending.entries)} 位），截止后统一打分。",
+                pending, " 你已经报过名了，等报名截止后开始献媚。"
             )
             return True
+        pending.registered[user] = normalize_nickname(nickname, user)
+        hint = "，献媚等桃神喊开始再发" if rest else ""
+        await self._send_text(
+            pending,
+            f" 报名成功（第 {len(pending.registered)} 位），"
+            f"{int(self.window)} 秒后开始献媚{hint}。",
+        )
+        return True
 
-    async def _close(self, pending: PendingFlatter) -> None:
+    async def _record(
+        self, pending: PendingFlatter, user: str, nickname: str, line: str
+    ) -> bool:
+        if user in pending.entries:
+            await self._send_text(pending, " 你已经献过媚了，等截止后一起打分。")
+            return True
+        name = normalize_nickname(nickname, user)
+        normalized = _normalize(line)
+        entry = FlatterEntry(
+            user_id=user,
+            nickname=name,
+            text=line[:FLATTER_MAX_LINE],
+            submitted_at=time.monotonic(),
+            copy=any(
+                _normalize(item.text) == normalized
+                for item in pending.entries.values()
+            ),
+        )
+        pending.entries[user] = entry
+        await self._send_text(
+            pending,
+            f" 献媚已收下（第 {len(pending.entries)} 位），截止后统一打分。",
+        )
+        return True
+
+    async def _run(self, pending: PendingFlatter) -> None:
+        try:
+            await asyncio.sleep(self.window)
+        except asyncio.CancelledError:
+            return
+        if not pending.accepting or self.pending.get(pending.group_id) is not pending:
+            return
+        if not pending.registered:
+            pending.accepting = False
+            await self._send_text(pending, " 没人报名，桃神走了，本轮取消。")
+            self.pending.pop(pending.group_id, None)
+            return
+        pending.phase = FLATTER_PHASE_COLLECTING
+        await self._send_text(
+            pending,
+            f" 报名截止：{len(pending.registered)} 人报名。"
+            f"现在开始献媚，直接发一句话，每人一条，{int(self.window)} 秒。",
+        )
         try:
             await asyncio.sleep(self.window)
         except asyncio.CancelledError:
             return
         if (
             not pending.accepting
-            or pending.phase != "collecting"
+            or pending.phase != FLATTER_PHASE_COLLECTING
             or self.pending.get(pending.group_id) is not pending
         ):
             return
@@ -421,7 +491,7 @@ class FlatterCoordinator:
             pending,
             f" 献媚截止：{len(pending.entries)} 人参与，桃神正在打分…",
         )
-        pending.phase = "judging"
+        pending.phase = FLATTER_PHASE_JUDGING
         try:
             scores = await self._score(pending)
         except Exception:
@@ -451,7 +521,7 @@ class FlatterCoordinator:
     async def _settle(
         self, pending: PendingFlatter, scores: dict[str, FlatterScore]
     ) -> None:
-        pending.phase = "settled"
+        pending.phase = FLATTER_PHASE_SETTLED
         self.pending.pop(pending.group_id, None)
         entries = sorted(pending.entries.values(), key=lambda item: item.submitted_at)
         resolved: list[tuple[FlatterEntry, FlatterScore]] = []
@@ -509,6 +579,16 @@ class FlatterCoordinator:
                     f" {score.score} 分 {applied:+d}（违规）："
                     f"{score.reason}，当前 {profile.affection}{note}"
                 )
+            )
+        idle = [
+            name
+            for user, name in pending.registered.items()
+            if user not in pending.entries
+        ]
+        if idle:
+            segments.append(MessageSegment.text("\n"))
+            segments.append(
+                MessageSegment.text(f" 报名没献媚（不扣分）：{'、'.join(idle)}")
             )
         try:
             await pending.send(Message(segments))
