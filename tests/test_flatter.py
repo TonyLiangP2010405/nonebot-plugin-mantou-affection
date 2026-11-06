@@ -219,7 +219,7 @@ async def test_ranking_settles_front_up_and_back_down(tmp_path: Path) -> None:
     assert (await service.profile(GROUP_ID, CAROL)).affection == 48
 
 
-async def test_tied_scores_share_rank_and_delta(tmp_path: Path) -> None:
+async def test_tied_scores_break_by_submission_time(tmp_path: Path) -> None:
     judge = scores_json((1, 8, "ok", "好"), (2, 8, "ok", "也好"), (3, 3, "ok", "一般"))
     coordinator, service = _coordinator(tmp_path, FakeMemory([judge]))
     await give(service, ALICE, 50)
@@ -233,7 +233,7 @@ async def test_tied_scores_share_rank_and_delta(tmp_path: Path) -> None:
     await asyncio.wait_for(pending.task, 2)
 
     assert (await service.profile(GROUP_ID, ALICE)).affection == 55
-    assert (await service.profile(GROUP_ID, BOB)).affection == 55
+    assert (await service.profile(GROUP_ID, BOB)).affection == 51
     assert (await service.profile(GROUP_ID, CAROL)).affection == 48
 
 
@@ -314,7 +314,7 @@ async def test_scoring_is_batched_over_twenty_entries(tmp_path: Path) -> None:
     assert len(memory.calls) == 2
     assert "20. 群友19" in memory.calls[0]
     assert "21. 群友20" in memory.calls[1]
-    assert (await service.profile(GROUP_ID, ALICE)).affection == 55
+    assert (await service.profile(GROUP_ID, ALICE)).affection == 52
 
 
 async def test_second_entry_after_close_is_ignored(tmp_path: Path) -> None:

@@ -304,7 +304,7 @@ class FlatterCoordinator:
             f" {FLATTER_PREFIX}\n"
             f"主题：{pending.theme}\n"
             f"{int(self.window)} 秒内直接发一句话献媚，每人一条。\n"
-            "按桃神打分排名：第 1 名 +5，第 2 名 +3，第 3 名 +2；"
+            "按桃神打分排名，同分按提交时间先后排，不并列：第 1 名 +5，第 2 名 +3，第 3 名 +2；"
             "倒数第 1 名 -3，倒数第 2 名 -2，倒数第 3 名 -1；中间 +1。\n"
             "空话/纯表情最多 2 分，跑题最多 3 分，"
             "阴阳怪气、擦边、复读别人直接 -3。\n"
@@ -425,12 +425,7 @@ class FlatterCoordinator:
             item for item in resolved if item[1].flag not in {"rude", "copy"}
         ]
         ranked.sort(key=lambda item: (-item[1].score, item[0].submitted_at))
-        ranks: list[int] = []
-        for index, (_entry, score) in enumerate(ranked):
-            if index and score.score == ranked[index - 1][1].score:
-                ranks.append(ranks[-1])
-            else:
-                ranks.append(index + 1)
+        ranks = list(range(1, len(ranked) + 1))
 
         segments: list[MessageSegment] = [
             MessageSegment.text(
