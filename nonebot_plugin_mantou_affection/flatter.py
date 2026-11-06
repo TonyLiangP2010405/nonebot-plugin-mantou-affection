@@ -243,7 +243,7 @@ def rank_delta(rank: int, total: int) -> int:
 
 def format_entries(entries: list[FlatterEntry], start_index: int = 1) -> str:
     return "\n".join(
-        f"{start_index + offset}. {entry.nickname}：{entry.text}"
+        f"{start_index + offset}. {entry.text}"
         for offset, entry in enumerate(entries)
     )
 

@@ -312,9 +312,24 @@ async def test_scoring_is_batched_over_twenty_entries(tmp_path: Path) -> None:
     await asyncio.wait_for(pending.task, 2)
 
     assert len(memory.calls) == 2
-    assert "20. 群友19" in memory.calls[0]
-    assert "21. 群友20" in memory.calls[1]
+    assert "20. 桃神第19好" in memory.calls[0]
+    assert "21. 桃神第20好" in memory.calls[1]
     assert (await service.profile(GROUP_ID, ALICE)).affection == 52
+
+
+async def test_scoring_prompt_excludes_nicknames(tmp_path: Path) -> None:
+    judge = scores_json((1, 8, "ok", "好"))
+    memory = FakeMemory([judge])
+    coordinator, service = _coordinator(tmp_path, memory)
+    await give(service, ALICE, 50)
+    pending, _sent = await _start(coordinator)
+
+    await coordinator.answer(GROUP_ID, ALICE, "甲", "桃神开播比闹钟准")
+    await asyncio.wait_for(pending.task, 2)
+
+    prompt = memory.calls[0]
+    assert "桃神开播比闹钟准" in prompt
+    assert "甲：" not in prompt
 
 
 async def test_second_entry_after_close_is_ignored(tmp_path: Path) -> None:
