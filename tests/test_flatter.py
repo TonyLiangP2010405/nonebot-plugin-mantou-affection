@@ -81,18 +81,21 @@ def scores_json(*items: tuple[int, int, str, str]) -> str:
 def test_rank_delta_table() -> None:
     assert rank_delta(1, 1) == 3
     assert rank_delta(1, 2) == 3
-    assert rank_delta(2, 2) == -1
-    assert rank_delta(1, 3) == 5
+    assert rank_delta(2, 2) == -2
+    assert rank_delta(1, 3) == 6
     assert rank_delta(2, 3) == 1
-    assert rank_delta(3, 3) == -2
-    assert rank_delta(1, 4) == 5
-    assert rank_delta(4, 4) == -3
-    assert rank_delta(5, 5) == -3
-    assert rank_delta(4, 5) == -2
-    assert rank_delta(3, 5) == 2
-    assert rank_delta(4, 6) == 1
-    assert rank_delta(5, 7) == -1
-    assert rank_delta(4, 7) == 1
+    assert rank_delta(3, 3) == -3
+    assert rank_delta(1, 4) == 6
+    assert rank_delta(4, 4) == -6
+    assert rank_delta(1, 5) == 6
+    assert rank_delta(3, 5) == 3
+    assert rank_delta(4, 5) == -4
+    assert rank_delta(5, 5) == -6
+    assert rank_delta(4, 6) == -2
+    assert rank_delta(4, 7) == 0
+    assert rank_delta(5, 7) == -2
+    assert rank_delta(4, 8) == 0
+    assert rank_delta(5, 8) == 0
 
 
 def test_apply_flag_cap() -> None:
@@ -150,8 +153,8 @@ async def test_start_posts_theme_and_rules(tmp_path: Path) -> None:
     body = sent[0].extract_plain_text()
     assert "献媚桃神" in body
     assert "主题：" in body
-    assert "第 1 名 +5" in body
-    assert "倒数第 1 名 -3" in body
+    assert "第 1 名 +6" in body
+    assert "倒数第 1 名 -6" in body
     assert pending.phase == "collecting"
     pending.task.cancel()
 
@@ -214,9 +217,9 @@ async def test_ranking_settles_front_up_and_back_down(tmp_path: Path) -> None:
 
     body = sent[-1].extract_plain_text()
     assert "第 1 名" in body and "第 3 名" in body
-    assert (await service.profile(GROUP_ID, ALICE)).affection == 55
+    assert (await service.profile(GROUP_ID, ALICE)).affection == 56
     assert (await service.profile(GROUP_ID, BOB)).affection == 51
-    assert (await service.profile(GROUP_ID, CAROL)).affection == 48
+    assert (await service.profile(GROUP_ID, CAROL)).affection == 47
 
 
 async def test_tied_scores_break_by_submission_time(tmp_path: Path) -> None:
@@ -232,9 +235,9 @@ async def test_tied_scores_break_by_submission_time(tmp_path: Path) -> None:
     await coordinator.answer(GROUP_ID, CAROL, "丙", "桃神还行吧")
     await asyncio.wait_for(pending.task, 2)
 
-    assert (await service.profile(GROUP_ID, ALICE)).affection == 55
+    assert (await service.profile(GROUP_ID, ALICE)).affection == 56
     assert (await service.profile(GROUP_ID, BOB)).affection == 51
-    assert (await service.profile(GROUP_ID, CAROL)).affection == 48
+    assert (await service.profile(GROUP_ID, CAROL)).affection == 47
 
 
 async def test_violation_loses_three_and_is_not_ranked(tmp_path: Path) -> None:
@@ -251,7 +254,7 @@ async def test_violation_loses_three_and_is_not_ranked(tmp_path: Path) -> None:
     body = sent[-1].extract_plain_text()
     assert "违规" in body
     assert (await service.profile(GROUP_ID, ALICE)).affection == 53
-    assert (await service.profile(GROUP_ID, BOB)).affection == 47
+    assert (await service.profile(GROUP_ID, BOB)).affection == 44
 
 
 async def test_copy_is_penalized_even_if_model_scores_high(tmp_path: Path) -> None:
@@ -266,7 +269,7 @@ async def test_copy_is_penalized_even_if_model_scores_high(tmp_path: Path) -> No
     await asyncio.wait_for(pending.task, 2)
 
     assert (await service.profile(GROUP_ID, ALICE)).affection == 53
-    assert (await service.profile(GROUP_ID, BOB)).affection == 47
+    assert (await service.profile(GROUP_ID, BOB)).affection == 44
 
 
 async def test_lazy_entry_is_capped_and_ranked_last(tmp_path: Path) -> None:
@@ -281,7 +284,7 @@ async def test_lazy_entry_is_capped_and_ranked_last(tmp_path: Path) -> None:
     await asyncio.wait_for(pending.task, 2)
 
     assert (await service.profile(GROUP_ID, ALICE)).affection == 53
-    assert (await service.profile(GROUP_ID, BOB)).affection == 49
+    assert (await service.profile(GROUP_ID, BOB)).affection == 48
 
 
 async def test_model_failure_cancels_without_affection_change(tmp_path: Path) -> None:
@@ -314,7 +317,7 @@ async def test_scoring_is_batched_over_twenty_entries(tmp_path: Path) -> None:
     assert len(memory.calls) == 2
     assert "20. 桃神第19好" in memory.calls[0]
     assert "21. 桃神第20好" in memory.calls[1]
-    assert (await service.profile(GROUP_ID, ALICE)).affection == 52
+    assert (await service.profile(GROUP_ID, ALICE)).affection == 53
 
 
 async def test_scoring_prompt_excludes_nicknames(tmp_path: Path) -> None:

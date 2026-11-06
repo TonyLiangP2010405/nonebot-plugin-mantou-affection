@@ -22,7 +22,7 @@ FLATTER_MAX_LINE = 120
 FLATTER_MAX_REASON = 60
 FLATTER_MODEL_TIMEOUT = 25.0
 FLATTER_BATCH_SIZE = 20
-FLATTER_VIOLATION_DELTA = -3
+FLATTER_VIOLATION_DELTA = -6
 FLATTER_MAX_SCORE = 100
 FLATTER_LAZY_CAP = 20
 FLATTER_OFFTOPIC_CAP = 30
@@ -225,22 +225,22 @@ def rank_delta(rank: int, total: int) -> int:
     if total <= 1:
         return 3
     if total == 2:
-        return 3 if rank == 1 else -1
+        return 3 if rank == 1 else -2
     if total == 3:
-        return {1: 5, 2: 1, 3: -2}.get(rank, 0)
-    if rank == total:
-        return -3
-    if rank == total - 1:
-        return -2
-    if total >= 7 and rank == total - 2:
-        return -1
+        return {1: 6, 2: 1, 3: -3}.get(rank, 0)
     if rank == 1:
-        return 5
+        return 6
     if rank == 2:
-        return 3
+        return 4
     if rank == 3:
-        return 2
-    return 1
+        return 3
+    if rank == total:
+        return -6
+    if rank == total - 1:
+        return -4
+    if rank == total - 2:
+        return -2
+    return 0
 
 
 def format_entries(entries: list[FlatterEntry], start_index: int = 1) -> str:
@@ -306,11 +306,11 @@ class FlatterCoordinator:
             f" {FLATTER_PREFIX}\n"
             f"主题：{pending.theme}\n"
             f"{int(self.window)} 秒内直接发一句话献媚，每人一条。\n"
-            "按桃神打分排名，同分按提交时间先后排，不并列：第 1 名 +5，第 2 名 +3，第 3 名 +2；"
-            "倒数第 1 名 -3，倒数第 2 名 -2，倒数第 3 名 -1；中间 +1。\n"
-            "空话/纯表情最多 2 分，跑题最多 3 分，"
-            "阴阳怪气、擦边、复读别人直接 -3。\n"
-            "人数少时用温和表：1 人 +3；2 人 +3 / -1；3 人 +5 / +1 / -2。"
+            "按桃神打分排名，同分按提交时间先后排，不并列：第 1 名 +6，第 2 名 +4，第 3 名 +3；"
+            "中间 0；倒数第 1 名 -6，倒数第 2 名 -4，倒数第 3 名 -2。\n"
+            "空话/纯表情最多 20 分，跑题最多 30 分，"
+            "阴阳怪气、擦边、复读别人直接 -6。\n"
+            "人数少时用温和表：1 人 +3；2 人 +3 / -2；3 人 +6 / +1 / -3。"
         )
         return Message(MessageSegment.text(text))
 
