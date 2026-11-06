@@ -26,7 +26,7 @@ BICKER_OPTIONS: dict[str, tuple[bool, int]] = {
     "5": (False, 3),
     "6": (False, 5),
 }
-BICKER_ROUNDS = 5
+BICKER_ROUNDS = 3
 BICKER_MODEL_TIMEOUT = 20.0
 BICKER_MAX_LINE = 60
 BICKER_MAX_REPLY = 200

@@ -9,6 +9,7 @@ from nonebot.adapters.onebot.v11 import Message
 
 from nonebot_plugin_mantou_affection.bicker import (
     BICKER_OPTIONS,
+    BICKER_ROUNDS,
     BickerCoordinator,
     GroupMemoryAdapter,
     GroupMemoryUnavailable,
@@ -17,6 +18,8 @@ from nonebot_plugin_mantou_affection.bicker import (
 from nonebot_plugin_mantou_affection.config import Config
 from nonebot_plugin_mantou_affection.service import AffectionService
 from nonebot_plugin_mantou_affection.storage import AffectionStore
+
+BICKER_REPLIES = [f"回{index}" for index in range(1, BICKER_ROUNDS + 1)]
 
 GROUP_ID = "93001"
 TRIGGER_ID = "93002"
@@ -206,21 +209,21 @@ async def test_no_bets_close_posts_no_bets_message(tmp_path: Path) -> None:
     assert pending.phase == "debating"
 
 
-async def test_five_rounds_then_judge_and_trigger_wins(tmp_path: Path) -> None:
-    memory = FakeMemory(["题目", "回1", "回2", "回3", "回4", "回5", "群友赢"])
+async def test_three_rounds_then_judge_and_trigger_wins(tmp_path: Path) -> None:
+    memory = FakeMemory(["题目", *BICKER_REPLIES, "群友赢"])
     coordinator, service = _coordinator(tmp_path, memory)
     await give(service, TRIGGER_ID, 50)
     pending, _sent = await _start(coordinator)
     await asyncio.wait_for(pending.bet_task, 2)
-    for index in range(1, 6):
+    for index in range(1, BICKER_ROUNDS + 1):
         assert await coordinator.handle_debate(GROUP_ID, TRIGGER_ID, f"我说{index}") is True
-    assert len(memory.calls) == 7
+    assert len(memory.calls) == BICKER_ROUNDS + 2
     assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == 53
     assert GROUP_ID not in coordinator.pending
 
 
 async def test_trigger_loses_and_bets_settle(tmp_path: Path) -> None:
-    memory = FakeMemory(["题目", "回1", "回2", "回3", "回4", "回5", "馒头赢"])
+    memory = FakeMemory(["题目", *BICKER_REPLIES, "馒头赢"])
     coordinator, service = _coordinator(tmp_path, memory)
     await give(service, TRIGGER_ID, 50)
     await give(service, OTHER_ID, 50)
@@ -229,7 +232,7 @@ async def test_trigger_loses_and_bets_settle(tmp_path: Path) -> None:
     await coordinator.answer(GROUP_ID, OTHER_ID, "甲", "1")  # 押群友赢 1
     await coordinator.answer(GROUP_ID, "93004", "乙", "5")  # 押群友输 3
     await asyncio.wait_for(pending.bet_task, 2)
-    for index in range(1, 6):
+    for index in range(1, BICKER_ROUNDS + 1):
         await coordinator.handle_debate(GROUP_ID, TRIGGER_ID, f"我说{index}")
     assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == 45
     assert (await service.profile(GROUP_ID, OTHER_ID)).affection == 49
@@ -249,7 +252,7 @@ async def test_round_timeout_loses_and_settles(tmp_path: Path) -> None:
 
 
 async def test_no_winners_refunds_all(tmp_path: Path) -> None:
-    memory = FakeMemory(["题目", "回1", "回2", "回3", "回4", "回5", "馒头赢"])
+    memory = FakeMemory(["题目", *BICKER_REPLIES, "馒头赢"])
     coordinator, service = _coordinator(tmp_path, memory)
     await give(service, TRIGGER_ID, 50)
     await give(service, OTHER_ID, 50)
@@ -258,7 +261,7 @@ async def test_no_winners_refunds_all(tmp_path: Path) -> None:
     await coordinator.answer(GROUP_ID, OTHER_ID, "甲", "1")
     await coordinator.answer(GROUP_ID, "93004", "乙", "2")
     await asyncio.wait_for(pending.bet_task, 2)
-    for index in range(1, 6):
+    for index in range(1, BICKER_ROUNDS + 1):
         await coordinator.handle_debate(GROUP_ID, TRIGGER_ID, f"我说{index}")
     assert (await service.profile(GROUP_ID, OTHER_ID)).affection == 50
     assert (await service.profile(GROUP_ID, "93004")).affection == 50
@@ -266,7 +269,7 @@ async def test_no_winners_refunds_all(tmp_path: Path) -> None:
 
 
 async def test_remainder_goes_to_earliest_winner(tmp_path: Path) -> None:
-    memory = FakeMemory(["题目", "回1", "回2", "回3", "回4", "回5", "群友赢"])
+    memory = FakeMemory(["题目", *BICKER_REPLIES, "群友赢"])
     coordinator, service = _coordinator(tmp_path, memory)
     await give(service, TRIGGER_ID, 50)
     await give(service, OTHER_ID, 50)
@@ -277,7 +280,7 @@ async def test_remainder_goes_to_earliest_winner(tmp_path: Path) -> None:
     await coordinator.answer(GROUP_ID, "93004", "乙", "1")  # 第二赢家
     await coordinator.answer(GROUP_ID, "93005", "丙", "6")  # 输家押 5
     await asyncio.wait_for(pending.bet_task, 2)
-    for index in range(1, 6):
+    for index in range(1, BICKER_ROUNDS + 1):
         await coordinator.handle_debate(GROUP_ID, TRIGGER_ID, f"我说{index}")
     assert (await service.profile(GROUP_ID, OTHER_ID)).affection == 53
     assert (await service.profile(GROUP_ID, "93004")).affection == 52
@@ -285,12 +288,12 @@ async def test_remainder_goes_to_earliest_winner(tmp_path: Path) -> None:
 
 
 async def test_no_bets_only_trigger_settles(tmp_path: Path) -> None:
-    memory = FakeMemory(["题目", "回1", "回2", "回3", "回4", "回5", "群友赢"])
+    memory = FakeMemory(["题目", *BICKER_REPLIES, "群友赢"])
     coordinator, service = _coordinator(tmp_path, memory)
     await give(service, TRIGGER_ID, 50)
     pending, _sent = await _start(coordinator)
     await asyncio.wait_for(pending.bet_task, 2)
-    for index in range(1, 6):
+    for index in range(1, BICKER_ROUNDS + 1):
         await coordinator.handle_debate(GROUP_ID, TRIGGER_ID, f"我说{index}")
     assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == 53
     assert GROUP_ID not in coordinator.pending
@@ -311,14 +314,14 @@ async def test_model_failure_cancels_and_refunds(tmp_path: Path) -> None:
 
 
 async def test_judge_failure_cancels_and_refunds(tmp_path: Path) -> None:
-    memory = FakeMemory(["题目", "回1", "回2", "回3", "回4", "回5", "不知道"])
+    memory = FakeMemory(["题目", *BICKER_REPLIES, "不知道"])
     coordinator, service = _coordinator(tmp_path, memory)
     await give(service, TRIGGER_ID, 50)
     await give(service, OTHER_ID, 50)
     pending, _sent = await _start(coordinator)
     await coordinator.answer(GROUP_ID, OTHER_ID, "甲", "1")
     await asyncio.wait_for(pending.bet_task, 2)
-    for index in range(1, 6):
+    for index in range(1, BICKER_ROUNDS + 1):
         await coordinator.handle_debate(GROUP_ID, TRIGGER_ID, f"我说{index}")
     assert (await service.profile(GROUP_ID, OTHER_ID)).affection == 50
     assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == 50
@@ -326,7 +329,7 @@ async def test_judge_failure_cancels_and_refunds(tmp_path: Path) -> None:
 
 
 async def test_newbie_protection_on_trigger_loss(tmp_path: Path) -> None:
-    memory = FakeMemory(["题目", "回1", "回2", "回3", "回4", "回5", "馒头赢"])
+    memory = FakeMemory(["题目", *BICKER_REPLIES, "馒头赢"])
     coordinator, service = _coordinator(
         tmp_path,
         memory,
@@ -335,7 +338,7 @@ async def test_newbie_protection_on_trigger_loss(tmp_path: Path) -> None:
     await give(service, TRIGGER_ID, 40)
     pending, sent = await _start(coordinator)
     await asyncio.wait_for(pending.bet_task, 2)
-    for index in range(1, 6):
+    for index in range(1, BICKER_ROUNDS + 1):
         await coordinator.handle_debate(GROUP_ID, TRIGGER_ID, f"我说{index}")
     assert (await service.profile(GROUP_ID, TRIGGER_ID)).affection == 39
     assert "新手保护" in sent[-1].extract_plain_text()
@@ -393,7 +396,7 @@ async def test_bet_handoff_does_not_accept_reply_before_debate(
 async def test_settle_failure_releases_group_seat(
     tmp_path: Path, monkeypatch
 ) -> None:
-    memory = FakeMemory(["题目", "回1", "回2", "回3", "回4", "回5", "群友赢"])
+    memory = FakeMemory(["题目", *BICKER_REPLIES, "群友赢"])
     coordinator, service = _coordinator(tmp_path, memory)
     await give(service, TRIGGER_ID, 50)
     pending, _sent = await _start(coordinator)
@@ -403,7 +406,7 @@ async def test_settle_failure_releases_group_seat(
         raise OSError("disk full")
 
     monkeypatch.setattr(service, "adjust", boom)
-    for index in range(1, 6):
+    for index in range(1, BICKER_ROUNDS + 1):
         await coordinator.handle_debate(GROUP_ID, TRIGGER_ID, f"我说{index}")
 
     assert GROUP_ID not in coordinator.pending
@@ -531,14 +534,14 @@ async def test_start_refused_while_group_busy(tmp_path: Path) -> None:
 
 
 async def test_pool_zero_returns_principal_only(tmp_path: Path) -> None:
-    memory = FakeMemory(["题目", "回1", "回2", "回3", "回4", "回5", "群友赢"])
+    memory = FakeMemory(["题目", *BICKER_REPLIES, "群友赢"])
     coordinator, service = _coordinator(tmp_path, memory)
     await give(service, TRIGGER_ID, 50)
     await give(service, OTHER_ID, 50)
     pending, _sent = await _start(coordinator)
     await coordinator.answer(GROUP_ID, OTHER_ID, "甲", "1")
     await asyncio.wait_for(pending.bet_task, 2)
-    for index in range(1, 6):
+    for index in range(1, BICKER_ROUNDS + 1):
         await coordinator.handle_debate(GROUP_ID, TRIGGER_ID, f"我说{index}")
 
     assert (await service.profile(GROUP_ID, OTHER_ID)).affection == 50
@@ -546,7 +549,7 @@ async def test_pool_zero_returns_principal_only(tmp_path: Path) -> None:
 
 
 async def test_proportional_payout_rewards_larger_stake(tmp_path: Path) -> None:
-    memory = FakeMemory(["题目", "回1", "回2", "回3", "回4", "回5", "群友赢"])
+    memory = FakeMemory(["题目", *BICKER_REPLIES, "群友赢"])
     coordinator, service = _coordinator(tmp_path, memory)
     await give(service, TRIGGER_ID, 50)
     await give(service, OTHER_ID, 50)
@@ -557,7 +560,7 @@ async def test_proportional_payout_rewards_larger_stake(tmp_path: Path) -> None:
     await coordinator.answer(GROUP_ID, "93004", "乙", "1")  # 赢 1
     await coordinator.answer(GROUP_ID, "93005", "丙", "6")  # 输 5
     await asyncio.wait_for(pending.bet_task, 2)
-    for index in range(1, 6):
+    for index in range(1, BICKER_ROUNDS + 1):
         await coordinator.handle_debate(GROUP_ID, TRIGGER_ID, f"我说{index}")
 
     assert (await service.profile(GROUP_ID, OTHER_ID)).affection == 55
@@ -571,12 +574,12 @@ async def test_judge_returns_analysis_and_scores(tmp_path: Path) -> None:
         '{"a_score": 8, "b_score": 5, "winner": "A", '
         '"reason": "A 更切题，B 第 3 回合跑题了"}'
     )
-    memory = FakeMemory(["题目", "回1", "回2", "回3", "回4", "回5", judge])
+    memory = FakeMemory(["题目", *BICKER_REPLIES, judge])
     coordinator, service = _coordinator(tmp_path, memory, rng=FixedRng(0.0))
     await give(service, TRIGGER_ID, 50)
     pending, sent = await _start(coordinator)
     await asyncio.wait_for(pending.bet_task, 2)
-    for index in range(1, 6):
+    for index in range(1, BICKER_ROUNDS + 1):
         await coordinator.handle_debate(GROUP_ID, TRIGGER_ID, f"我说{index}")
 
     body = sent[-1].extract_plain_text()
@@ -588,12 +591,12 @@ async def test_judge_returns_analysis_and_scores(tmp_path: Path) -> None:
 
 async def test_judge_maps_anonymized_winner_back_to_bot(tmp_path: Path) -> None:
     judge = '{"a_score": 9, "b_score": 4, "winner": "A", "reason": "A 更有梗"}'
-    memory = FakeMemory(["题目", "回1", "回2", "回3", "回4", "回5", judge])
+    memory = FakeMemory(["题目", *BICKER_REPLIES, judge])
     coordinator, service = _coordinator(tmp_path, memory, rng=FixedRng(0.9))
     await give(service, TRIGGER_ID, 50)
     pending, sent = await _start(coordinator)
     await asyncio.wait_for(pending.bet_task, 2)
-    for index in range(1, 6):
+    for index in range(1, BICKER_ROUNDS + 1):
         await coordinator.handle_debate(GROUP_ID, TRIGGER_ID, f"我说{index}")
 
     body = sent[-1].extract_plain_text()
@@ -691,12 +694,12 @@ async def test_concession_reply_is_regenerated(tmp_path: Path) -> None:
 
 async def test_judge_prompt_scores_stance_consistency(tmp_path: Path) -> None:
     judge = '{"a_score": 7, "b_score": 6, "winner": "A", "reason": "A 守住了立场"}'
-    memory = FakeMemory([TOPIC_JSON, "回1", "回2", "回3", "回4", "回5", judge])
+    memory = FakeMemory([TOPIC_JSON, *BICKER_REPLIES, judge])
     coordinator, service = _coordinator(tmp_path, memory, rng=FixedRng(0.0))
     await give(service, TRIGGER_ID, 50)
     pending, _sent = await _start(coordinator)
     await asyncio.wait_for(pending.bet_task, 2)
-    for index in range(1, 6):
+    for index in range(1, BICKER_ROUNDS + 1):
         await coordinator.handle_debate(GROUP_ID, TRIGGER_ID, f"我说{index}")
 
     prompt = memory.calls[-1]
