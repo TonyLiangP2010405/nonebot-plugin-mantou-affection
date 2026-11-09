@@ -29,7 +29,7 @@ from nonebot_plugin_mantou_affection.logic import UPSET_EVENT_RATIOS, snapshot_f
 from nonebot_plugin_mantou_affection.models import Profile
 from nonebot_plugin_mantou_affection.service import AffectionService
 from nonebot_plugin_mantou_affection.storage import AffectionStore
-from nonebot_plugin_mantou_affection.wheel import WheelCoordinator
+from nonebot_plugin_mantou_affection.wheel import PendingMemePick, WheelCoordinator
 
 GROUP_ID = "90001"
 TRIGGER_ID = "90002"
@@ -451,6 +451,47 @@ async def test_answer_matcher_records_first_answer_only(
     assert answers[OTHER_ID].nickname == "路人"
     assert answers[OTHER_ID].index == 1
     assert answers[TRIGGER_ID].index == 2
+
+
+async def test_event_answer_wins_over_stale_wheel_meme_pick(
+    bundled_texts_path: Path, tmp_path: Path, monkeypatch
+) -> None:
+    config = Config(
+        mantou_affection_newbie_protection_below=0,
+        mantou_affection_ambient_event_ratio=1.0,
+        mantou_affection_event_timeout=3,
+    )
+    service = _service(tmp_path, AffectionTextLibrary(bundled_texts_path), config)
+    events = _coordinator(service, config, bundled_texts_path, rng=random.Random(0))
+    wheel = WheelCoordinator(service, config, events=events)
+    ambient, answer = register_ambient(service, config, events, wheel=wheel)
+    _capture_send(ambient, monkeypatch)
+
+    pending = events.start(GROUP_ID, TRIGGER_ID, "桃友")
+    assert pending is not None
+
+    sent: list[Message] = []
+
+    async def fake_send(message: Message) -> None:
+        sent.append(message)
+
+    pick = PendingMemePick(
+        GROUP_ID,
+        OTHER_ID,
+        "路人",
+        [(SimpleNamespace(key="meme", keywords=["测试"], tags=[]), "text")],
+        bot=None,
+        send=fake_send,
+        cost=0,
+    )
+    wheel.meme_picks[(GROUP_ID, OTHER_ID)] = pick
+
+    await answer.handlers[0].call(_event("3", user_id=90003, nickname="路人"))
+
+    assert events.pending[GROUP_ID].answers[OTHER_ID].index == 2
+    assert wheel.meme_picks.get((GROUP_ID, OTHER_ID)) is pick
+    assert sent == []
+    events.discard(GROUP_ID)
 
 
 async def test_merged_message_lists_every_answerer(
