@@ -450,11 +450,12 @@ async def test_scoring_is_batched_over_twenty_entries(tmp_path: Path) -> None:
     coordinator, service = _coordinator(tmp_path, memory)
     coordinator.window = 0.2
     await give(service, ALICE, 50)
+    for index in range(21):
+        await give(service, f"93{index:03d}", 50)
     pending, _sent = await _start(coordinator)
 
     for index in range(21):
         user = f"93{index:03d}"
-        await give(service, user, 50)
         assert await coordinator.answer(GROUP_ID, user, f"群友{index}", "参与") is True
     for _ in range(400):
         if pending.phase == "collecting":
