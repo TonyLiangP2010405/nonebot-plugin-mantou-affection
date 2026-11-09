@@ -9,7 +9,7 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Union
 
 from nonebot import get_plugin, logger
 from nonebot.adapters.onebot.v11 import Message, MessageSegment
@@ -76,7 +76,7 @@ FLATTER_PROMPT = (
 FLATTER_FLAGS = {"ok", "lazy", "offtopic", "rude", "copy"}
 NON_TEXT = re.compile(r"[\s\W_]+")
 
-Send = Callable[[Message | str], Awaitable[object]]
+Send = Callable[[Union[Message, str]], Awaitable[object]]
 
 
 class GroupMemoryUnavailable(RuntimeError):

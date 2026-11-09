@@ -111,6 +111,9 @@ def test_devil_draw_ranges(roll, kind) -> None:
 
 
 class FixedRollRng(random.Random):
+    def __new__(cls, *args, **kwargs):
+        return super().__new__(cls)
+
     def __init__(self, roll: int, value: float = 0.0):
         super().__init__(0)
         self.roll = roll
