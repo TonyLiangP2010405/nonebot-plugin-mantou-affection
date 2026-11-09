@@ -4,7 +4,7 @@ import asyncio
 import json
 import os
 import tempfile
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from contextlib import suppress
 from pathlib import Path
 from typing import Any, Callable, TypeVar
@@ -160,6 +160,36 @@ class AffectionStore:
     async def set_setting(self, key: str, value: Any) -> None:
         async with self._lock:
             await asyncio.to_thread(self._set_setting_sync, str(key), value)
+
+    def _set_settings_sync(self, values: Mapping[str, Any]) -> None:
+        if not values:
+            return
+        settings = self._load_sync()["settings"]
+        settings.update({str(key): value for key, value in values.items()})
+        self._save_sync()
+
+    async def set_settings(self, values: Mapping[str, Any]) -> None:
+        """一次写入多项设置，只落盘一次。"""
+
+        async with self._lock:
+            await asyncio.to_thread(self._set_settings_sync, dict(values))
+
+    def _delete_settings_sync(self, keys: Iterable[str]) -> int:
+        settings = self._load_sync()["settings"]
+        missing = object()
+        removed = 0
+        for key in keys:
+            if settings.pop(str(key), missing) is not missing:
+                removed += 1
+        if removed:
+            self._save_sync()
+        return removed
+
+    async def delete_settings(self, keys: Iterable[str]) -> int:
+        """删除多项设置并返回实际删除的条数，用于恢复配置默认值。"""
+
+        async with self._lock:
+            return await asyncio.to_thread(self._delete_settings_sync, list(keys))
 
     def _cooldowns_sync(self) -> dict[str, dict[str, float]]:
         raw = self._load_sync()["cooldowns"]

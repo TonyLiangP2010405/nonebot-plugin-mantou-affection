@@ -7,6 +7,7 @@ from nonebot_plugin_mantou_affection.parsing import (
     parse_adjustment,
     parse_find_char_chances,
     parse_probability,
+    parse_probability_batch,
 )
 
 
@@ -105,3 +106,50 @@ def test_parse_find_char_chances_sets_sources_separately(
 def test_parse_find_char_chances_errors(text: str) -> None:
     with pytest.raises(ValueError, match="馒头找字概率"):
         parse_find_char_chances(text)
+
+
+@pytest.mark.parametrize(
+    ("text", "mode", "value"),
+    [
+        ("0.05%", "set", 0.0005),
+        ("0.001", "set", 0.001),
+        ("0", "set", 0.0),
+        ("×2", "scale", 2.0),
+        ("x0.5", "scale", 0.5),
+        ("X50%", "scale", 0.5),
+        ("*2倍", "scale", 2.0),
+        ("＊3", "scale", 3.0),
+        ("✕0", "scale", 0.0),
+        ("重置", "reset", 0.0),
+        ("恢复默认", "reset", 0.0),
+        ("默认", "reset", 0.0),
+        ("reset", "reset", 0.0),
+        ("DEFAULT", "reset", 0.0),
+    ],
+)
+def test_parse_probability_batch(text: str, mode: str, value: float) -> None:
+    result = parse_probability_batch(text)
+    assert result.mode == mode
+    assert result.value == pytest.approx(value)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        "   ",
+        "abc",
+        "1.5",
+        "101%",
+        "×",
+        "×abc",
+        "×-1",
+        "×1001",
+        "×nan",
+        "×inf",
+        "×50%%",
+    ],
+)
+def test_parse_probability_batch_errors(text: str) -> None:
+    with pytest.raises(ValueError, match="请输入 0~1"):
+        parse_probability_batch(text)

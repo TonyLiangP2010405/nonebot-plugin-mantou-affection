@@ -113,7 +113,7 @@ def test_format_probability(value: float, expected: str) -> None:
 def test_registered_matchers_include_probability_command() -> None:
     from nonebot_plugin_mantou_affection import matchers
 
-    assert len(matchers) == 15
+    assert len(matchers) == 16
     (
         _profile_cmd,
         _interact_cmd,
@@ -130,6 +130,7 @@ def test_registered_matchers_include_probability_command() -> None:
         group_quiz_cmd,
         meme_whitelist_cmd,
         flatter_cmd,
+        batch_probability_cmd,
     ) = matchers
     assert probability_cmd.priority == 10
     assert probability_cmd.block is True
@@ -158,6 +159,12 @@ def test_registered_matchers_include_probability_command() -> None:
         assert matcher.priority == 10
         assert matcher.block is True
         assert [handler.call.__name__ for handler in matcher.handlers] == [handler_name]
+
+    assert batch_probability_cmd.priority == 10
+    assert batch_probability_cmd.block is True
+    assert [handler.call.__name__ for handler in batch_probability_cmd.handlers] == [
+        "handle_probability_batch"
+    ]
 
 
 def _event(group_id: int = 90001, user_id: int = 90002) -> GroupMessageEvent:
@@ -395,3 +402,107 @@ async def test_meme_whitelist_superuser_without_args_toggles_self(
     await handler.call(_event(user_id=10001), Message(""))
     assert "已退出表情免确认白名单" in sent[-1]
     assert await service.meme_confirm_whitelist() == set()
+
+
+async def test_batch_probability_command_query_set_scale_and_reset(
+    tmp_path: Path, monkeypatch
+) -> None:
+    service = AffectionService(AffectionStore(tmp_path / "affection.json"), Config())
+    batch_cmd = register_commands(service, Config())[15]
+    sent: list[str] = []
+
+    async def fake_finish(message: Message | str = "", **kwargs) -> None:
+        sent.append(str(message))
+
+    monkeypatch.setattr(batch_cmd, "finish", fake_finish)
+    handler = batch_cmd.handlers[0]
+
+    await handler.call(Message(""))
+    assert "共 8 项" in sent[-1]
+    assert "馒头小动作：0.05%（配置默认）" in sent[-1]
+    assert "×2" in sent[-1]
+
+    await handler.call(Message("0.01"))
+    assert "统一设为 1%" in sent[-1]
+    assert await service.ambient_probability() == pytest.approx(0.01)
+    assert await service.bet_probability() == pytest.approx(0.01)
+    assert await service.flatter_probability() == pytest.approx(0.01)
+
+    await handler.call(Message("×2"))
+    assert "已按 ×2 缩放 8 项活动概率" in sent[-1]
+    assert "馒头小动作：1% → 2%" in sent[-1]
+    assert await service.wheel_probability() == pytest.approx(0.02)
+
+    await handler.call(Message(""))
+    assert "运行时覆盖，配置默认 0.05%" in sent[-1]
+
+    await handler.call(Message("重置"))
+    assert "已清除 8 项运行时概率覆盖" in sent[-1]
+    assert await service.bet_probability() == pytest.approx(
+        Config().mantou_affection_bet_chance
+    )
+
+    await handler.call(Message("重置"))
+    assert "当前没有运行时概率覆盖" in sent[-1]
+
+    await handler.call(Message("abc"))
+    assert "请输入 0~1" in sent[-1]
+
+    await handler.call(Message("×-1"))
+    assert "请输入 0~1" in sent[-1]
+
+
+async def test_batch_probability_command_scales_percent_factor(
+    tmp_path: Path, monkeypatch
+) -> None:
+    service = AffectionService(AffectionStore(tmp_path / "affection.json"), Config())
+    batch_cmd = register_commands(service, Config())[15]
+    sent: list[str] = []
+
+    async def fake_finish(message: Message | str = "", **kwargs) -> None:
+        sent.append(str(message))
+
+    monkeypatch.setattr(batch_cmd, "finish", fake_finish)
+
+    await batch_cmd.handlers[0].call(Message("×50%"))
+    assert "已按 ×0.5 缩放 8 项活动概率" in sent[-1]
+    assert await service.pk_probability() == pytest.approx(0.005)
+
+
+async def test_help_lists_every_command(tmp_path: Path, monkeypatch) -> None:
+    service = AffectionService(AffectionStore(tmp_path / "affection.json"), Config())
+    help_cmd = register_commands(service, Config())[3]
+    sent: list[str] = []
+
+    async def fake_finish(message: Message | str = "", **kwargs) -> None:
+        sent.append(str(message))
+
+    monkeypatch.setattr(help_cmd, "finish", fake_finish)
+    await help_cmd.handlers[0].call()
+
+    text = sent[-1]
+    assert "全部命令" in text
+    listed = {
+        line.split(" ", 1)[0]
+        for line in text.splitlines()
+        if line.startswith("/")
+    }
+    assert listed == {
+        "/馒头互动",
+        "/馒头好感",
+        "/馒头好感榜",
+        "/馒头表情免确认",
+        "/馒头帮助",
+        "/馒头好感调整",
+        "/馒头好感重置",
+        "/馒头反应概率",
+        "/馒头找字概率",
+        "/馒头博弈概率",
+        "/馒头问答概率",
+        "/馒头问答题库",
+        "/馒头群友问答概率",
+        "/馒头献媚概率",
+        "/馒头转盘概率",
+        "/馒头概率总调",
+        "/馒头强制事件",
+    }

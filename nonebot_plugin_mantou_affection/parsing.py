@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from nonebot.adapters.onebot.v11 import Message
@@ -162,3 +163,59 @@ def parse_probability(text: str) -> float:
     if not 0.0 <= value <= 1.0:
         raise ValueError(PROBABILITY_HINT)
     return value
+
+
+PROBABILITY_BATCH_SET = "set"
+PROBABILITY_BATCH_SCALE = "scale"
+PROBABILITY_BATCH_RESET = "reset"
+MAX_PROBABILITY_SCALE = 1000.0
+PROBABILITY_BATCH_HINT = (
+    "请输入 0~1 的小数（如 0.0005）、百分数（如 0.05%）、"
+    "倍率（如 ×2、×50%）或「重置」"
+)
+PROBABILITY_RESET_WORDS = {"重置", "恢复默认", "默认", "reset", "default"}
+SCALE_PREFIXES = ("×", "x", "X", "*", "＊", "✕")
+
+
+@dataclass(frozen=True)
+class ProbabilityBatch:
+    """批量概率调整请求：统一设值、按倍率缩放或恢复默认。"""
+
+    mode: str
+    value: float = 0.0
+
+
+def _parse_scale_factor(text: str) -> float:
+    raw = text.strip()
+    if raw.endswith("倍"):
+        raw = raw[:-1].strip()
+    if not raw:
+        raise ValueError(PROBABILITY_BATCH_HINT)
+
+    percent = raw.endswith("%")
+    numeric = raw[:-1].strip() if percent else raw
+    try:
+        value = float(numeric)
+    except ValueError as error:
+        raise ValueError(PROBABILITY_BATCH_HINT) from error
+
+    if percent:
+        value /= 100
+    if not math.isfinite(value) or not 0.0 <= value <= MAX_PROBABILITY_SCALE:
+        raise ValueError(PROBABILITY_BATCH_HINT)
+    return value
+
+
+def parse_probability_batch(text: str) -> ProbabilityBatch:
+    """解析批量概率命令：数值统一设值、×/x/* 前缀缩放、指定词重置。"""
+
+    raw = text.strip()
+    if not raw:
+        raise ValueError(PROBABILITY_BATCH_HINT)
+    if raw.lower() in PROBABILITY_RESET_WORDS:
+        return ProbabilityBatch(PROBABILITY_BATCH_RESET)
+    if raw.startswith(SCALE_PREFIXES):
+        return ProbabilityBatch(
+            PROBABILITY_BATCH_SCALE, _parse_scale_factor(raw[1:])
+        )
+    return ProbabilityBatch(PROBABILITY_BATCH_SET, parse_probability(raw))

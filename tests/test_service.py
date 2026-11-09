@@ -273,3 +273,74 @@ async def test_flatter_probability_defaults_and_override(tmp_path: Path) -> None
     await service.set_flatter_probability(0.25)
     assert await service.flatter_probability() == pytest.approx(0.25)
     assert await service.flatter_probability_override() == pytest.approx(0.25)
+
+
+async def test_probability_states_show_defaults_and_overrides(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    states = await service.probability_states()
+
+    assert [state.label for state in states] == [
+        "馒头小动作",
+        "找字（群消息）",
+        "找字（戳一戳）",
+        "馒头博弈",
+        "桃子问答",
+        "群友问答",
+        "献媚桃神",
+        "命运齿轮",
+    ]
+    assert all(state.overridden is False for state in states)
+    assert all(state.value == state.default for state in states)
+
+    await service.set_bet_probability(0.02)
+    states = await service.probability_states()
+    bet = next(state for state in states if state.label == "馒头博弈")
+    assert bet.value == pytest.approx(0.02)
+    assert bet.default == pytest.approx(0.0005)
+    assert bet.overridden is True
+
+
+async def test_set_all_probabilities_persists_every_field(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    await service.set_all_probabilities(0.01)
+
+    states = await service.probability_states()
+    assert len(states) == 8
+    assert all(state.value == pytest.approx(0.01) for state in states)
+    assert all(state.overridden is True for state in states)
+
+    payload = json.loads((tmp_path / "affection.json").read_text(encoding="utf-8"))
+    assert len(payload["settings"]) == 8
+
+
+async def test_scale_all_probabilities_uses_effective_values(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    await service.set_bet_probability(0.01)
+
+    changes = await service.scale_all_probabilities(2)
+    by_label = {change.label: change for change in changes}
+    assert by_label["馒头博弈"].before == pytest.approx(0.01)
+    assert by_label["馒头博弈"].after == pytest.approx(0.02)
+    assert by_label["馒头小动作"].before == pytest.approx(0.0005)
+    assert by_label["馒头小动作"].after == pytest.approx(0.001)
+    assert await service.wheel_probability() == pytest.approx(0.002)
+
+
+async def test_scale_all_probabilities_clamps_at_one(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    await service.set_all_probabilities(0.5)
+
+    changes = await service.scale_all_probabilities(10)
+    assert all(change.after == 1.0 for change in changes)
+
+
+async def test_reset_all_probabilities_keeps_other_settings(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    await service.set_all_probabilities(0)
+    await service.store.set_setting("meme_confirm_whitelist", ["10001"])
+
+    assert await service.reset_all_probabilities() == 8
+    states = await service.probability_states()
+    assert all(state.overridden is False for state in states)
+    assert await service.store.get_setting("meme_confirm_whitelist", []) == ["10001"]
+    assert await service.reset_all_probabilities() == 0

@@ -13,9 +13,12 @@ from .config import Config
 from .logic import level_for, progress_text
 from .parsing import (
     FIND_CHAR_CHANCE_USAGE,
+    PROBABILITY_BATCH_RESET,
+    PROBABILITY_BATCH_SCALE,
     parse_adjustment,
     parse_find_char_chances,
     parse_probability,
+    parse_probability_batch,
 )
 from .pk import BUNDLED_PK_PATH, PkCoordinator, PkQuestionLibrary
 from .service import AffectionService, normalize_nickname
@@ -31,6 +34,12 @@ FLATTER_CHANCE_USAGE = (
     "请输入 0~1 的小数（如 0.0005）或百分数（如 0.05%），0 即关闭献媚桃神"
 )
 WHEEL_CHANCE_USAGE = "请输入 0~1 的小数或百分数（如 0.1%），0 即关闭馒头转盘"
+PROBABILITY_BATCH_USAGE = (
+    "用法：\n"
+    "/馒头概率总调 0.05% —— 全部统一设为该值\n"
+    "/馒头概率总调 ×2 —— 全部按当前值缩放（支持 ×50%）\n"
+    "/馒头概率总调 重置 —— 清除覆盖，恢复配置默认"
+)
 
 
 async def _group_only(event: Event) -> bool:
@@ -62,6 +71,11 @@ def _format_wait(seconds: int) -> str:
 def _format_probability(value: float) -> str:
     percent = f"{value * 100:.6f}".rstrip("0").rstrip(".")
     return f"{percent or '0'}%"
+
+
+def _format_factor(value: float) -> str:
+    text = f"{value:.6f}".rstrip("0").rstrip(".")
+    return text or "0"
 
 
 MEME_WHITELIST_SELF_ONLY = (
@@ -139,8 +153,8 @@ def register_commands(
         block=True,
     )
     help_cmd = on_command(
-        "馒头好感帮助",
-        aliases={"馒头好感菜单"},
+        "馒头帮助",
+        aliases={"馒头好感帮助", "馒头好感菜单", "馒头命令", "馒头菜单"},
         rule=GROUP_ONLY,
         priority=10,
         block=True,
@@ -209,6 +223,13 @@ def register_commands(
     flatter_cmd = on_command(
         "馒头献媚概率",
         aliases={"馒头献媚触发概率", "馒头斗嘴概率", "馒头斗嘴触发概率"},
+        permission=SUPERUSER,
+        priority=10,
+        block=True,
+    )
+    batch_probability_cmd = on_command(
+        "馒头概率总调",
+        aliases={"馒头概率总览", "馒头总概率"},
         permission=SUPERUSER,
         priority=10,
         block=True,
@@ -291,21 +312,33 @@ def register_commands(
     @help_cmd.handle()
     async def handle_help() -> None:
         await help_cmd.finish(
-            "🥟 馒头好感度菜单\n"
-            "/馒头互动 —— 和馒头玩一会儿\n"
+            "🥟 馒头好感度 · 全部命令\n"
+            "\n"
+            "【群友可用】\n"
+            "/馒头互动 —— 陪馒头玩，攒好感\n"
             "/馒头好感 —— 查看自己的好感档案\n"
             "/馒头好感榜 —— 查看本群排行榜\n"
-            "/馒头表情免确认 —— 加入或退出表情免确认白名单"
-            "（普通群友只能管理自己，SUPERUSER 可代管）\n"
-            "/馒头好感调整 @群友 +10 —— SUPERUSER 调整好感\n"
-            "/馒头好感重置 确认 —— SUPERUSER 清空所有好感数据\n"
-            "/馒头找字概率 5% —— SUPERUSER 查看或调整找字小游戏概率\n"
-            "/馒头博弈概率 0.05% —— SUPERUSER 查看或调整馒头博弈概率\n"
-            "/馒头问答概率 1% —— SUPERUSER 查看或调整随机问答概率\n"
-            "/馒头问答题库 —— SUPERUSER 查看题库余量\n"
-            "/馒头群友问答概率 0.05% —— SUPERUSER 查看或调整群友问答概率\n"
-            "/馒头献媚概率 0.05% —— SUPERUSER 查看或调整献媚桃神触发概率\n"
-            "/馒头强制事件 @群友 —— SUPERUSER 强制开一场活动（回复 1~9 选择）"
+            "/馒头表情免确认 —— 加入或退出表情免确认白名单\n"
+            "/馒头帮助 —— 打开这份菜单\n"
+            "\n"
+            "【管理员 · SUPERUSER】\n"
+            "/馒头好感调整 @群友 +10 —— 手动增减好感\n"
+            "/馒头好感重置 确认 —— 清空所有群的好感数据\n"
+            "/馒头反应概率 5% —— 查看或调整馒头小动作概率\n"
+            "/馒头找字概率 5% —— 查看或调整找字概率"
+            "（可写「群消息 5% 戳一戳 2%」）\n"
+            "/馒头博弈概率 0.05% —— 查看或调整博弈开局概率\n"
+            "/馒头问答概率 1% —— 查看或调整桃子问答概率\n"
+            "/馒头问答题库 —— 查看题库余量\n"
+            "/馒头群友问答概率 0.05% —— 查看或调整群友问答概率\n"
+            "/馒头献媚概率 0.05% —— 查看或调整献媚桃神概率\n"
+            "/馒头转盘概率 0.1% —— 查看或调整命运齿轮概率\n"
+            "/馒头概率总调 —— 总览全部概率；带数值统一设置，"
+            "×倍率缩放，重置恢复默认\n"
+            "/馒头强制事件 @群友 —— 回复 1~9 强制开一场活动\n"
+            "\n"
+            "提示：概率命令不带参数就查看当前值，0 即关闭对应活动；"
+            "旧命令 /馒头好感帮助 仍然可用。"
         )
 
     @adjust_cmd.handle()
@@ -596,6 +629,72 @@ def register_commands(
             return
         await flatter_cmd.finish(f"献媚桃神概率已调整为 {_format_probability(value)}")
 
+    @batch_probability_cmd.handle()
+    async def handle_probability_batch(args: Message = CommandArg()) -> None:
+        raw = args.extract_plain_text().strip()
+        try:
+            states = await service.probability_states()
+        except Exception:
+            logger.exception("[mantou-affection] 读取概率总览失败")
+            await batch_probability_cmd.finish("读取失败，请检查数据目录权限后重试。")
+            return
+
+        if not raw:
+            lines = [f"🥟 馒头概率总览（共 {len(states)} 项）"]
+            for state in states:
+                source = (
+                    f"运行时覆盖，配置默认 {_format_probability(state.default)}"
+                    if state.overridden
+                    else "配置默认"
+                )
+                lines.append(
+                    f"{state.label}：{_format_probability(state.value)}（{source}）"
+                )
+            lines.append(PROBABILITY_BATCH_USAGE)
+            await batch_probability_cmd.finish("\n".join(lines))
+            return
+
+        try:
+            request = parse_probability_batch(raw)
+        except ValueError as error:
+            await batch_probability_cmd.finish(str(error))
+            return
+
+        try:
+            if request.mode == PROBABILITY_BATCH_RESET:
+                removed = await service.reset_all_probabilities()
+                if removed:
+                    await batch_probability_cmd.finish(
+                        f"已清除 {removed} 项运行时概率覆盖，全部恢复配置默认值。"
+                    )
+                else:
+                    await batch_probability_cmd.finish(
+                        "当前没有运行时概率覆盖，全部已是配置默认值。"
+                    )
+                return
+            if request.mode == PROBABILITY_BATCH_SCALE:
+                changes = await service.scale_all_probabilities(request.value)
+                lines = [
+                    f"已按 ×{_format_factor(request.value)} 缩放 "
+                    f"{len(changes)} 项活动概率："
+                ]
+                lines.extend(
+                    f"{change.label}：{_format_probability(change.before)} → "
+                    f"{_format_probability(change.after)}"
+                    for change in changes
+                )
+                await batch_probability_cmd.finish("\n".join(lines))
+                return
+            await service.set_all_probabilities(request.value)
+            await batch_probability_cmd.finish(
+                f"已把 {len(states)} 项活动概率统一设为 "
+                f"{_format_probability(request.value)}"
+                "（发送 /馒头概率总调 重置 可恢复默认）。"
+            )
+        except Exception:
+            logger.exception("[mantou-affection] 批量调整概率失败")
+            await batch_probability_cmd.finish("保存失败，请检查数据目录权限后重试。")
+
     @meme_whitelist_cmd.handle()
     async def handle_meme_whitelist(
         event: GroupMessageEvent, args: Message = CommandArg()
@@ -659,4 +758,5 @@ def register_commands(
         group_quiz_cmd,
         meme_whitelist_cmd,
         flatter_cmd,
+        batch_probability_cmd,
     )

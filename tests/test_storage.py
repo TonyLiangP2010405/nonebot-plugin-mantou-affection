@@ -110,3 +110,21 @@ async def test_reset_all_clears_groups_but_keeps_settings(tmp_path: Path) -> Non
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["groups"] == {}
     assert payload["settings"] == {"ambient_probability": 0.5}
+
+
+async def test_settings_bulk_write_and_delete(tmp_path: Path) -> None:
+    path = tmp_path / "affection.json"
+    store = AffectionStore(path)
+
+    await store.set_settings({"a": 0.1, "b": 0.2})
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["settings"] == {"a": 0.1, "b": 0.2}
+
+    reloaded = AffectionStore(path)
+    assert await reloaded.get_setting("a", None) == 0.1
+    assert await reloaded.get_setting("b", None) == 0.2
+    assert await reloaded.delete_settings(["a", "missing"]) == 1
+    assert await reloaded.get_setting("a", None) is None
+    assert await reloaded.get_setting("b", None) == 0.2
+    assert await reloaded.delete_settings(["missing"]) == 0
+    assert await reloaded.delete_settings([]) == 0
