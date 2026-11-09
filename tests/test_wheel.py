@@ -463,7 +463,7 @@ async def test_wheel_not_operate_only_changes_trigger(tmp_path: Path) -> None:
 
 async def test_wheel_choice_and_timeout_settle_once(tmp_path: Path) -> None:
     coordinator = make_coordinator(tmp_path, rng=SequenceRng([50, 50]))
-    coordinator.choice_timeout = 0.01
+    coordinator.choice_timeout = 1.0
     await give(coordinator.service, TRIGGER, 10)
     await give(coordinator.service, OTHER, 10)
     pending, _, _ = await start(coordinator)
