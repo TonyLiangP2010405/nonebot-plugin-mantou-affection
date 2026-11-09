@@ -6,6 +6,7 @@ from time import time
 import pytest
 from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message, MessageSegment
 from nonebot.adapters.onebot.v11.event import Sender
+from nonebot.exception import FinishedException
 
 from nonebot_plugin_mantou_affection.commands import (
     _format_probability,
@@ -506,3 +507,24 @@ async def test_help_lists_every_command(tmp_path: Path, monkeypatch) -> None:
         "/馒头概率总调",
         "/馒头强制事件",
     }
+
+
+@pytest.mark.parametrize("argument", ["0.01", "×2", "重置"])
+async def test_batch_probability_finish_is_not_caught(
+    tmp_path: Path, monkeypatch, argument: str
+) -> None:
+    service = AffectionService(AffectionStore(tmp_path / "affection.json"), Config())
+    batch_cmd = register_commands(service, Config())[15]
+    sent: list[str] = []
+
+    async def fake_finish(message: Message | str = "", **kwargs) -> None:
+        sent.append(str(message))
+        raise FinishedException
+
+    monkeypatch.setattr(batch_cmd, "finish", fake_finish)
+
+    with pytest.raises(FinishedException):
+        await batch_cmd.handlers[0].call(Message(argument))
+
+    assert len(sent) == 1
+    assert "保存失败" not in sent[0]

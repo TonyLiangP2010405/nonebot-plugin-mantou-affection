@@ -660,40 +660,53 @@ def register_commands(
             await batch_probability_cmd.finish(str(error))
             return
 
-        try:
-            if request.mode == PROBABILITY_BATCH_RESET:
+        if request.mode == PROBABILITY_BATCH_RESET:
+            try:
                 removed = await service.reset_all_probabilities()
-                if removed:
-                    await batch_probability_cmd.finish(
-                        f"已清除 {removed} 项运行时概率覆盖，全部恢复配置默认值。"
-                    )
-                else:
-                    await batch_probability_cmd.finish(
-                        "当前没有运行时概率覆盖，全部已是配置默认值。"
-                    )
+            except Exception:
+                logger.exception("[mantou-affection] 重置概率失败")
+                await batch_probability_cmd.finish("保存失败，请检查数据目录权限后重试。")
                 return
-            if request.mode == PROBABILITY_BATCH_SCALE:
-                changes = await service.scale_all_probabilities(request.value)
-                lines = [
-                    f"已按 ×{_format_factor(request.value)} 缩放 "
-                    f"{len(changes)} 项活动概率："
-                ]
-                lines.extend(
-                    f"{change.label}：{_format_probability(change.before)} → "
-                    f"{_format_probability(change.after)}"
-                    for change in changes
+            if removed:
+                await batch_probability_cmd.finish(
+                    f"已清除 {removed} 项运行时概率覆盖，全部恢复配置默认值。"
                 )
-                await batch_probability_cmd.finish("\n".join(lines))
+            else:
+                await batch_probability_cmd.finish(
+                    "当前没有运行时概率覆盖，全部已是配置默认值。"
+                )
+            return
+
+        if request.mode == PROBABILITY_BATCH_SCALE:
+            try:
+                changes = await service.scale_all_probabilities(request.value)
+            except Exception:
+                logger.exception("[mantou-affection] 缩放概率失败")
+                await batch_probability_cmd.finish("保存失败，请检查数据目录权限后重试。")
                 return
-            await service.set_all_probabilities(request.value)
-            await batch_probability_cmd.finish(
-                f"已把 {len(states)} 项活动概率统一设为 "
-                f"{_format_probability(request.value)}"
-                "（发送 /馒头概率总调 重置 可恢复默认）。"
+            lines = [
+                f"已按 ×{_format_factor(request.value)} 缩放 "
+                f"{len(changes)} 项活动概率："
+            ]
+            lines.extend(
+                f"{change.label}：{_format_probability(change.before)} → "
+                f"{_format_probability(change.after)}"
+                for change in changes
             )
+            await batch_probability_cmd.finish("\n".join(lines))
+            return
+
+        try:
+            await service.set_all_probabilities(request.value)
         except Exception:
             logger.exception("[mantou-affection] 批量调整概率失败")
             await batch_probability_cmd.finish("保存失败，请检查数据目录权限后重试。")
+            return
+        await batch_probability_cmd.finish(
+            f"已把 {len(states)} 项活动概率统一设为 "
+            f"{_format_probability(request.value)}"
+            "（发送 /馒头概率总调 重置 可恢复默认）。"
+        )
 
     @meme_whitelist_cmd.handle()
     async def handle_meme_whitelist(
