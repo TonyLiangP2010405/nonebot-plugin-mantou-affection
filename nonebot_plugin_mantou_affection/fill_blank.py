@@ -24,25 +24,42 @@ BUNDLED_FILL_BLANK_PATH = (
 )
 
 FILL_BLANK_RIGHT_REWARD = 5
-FILL_BLANK_WRONG_PENALTY = -3
+FILL_BLANK_WRONG_PENALTY = -5
 FILL_BLANK_CHAR_REWARD = 1
 FILL_BLANK_MAX_PARTIAL_REWARD = 4
 FILL_BLANK_TIMEOUT_PENALTY = -2
+
+FILL_BLANK_HARD_RIGHT_REWARD = 8
+FILL_BLANK_HARD_WRONG_PENALTY = -8
+FILL_BLANK_HARD_TIMEOUT_PENALTY = -10
+FILL_BLANK_HARD_MIN_LENGTH = 6
+FILL_BLANK_HARD_MAX_LENGTH = 8
+
 FILL_BLANK_ANSWER_SLACK = 2
 FILL_BLANK_PLACEHOLDER = "____"
 
 FILL_BLANK_PREFIX = "🧩 补句问答！"
+FILL_BLANK_HARD_PREFIX = "🧩 补句问答·高难度！"
 FILL_BLANK_QUESTION_REPLY = (
     "{prefix}\n"
     "补全下面这句话：\n"
     "{sentence}\n"
     "拼音首字母：{initials}（{length} 个字）\n"
     "大家都可以回答，直接发送答案即可（答题不用@），请在 {timeout} 秒内作答。\n"
-    "答对 +5；答错 -3；答对其中 1 个字 +1；被 @ 的触发者整局没答 -2。"
+    "{rules}"
+)
+FILL_BLANK_RULES = (
+    "答对 +5；答错 -5；答对其中 1 个字 +1；被 @ 的触发者整局没答 -2。"
+)
+FILL_BLANK_HARD_RULES = (
+    "高难度：答对 +8；答错 -8；被 @ 的触发者整局没答 -10（部分答对不加分）。"
 )
 FILL_BLANK_RESULT_REPLY = "{prefix}\n答案：{answer}（{source}）"
 FILL_BLANK_EXACT_REPLY = "全对，好感度 {delta:+d}，当前 {affection}"
 FILL_BLANK_PARTIAL_REPLY = "答对 {matched} 个字，好感度 {delta:+d}，当前 {affection}"
+FILL_BLANK_HARD_PARTIAL_REPLY = (
+    "答对 {matched} 个字但不加分，好感度 {delta:+d}，当前 {affection}"
+)
 FILL_BLANK_WRONG_REPLY = "没答对，好感度 {delta:+d}，当前 {affection}"
 FILL_BLANK_TIMEOUT_REPLY = "整局未答，好感度 {delta:+d}，当前 {affection}"
 
@@ -64,6 +81,7 @@ class FillBlankQuestion:
     initials: str
     answer: str
     source: str = "口头禅"
+    hard: bool = False
 
 
 class FillBlankLibrary:
@@ -76,6 +94,14 @@ class FillBlankLibrary:
     @property
     def questions(self) -> tuple[FillBlankQuestion, ...]:
         return self._questions
+
+    @property
+    def normal_questions(self) -> tuple[FillBlankQuestion, ...]:
+        return tuple(question for question in self._questions if not question.hard)
+
+    @property
+    def hard_questions(self) -> tuple[FillBlankQuestion, ...]:
+        return tuple(question for question in self._questions if question.hard)
 
     @staticmethod
     def _load_file(path: Path) -> tuple[FillBlankQuestion, ...]:
@@ -97,6 +123,10 @@ class FillBlankLibrary:
         initials = str(raw.get("initials", "")).strip().lower()
         answer = str(raw.get("answer", "")).strip()
         source = str(raw.get("source", "")).strip() or "口头禅"
+        difficulty = str(raw.get("difficulty", "normal")).strip().lower()
+        if difficulty not in {"normal", "hard"}:
+            return None
+        hard = difficulty == "hard"
         if not question_id or not sentence or not initials or not answer:
             return None
         if sentence.count(FILL_BLANK_PLACEHOLDER) != 1:
@@ -105,7 +135,11 @@ class FillBlankLibrary:
             return None
         if len(initials) != len(answer):
             return None
-        return FillBlankQuestion(question_id, sentence, initials, answer, source)
+        if hard and not FILL_BLANK_HARD_MIN_LENGTH <= len(answer) <= FILL_BLANK_HARD_MAX_LENGTH:
+            return None
+        return FillBlankQuestion(
+            question_id, sentence, initials, answer, source, hard
+        )
 
     @classmethod
     def _normalize(cls, data: Any) -> tuple[FillBlankQuestion, ...]:
@@ -158,12 +192,23 @@ def matched_characters(guess: str, answer: str) -> int:
     return previous[-1]
 
 
-def score_answer(guess: str, answer: str) -> tuple[int, int]:
-    """返回 (好感度变化, 答对字数)：全对 +5，部分对每个字 +1，全错 -3。"""
+def score_answer(
+    guess: str, answer: str, *, hard: bool = False
+) -> tuple[int, int]:
+    """返回 (好感度变化, 答对字数)。
+
+    普通题全对 +5、全错 -5；部分答对按最长公共子序列每字 +1，最多 +4。
+    高难度题全对 +8；只要不是完全答对就 -8，部分答对不加分。
+    """
 
     if guess == answer:
-        return FILL_BLANK_RIGHT_REWARD, len(answer)
+        reward = (
+            FILL_BLANK_HARD_RIGHT_REWARD if hard else FILL_BLANK_RIGHT_REWARD
+        )
+        return reward, len(answer)
     matched = matched_characters(guess, answer)
+    if hard:
+        return FILL_BLANK_HARD_WRONG_PENALTY, matched
     if matched > 0:
         reward = min(matched * FILL_BLANK_CHAR_REWARD, FILL_BLANK_MAX_PARTIAL_REWARD)
         return reward, matched
@@ -199,11 +244,17 @@ class PendingFillBlank:
     """一道进行中的补句问答，所有人都可以回答，被 @ 的触发者不答要扣分。"""
 
     def __init__(
-        self, group_id: str, target: tuple[str, str], question: FillBlankQuestion
+        self,
+        group_id: str,
+        target: tuple[str, str],
+        question: FillBlankQuestion,
+        *,
+        hard: bool = False,
     ):
         self.group_id = group_id
         self.target = target
         self.question = question
+        self.hard = hard
         self.answers: dict[str, FillBlankAnswer] = {}
         self.accepting = True
         self.task: asyncio.Task | None = None
@@ -272,10 +323,20 @@ class FillBlankCoordinator:
         async with self._start_lock:
             if self.busy(group):
                 return False
-            question = self._draw_question()
+            profile = await self.service.profile(group, user)
+            hard = (
+                profile.affection
+                > self.config.mantou_affection_fill_blank_hard_threshold
+            )
+            question = self._draw_question(hard=hard)
+            if question is None and hard:
+                question = self._draw_question(hard=False)
+                hard = False
             if question is None:
                 return False
-            pending = PendingFillBlank(group, (user, name), question)
+            pending = PendingFillBlank(
+                group, (user, name), question, hard=hard
+            )
             self.pending[group] = pending
 
         try:
@@ -292,19 +353,26 @@ class FillBlankCoordinator:
     def question_message(self, pending: PendingFillBlank) -> str:
         question = pending.question
         return FILL_BLANK_QUESTION_REPLY.format(
-            prefix=FILL_BLANK_PREFIX,
+            prefix=(
+                FILL_BLANK_HARD_PREFIX if pending.hard else FILL_BLANK_PREFIX
+            ),
             sentence=question.sentence,
             initials=question.initials,
             length=len(question.answer),
             timeout=int(self.question_timeout),
+            rules=(
+                FILL_BLANK_HARD_RULES if pending.hard else FILL_BLANK_RULES
+            ),
         )
 
-    def _draw_question(self) -> FillBlankQuestion | None:
-        """随机抽一道题，允许重复抽到同一题。"""
+    def _draw_question(self, *, hard: bool = False) -> FillBlankQuestion | None:
+        """按难度随机抽一道题，允许重复抽到同一题。"""
 
         if self.library is None:
             return None
-        questions = self.library.questions
+        questions = (
+            self.library.hard_questions if hard else self.library.normal_questions
+        )
         if not questions:
             return None
         return self.rng.choice(questions)
@@ -342,7 +410,11 @@ class FillBlankCoordinator:
         segments = [
             MessageSegment.text(
                 FILL_BLANK_RESULT_REPLY.format(
-                    prefix=FILL_BLANK_PREFIX,
+                    prefix=(
+                        FILL_BLANK_HARD_PREFIX
+                        if pending.hard
+                        else FILL_BLANK_PREFIX
+                    ),
                     answer=question.answer,
                     source=question.source,
                 )
@@ -350,7 +422,9 @@ class FillBlankCoordinator:
         ]
         target_id, target_name = pending.target
         for answer in pending.answers.values():
-            delta, matched = score_answer(answer.guess, question.answer)
+            delta, matched = score_answer(
+                answer.guess, question.answer, hard=pending.hard
+            )
             applied, profile, protected = await self.service.adjust(
                 pending.group_id, answer.user_id, answer.nickname, delta
             )
@@ -363,7 +437,11 @@ class FillBlankCoordinator:
                     delta=applied, affection=profile.affection
                 )
             elif matched > 0:
-                result = FILL_BLANK_PARTIAL_REPLY.format(
+                result = (
+                    FILL_BLANK_HARD_PARTIAL_REPLY
+                    if pending.hard
+                    else FILL_BLANK_PARTIAL_REPLY
+                ).format(
                     matched=matched, delta=applied, affection=profile.affection
                 )
             else:
@@ -378,8 +456,13 @@ class FillBlankCoordinator:
             )
 
         if target_id not in pending.answers:
+            timeout_penalty = (
+                FILL_BLANK_HARD_TIMEOUT_PENALTY
+                if pending.hard
+                else FILL_BLANK_TIMEOUT_PENALTY
+            )
             applied, profile, protected = await self.service.adjust(
-                pending.group_id, target_id, target_name, FILL_BLANK_TIMEOUT_PENALTY
+                pending.group_id, target_id, target_name, timeout_penalty
             )
             if applied < 0:
                 await self.service.send_gift(

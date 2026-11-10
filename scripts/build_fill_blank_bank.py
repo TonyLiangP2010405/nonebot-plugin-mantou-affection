@@ -2,11 +2,12 @@
 """生成「馒头补句问答」题库。
 
 题库以桃纸的直播语录、日常梗和近期 B 站动态为事实来源，每条事实写 2~3 个
-原句，再组合少量上下文前缀和收尾，扩展成 5000+ 道不重复的填空题。
+原句，再组合少量上下文前缀和收尾，扩展成 5500 道普通填空题；另外从 6~8 字
+长短语生成 600 道高难度题，供好感度大于 100 的触发者使用。
 
 用法：
     uv run --with pypinyin python scripts/build_fill_blank_bank.py
-    uv run --with pypinyin python scripts/build_fill_blank_bank.py --count 5500
+    uv run --with pypinyin python scripts/build_fill_blank_bank.py --count 5500 --hard-count 600
 """
 
 from __future__ import annotations
@@ -1313,6 +1314,395 @@ FACTS += [
 ]
 
 
+HARD_FACTS = [
+    # ---------------- 高难度 6~8 个字 ----------------
+    {
+        "answer": "最遥远的距离",
+        "source": "口头禅",
+        "statements": [
+            "桃纸把差一点上岛的遗憾总结成「最遥远的距离」。",
+            "桃纸用「最遥远的距离」形容站在岛前却上不去的名场面。",
+        ],
+    },
+    {
+        "answer": "提瓦提共同体",
+        "source": "近期动态",
+        "statements": [
+            "桃纸看完原神主线后反复提到「提瓦提共同体」。",
+            "桃纸说「提瓦提共同体」让她很感动。",
+        ],
+    },
+    {
+        "answer": "没事的没事的",
+        "source": "近期动态",
+        "statements": [
+            "桃纸安慰自己说「没事的没事的」，我还有我的果王。",
+            "种不出想要的东西时，桃纸会连说「没事的没事的」。",
+        ],
+    },
+    {
+        "answer": "我还有我的果王",
+        "source": "近期动态",
+        "statements": [
+            "桃纸安慰自己：没事的没事的，「我还有我的果王」。",
+            "桃纸说就算这样，「我还有我的果王」。",
+        ],
+    },
+    {
+        "answer": "怎么可以这么可爱",
+        "source": "近期动态",
+        "statements": [
+            "桃纸夸沃雅妮莎「怎么可以这么可爱」。",
+            "看到沃雅妮莎时，桃纸感叹「怎么可以这么可爱」。",
+        ],
+    },
+    {
+        "answer": "吸血鬼的感觉",
+        "source": "近期动态",
+        "statements": [
+            "桃纸说诺伊有「吸血鬼的感觉」，好帅。",
+            "桃纸用「吸血鬼的感觉」形容诺伊。",
+        ],
+    },
+    {
+        "answer": "有种回家的感觉",
+        "source": "直播日常",
+        "statements": [
+            "重新打开星露谷时，桃纸说「有种回家的感觉」。",
+            "桃纸形容重玩星露谷「有种回家的感觉」。",
+        ],
+    },
+    {
+        "answer": "星布谷地公测",
+        "source": "近期动态",
+        "statements": [
+            "2026 年 12 月 4 日，桃纸要去玩「星布谷地公测」。",
+            "桃纸最近在关注「星布谷地公测」的定档。",
+        ],
+    },
+    {
+        "answer": "星露谷更新线索",
+        "source": "近期动态",
+        "statements": [
+            "桃纸的动态里有「星露谷更新线索」。",
+            "桃纸关注「星露谷更新线索」里的社区中心。",
+        ],
+    },
+    {
+        "answer": "模拟经营类游戏",
+        "source": "近期动态",
+        "statements": [
+            "桃纸喜欢「模拟经营类游戏」。",
+            "桃纸的 Steam 烹饪节视频盘点了「模拟经营类游戏」。",
+        ],
+    },
+    {
+        "answer": "第一个周年庆",
+        "source": "粉丝互动",
+        "statements": [
+            "桃纸入坑原神后的「第一个周年庆」快到了。",
+            "桃纸说「第一个周年庆」的海报会尽快发。",
+        ],
+    },
+    {
+        "answer": "音乐会员过期了",
+        "source": "口头禅",
+        "statements": [
+            "桃纸的「音乐会员过期了」，她说没钱充。",
+            "桃纸用「音乐会员过期了」解释自己为什么不续费。",
+        ],
+    },
+    {
+        "answer": "不会充会员的",
+        "source": "口头禅",
+        "statements": [
+            "桃纸说自己是「不会充会员的」。",
+            "桃纸强调自己「不会充会员的」。",
+        ],
+    },
+    {
+        "answer": "无情的钓鱼机器",
+        "source": "口头禅",
+        "statements": [
+            "坐在河边守着鱼竿时，桃纸说自己是「无情的钓鱼机器」。",
+            "桃纸把长时间守在河边的自己叫作「无情的钓鱼机器」。",
+        ],
+    },
+    {
+        "answer": "我那个一厘米",
+        "source": "口头禅",
+        "statements": [
+            "桃纸说最遥远的距离不是站在岛前上不去，而是「我那个一厘米」。",
+            "桃纸用「我那个一厘米」形容差一点上岛。",
+        ],
+    },
+    {
+        "answer": "王者荣耀总决赛",
+        "source": "近期动态",
+        "statements": [
+            "桃纸直播看「王者荣耀总决赛」。",
+            "桃纸说先看「王者荣耀总决赛」。",
+        ],
+    },
+    {
+        "answer": "想要的海岛生活",
+        "source": "近期动态",
+        "statements": [
+            "桃纸说星砂岛就是她「想要的海岛生活」。",
+            "桃纸在星砂岛体验「想要的海岛生活」。",
+        ],
+    },
+    {
+        "answer": "遗忘之海探岛攻略",
+        "source": "近期动态",
+        "statements": [
+            "桃纸做过「遗忘之海探岛攻略」。",
+            "桃纸的「遗忘之海探岛攻略」讲了怎么选角色。",
+        ],
+    },
+    {
+        "answer": "山海奇旅盲盒浮岛",
+        "source": "近期动态",
+        "statements": [
+            "桃纸做过「山海奇旅盲盒浮岛」体验。",
+            "桃纸在「山海奇旅盲盒浮岛」里和盲盒一起生活。",
+        ],
+    },
+    {
+        "answer": "星布谷地开火车",
+        "source": "近期动态",
+        "statements": [
+            "桃纸找到了最适合「星布谷地开火车」的 BGM。",
+            "桃纸在「星布谷地开火车」时听 BGM。",
+        ],
+    },
+    {
+        "answer": "斗地主没花色",
+        "source": "近期动态",
+        "statements": [
+            "桃纸吐槽自己的「斗地主没花色」。",
+            "桃纸打牌时发现「斗地主没花色」。",
+        ],
+    },
+    {
+        "answer": "星布谷地打牌",
+        "source": "近期动态",
+        "statements": [
+            "桃纸在「星布谷地打牌」时遇到了雅各布。",
+            "桃纸说「星布谷地打牌」居然还有雅各布。",
+        ],
+    },
+    {
+        "answer": "终于要有达达了",
+        "source": "近期动态",
+        "statements": [
+            "桃纸说自己「终于要有达达了」。",
+            "桃纸在周年庆前瞻里说「终于要有达达了」。",
+        ],
+    },
+    {
+        "answer": "少年感溢出屏幕",
+        "source": "近期动态",
+        "statements": [
+            "桃纸感叹他的「少年感溢出屏幕」。",
+            "桃纸夸某个角色「少年感溢出屏幕」。",
+        ],
+    },
+    {
+        "answer": "男妖精是谁研究的",
+        "source": "近期动态",
+        "statements": [
+            "桃纸问「男妖精是谁研究的」。",
+            "桃纸视频里吐槽「男妖精是谁研究的」。",
+        ],
+    },
+    {
+        "answer": "至冬生存指南",
+        "source": "近期动态",
+        "statements": [
+            "桃纸说「至冬生存指南」是遇事不决敲冰块。",
+            "桃纸在视频里分享「至冬生存指南」。",
+        ],
+    },
+    {
+        "answer": "遇事不决敲冰块",
+        "source": "近期动态",
+        "statements": [
+            "桃纸说至冬生存指南是「遇事不决敲冰块」。",
+            "桃纸在至冬视频里教大家「遇事不决敲冰块」。",
+        ],
+    },
+    {
+        "answer": "狼人杀太夯了",
+        "source": "近期动态",
+        "statements": [
+            "桃纸说至冬「狼人杀太夯了」。",
+            "桃纸做至冬主线时感叹「狼人杀太夯了」。",
+        ],
+    },
+    {
+        "answer": "星布谷地在线断案",
+        "source": "近期动态",
+        "statements": [
+            "桃纸在「星布谷地在线断案」时自称清汤大老爷。",
+            "桃纸的星布谷地视频里有「星布谷地在线断案」。",
+        ],
+    },
+    {
+        "answer": "新角色米提亚",
+        "source": "近期动态",
+        "statements": [
+            "桃纸说「新角色米提亚」真的太可爱了。",
+            "桃纸最近最喜欢「新角色米提亚」。",
+        ],
+    },
+    {
+        "answer": "沃雅妮莎好可爱",
+        "source": "近期动态",
+        "statements": [
+            "桃纸夸「沃雅妮莎好可爱」。",
+            "桃纸看到沃雅妮莎时直呼「沃雅妮莎好可爱」。",
+        ],
+    },
+    {
+        "answer": "吸血鬼感觉好帅",
+        "source": "近期动态",
+        "statements": [
+            "桃纸说诺伊「吸血鬼感觉好帅」。",
+            "桃纸用「吸血鬼感觉好帅」形容诺伊。",
+        ],
+    },
+    {
+        "answer": "桑多涅设计解析",
+        "source": "近期动态",
+        "statements": [
+            "桃纸做过「桑多涅设计解析」。",
+            "桃纸的「桑多涅设计解析」讲了角色细节。",
+        ],
+    },
+    {
+        "answer": "阿兰面前的桑多涅",
+        "source": "近期动态",
+        "statements": [
+            "桃纸说「阿兰面前的桑多涅」像乖乖小猫。",
+            "桃纸形容「阿兰面前的桑多涅」很乖。",
+        ],
+    },
+    {
+        "answer": "原神主线精剪",
+        "source": "近期动态",
+        "statements": [
+            "桃纸做过「原神主线精剪」。",
+            "桃纸的「原神主线精剪」讲了提瓦提共同体。",
+        ],
+    },
+    {
+        "answer": "至冬主线精剪",
+        "source": "近期动态",
+        "statements": [
+            "桃纸做过「至冬主线精剪」。",
+            "桃纸的「至冬主线精剪」里有狼人杀。",
+        ],
+    },
+    {
+        "answer": "提瓦特第一后卫",
+        "source": "近期动态",
+        "statements": [
+            "桃纸说自己是「提瓦特第一后卫」。",
+            "桃纸自称「提瓦特第一后卫」。",
+        ],
+    },
+    {
+        "answer": "所有梦幻果王",
+        "source": "近期动态",
+        "statements": [
+            "桃纸说自己在星布谷地种出了「所有梦幻果王」。",
+            "桃纸在星布谷地收集「所有梦幻果王」。",
+        ],
+    },
+    {
+        "answer": "星布谷地种果王",
+        "source": "近期动态",
+        "statements": [
+            "桃纸在「星布谷地种果王」时很开心。",
+            "桃纸的「星布谷地种果王」日常很有画面感。",
+        ],
+    },
+    {
+        "answer": "星露谷社区中心",
+        "source": "近期动态",
+        "statements": [
+            "桃纸关注「星露谷社区中心」的更新。",
+            "桃纸说「星露谷社区中心」或将拓展。",
+        ],
+    },
+    {
+        "answer": "星布谷地公测定档",
+        "source": "近期动态",
+        "statements": [
+            "桃纸最近在关注「星布谷地公测定档」。",
+            "桃纸的动态里有「星布谷地公测定档」。",
+        ],
+    },
+    {
+        "answer": "原神七点二主线",
+        "source": "近期动态",
+        "statements": [
+            "桃纸最近在补「原神七点二主线」。",
+            "桃纸直播里过「原神七点二主线」。",
+        ],
+    },
+    {
+        "answer": "清汤大老爷上线",
+        "source": "近期动态",
+        "statements": [
+            "桃纸在星布谷地视频里「清汤大老爷上线」。",
+            "桃纸说「清汤大老爷上线」来在线断案。",
+        ],
+    },
+    {
+        "answer": "水仙十字党大胜利",
+        "source": "近期动态",
+        "statements": [
+            "桃纸看月之八前瞻时喊「水仙十字党大胜利」。",
+            "桃纸为「水仙十字党大胜利」欢呼。",
+        ],
+    },
+    {
+        "answer": "七神集结前瞻",
+        "source": "近期动态",
+        "statements": [
+            "桃纸的原神前瞻标题里有「七神集结前瞻」。",
+            "桃纸看「七神集结前瞻」时很期待。",
+        ],
+    },
+    {
+        "answer": "最后的契约前瞻",
+        "source": "近期动态",
+        "statements": [
+            "桃纸的原神 7.2 前瞻标题里有「最后的契约前瞻」。",
+            "桃纸看「最后的契约前瞻」时提到至冬女皇。",
+        ],
+    },
+    {
+        "answer": "星砂岛海岛生活",
+        "source": "近期动态",
+        "statements": [
+            "桃纸在「星砂岛海岛生活」里很放松。",
+            "桃纸说「星砂岛海岛生活」就是她想要的。",
+        ],
+    },
+    {
+        "answer": "千星奇域打台球",
+        "source": "近期动态",
+        "statements": [
+            "桃纸在「千星奇域打台球」时感叹真好玩。",
+            "桃纸的「千星奇域打台球」视频很欢乐。",
+        ],
+    },
+]
+
+
 PREFIXES = ["", "直播里，", "聊到这个话题时，", "在切片里，", "很多人都知道，"]
 SUFFIXES = [
     "",
@@ -1345,6 +1735,7 @@ NO_PREFIX_STARTS = (
     "星布谷地里",
 )
 DEFAULT_COUNT = 5500
+DEFAULT_HARD_COUNT = 600
 DEFAULT_SEED = 20261110
 
 
@@ -1374,11 +1765,14 @@ def variants(statement: str, answer: str) -> list[str]:
     return result
 
 
-def build(count: int, seed: int) -> list[dict]:
+def _rows_from_facts(
+    facts: list[dict], difficulty: str, seen: set[str]
+) -> list[dict]:
     rows: list[dict] = []
-    seen: set[str] = set()
-    for fact in FACTS:
+    for fact in facts:
         answer = fact["answer"]
+        if difficulty == "hard" and not 6 <= len(answer) <= 8:
+            raise ValueError(f"高难度答案必须是 6~8 个字: {answer!r}")
         initials = initials_of(answer)
         if len(initials) != len(answer):
             raise ValueError(f"答案必须是纯中文短语: {answer!r} -> {initials!r}")
@@ -1389,18 +1783,28 @@ def build(count: int, seed: int) -> list[dict]:
                 if answer not in sentence:
                     raise ValueError(f"变体里丢了答案: {answer!r} in {sentence!r}")
                 blanked = sentence.replace(answer, "____", 1)
-                if answer in blanked or blanked.count("____") != 1 or blanked in seen:
+                if (
+                    answer in blanked
+                    or blanked.count("____") != 1
+                    or blanked in seen
+                ):
                     continue
                 seen.add(blanked)
-                rows.append(
-                    {
-                        "id": f"fb-{len(rows) + 1:05d}",
-                        "sentence": blanked,
-                        "initials": initials,
-                        "answer": answer,
-                        "source": fact["source"],
-                    }
-                )
+                row = {
+                    "sentence": blanked,
+                    "initials": initials,
+                    "answer": answer,
+                    "source": fact["source"],
+                }
+                if difficulty == "hard":
+                    row["difficulty"] = "hard"
+                rows.append(row)
+    return rows
+
+
+def _select_rows(
+    rows: list[dict], count: int, seed: int, id_prefix: str
+) -> list[dict]:
     if len(rows) < count:
         raise SystemExit(f"可用题目不足：只有 {len(rows)} 道，需要 {count} 道")
     rng = random.Random(seed)
@@ -1414,8 +1818,20 @@ def build(count: int, seed: int) -> list[dict]:
     rows = selected + remaining[: count - len(selected)]
     rng.shuffle(rows)
     for index, row in enumerate(rows, start=1):
-        row["id"] = f"fb-{index:05d}"
+        row["id"] = f"{id_prefix}-{index:05d}"
     return rows
+
+
+def build(count: int, seed: int) -> list[dict]:
+    return _select_rows(
+        _rows_from_facts(FACTS, "normal", set()), count, seed, "fb"
+    )
+
+
+def build_hard(count: int, seed: int, seen: set[str]) -> list[dict]:
+    return _select_rows(
+        _rows_from_facts(HARD_FACTS, "hard", seen), count, seed, "fbh"
+    )
 
 
 def main() -> None:
@@ -1429,10 +1845,13 @@ def main() -> None:
         / "fill_blank_questions.json",
     )
     parser.add_argument("--count", type=int, default=DEFAULT_COUNT)
+    parser.add_argument("--hard-count", type=int, default=DEFAULT_HARD_COUNT)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     args = parser.parse_args()
 
     rows = build(args.count, args.seed)
+    seen = {row["sentence"] for row in rows}
+    rows += build_hard(args.hard_count, args.seed, seen)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(
         json.dumps({"questions": rows}, ensure_ascii=False, separators=(",", ":")),
