@@ -15,9 +15,10 @@ __plugin_meta__ = PluginMetadata(
         "/馒头帮助｜/馒头互动｜/馒头好感｜/馒头好感榜｜/馒头表情免确认\n"
         "SUPERUSER：/馒头好感调整 @群友 +10｜/馒头好感重置 确认｜/馒头反应概率 5%｜"
         "/馒头找字概率 5%｜/馒头博弈概率 0.05%｜/馒头问答概率 1%｜/馒头问答题库｜"
-        "/馒头群友问答概率 0.05%｜/馒头转盘概率 0.1%｜/馒头献媚概率 0.05%｜"
+        "/馒头群友问答概率 0.05%｜/馒头补句概率 0.05%｜"
+        "/馒头转盘概率 0.1%｜/馒头献媚概率 0.05%｜"
         "/馒头概率总调 0.05%（或 ×2 / 重置）｜"
-        "/馒头强制事件 @群友（回复 1~9 强制开一场活动）"
+        "/馒头强制事件 @群友（回复 1~10 强制开一场活动）"
     ),
     type="application",
     homepage="https://github.com/TonyLiangP2010405/nonebot-plugin-mantou-affection",
@@ -35,6 +36,11 @@ from .bet import BUNDLED_ROUNDS_PATH, BetCoordinator, BetLibrary
 from .commands import register_commands
 from .copywriting import AffectionTextLibrary
 from .events import EventLibrary
+from .fill_blank import (
+    BUNDLED_FILL_BLANK_PATH,
+    FillBlankCoordinator,
+    FillBlankLibrary,
+)
 from .findchar import BUNDLED_PUZZLES_PATH, FindCharCoordinator, FindCharLibrary
 from .flatter import FlatterCoordinator, GroupMemoryAdapter
 from .force import register_force_commands
@@ -89,6 +95,11 @@ group_quiz_coordinator = GroupQuizCoordinator(
     service, plugin_config, group_quiz_library, events=event_coordinator
 )
 event_coordinator.attach_group_quiz(group_quiz_coordinator)
+fill_blank_library = FillBlankLibrary(BUNDLED_FILL_BLANK_PATH)
+fill_blank_coordinator = FillBlankCoordinator(
+    service, plugin_config, fill_blank_library, events=event_coordinator
+)
+event_coordinator.attach_fill_blank(fill_blank_coordinator)
 meme_generator_adapter = MemeGeneratorAdapter(
     bot_name=plugin_config.mantou_affection_bot_name,
     blocked_terms=parse_blocked_terms(plugin_config.mantou_affection_memes_blocked_terms),
@@ -133,6 +144,7 @@ ambient_matcher, answer_matcher = register_ambient(
     pk_coordinator,
     wheel_coordinator,
     group_quiz_coordinator,
+    fill_blank_coordinator,
     flatter=flatter_coordinator,
 )
 force_matchers = register_force_commands(
@@ -144,6 +156,7 @@ force_matchers = register_force_commands(
     pk=pk_coordinator,
     wheel=wheel_coordinator,
     group_quiz=group_quiz_coordinator,
+    fill_blank=fill_blank_coordinator,
     flatter=flatter_coordinator,
 )
 plugin_linkage = register_plugin_linkage(service, plugin_config)

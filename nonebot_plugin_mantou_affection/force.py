@@ -15,6 +15,7 @@ from .ambient import EventCoordinator
 from .bet import BET_RIVALS, BetCoordinator
 from .commands import GROUP_ONLY
 from .config import Config
+from .fill_blank import FillBlankCoordinator
 from .findchar import FindCharCoordinator
 from .flatter import FlatterCoordinator
 from .group_quiz import GroupQuizCoordinator
@@ -33,6 +34,7 @@ FORCE_ACTIVITY_FINDCHAR = "findchar"
 FORCE_ACTIVITY_BET = "bet"
 FORCE_ACTIVITY_PK = "pk"
 FORCE_ACTIVITY_GROUP_QUIZ = "group_quiz"
+FORCE_ACTIVITY_FILL_BLANK = "fill_blank"
 FORCE_ACTIVITY_WHEEL = "wheel"
 FORCE_ACTIVITY_DEVIL = "devil"
 FORCE_ACTIVITY_FLATTER = "flatter"
@@ -47,6 +49,7 @@ FORCE_CHOICES: dict[str, str] = {
     "7": FORCE_ACTIVITY_WHEEL,
     "8": FORCE_ACTIVITY_DEVIL,
     "9": FORCE_ACTIVITY_FLATTER,
+    "10": FORCE_ACTIVITY_FILL_BLANK,
 }
 FORCE_ACTIVITY_LINES: tuple[str, ...] = (
     "1. 馒头小动作",
@@ -58,6 +61,7 @@ FORCE_ACTIVITY_LINES: tuple[str, ...] = (
     "7. 命运齿轮转盘",
     "8. 小恶魔转盘",
     "9. 献媚桃神",
+    "10. 补句问答",
 )
 FORCE_PROMPT = (
     "🎛️ 馒头强制事件（目标：{target}）\n"
@@ -87,7 +91,7 @@ class PendingForce:
 
 
 class ForceCoordinator:
-    """管理强制事件的选择状态与七类活动分发，选择窗口默认 20 秒。
+    """管理强制事件的选择状态与十类活动分发，选择窗口默认 20 秒。
 
     强制触发绕过概率、好感门槛和功能开关，但保留群级互斥：本群已有待结算的活动时
     命令与选择都会被拒绝。强制事件自己的选择状态不占群席位，所以命令发出去的 20 秒
@@ -105,6 +109,7 @@ class ForceCoordinator:
         pk: PkCoordinator,
         wheel: WheelCoordinator,
         group_quiz: GroupQuizCoordinator | None = None,
+        fill_blank: FillBlankCoordinator | None = None,
         flatter: FlatterCoordinator | None = None,
         choice_timeout: float = FORCE_CHOICE_TIMEOUT,
     ):
@@ -116,6 +121,7 @@ class ForceCoordinator:
         self.pk = pk
         self.wheel = wheel
         self.group_quiz = group_quiz
+        self.fill_blank = fill_blank
         self.flatter = flatter
         self.choice_timeout = float(choice_timeout)
         self.pending: dict[str, PendingForce] = {}
@@ -229,6 +235,8 @@ class ForceCoordinator:
             return await self._start_pk(pending, send)
         if choice == FORCE_ACTIVITY_GROUP_QUIZ:
             return await self._start_group_quiz(pending, send)
+        if choice == FORCE_ACTIVITY_FILL_BLANK:
+            return await self._start_fill_blank(pending, send)
         if choice == FORCE_ACTIVITY_WHEEL:
             return await self._start_wheel(pending, send)
         if choice == FORCE_ACTIVITY_DEVIL:
@@ -326,6 +334,17 @@ class ForceCoordinator:
         )
         return None if started else FORCE_FAIL_REPLY
 
+    async def _start_fill_blank(self, pending: PendingForce, send: Send) -> str | None:
+        if self.fill_blank is None:
+            return FORCE_FAIL_REPLY
+        started = await self.fill_blank.start(
+            group_id=pending.group_id,
+            user_id=pending.target_id,
+            nickname=pending.target_name,
+            send=send,
+        )
+        return None if started else FORCE_FAIL_REPLY
+
     async def _start_wheel(
         self, pending: PendingForce, send: Send, *, devil: bool = False
     ) -> str | None:
@@ -386,6 +405,7 @@ def register_force_commands(
     wheel: WheelCoordinator,
     *,
     group_quiz: GroupQuizCoordinator | None = None,
+    fill_blank: FillBlankCoordinator | None = None,
     flatter: FlatterCoordinator | None = None,
     coordinator: ForceCoordinator | None = None,
 ) -> tuple:
@@ -404,6 +424,7 @@ def register_force_commands(
         pk=pk,
         wheel=wheel,
         group_quiz=group_quiz,
+        fill_blank=fill_blank,
         flatter=flatter,
     )
     force_cmd = on_command(

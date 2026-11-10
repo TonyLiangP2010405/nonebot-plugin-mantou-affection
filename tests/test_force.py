@@ -21,6 +21,11 @@ from nonebot_plugin_mantou_affection.bet import (
 from nonebot_plugin_mantou_affection.config import Config
 from nonebot_plugin_mantou_affection.copywriting import AffectionTextLibrary
 from nonebot_plugin_mantou_affection.events import EventLibrary
+from nonebot_plugin_mantou_affection.fill_blank import (
+    BUNDLED_FILL_BLANK_PATH,
+    FillBlankCoordinator,
+    FillBlankLibrary,
+)
 from nonebot_plugin_mantou_affection.findchar import (
     BUNDLED_PUZZLES_PATH,
     FindCharCoordinator,
@@ -72,6 +77,7 @@ EXPECTED_ACTIVITY_LINES = (
     "7. 命运齿轮转盘",
     "8. 小恶魔转盘",
     "9. 献媚桃神",
+    "10. 补句问答",
 )
 
 
@@ -211,6 +217,13 @@ class Harness:
             events=self.events,
             rng=rng,
         )
+        self.fill_blank = FillBlankCoordinator(
+            self.service,
+            self.config,
+            FillBlankLibrary(BUNDLED_FILL_BLANK_PATH),
+            events=self.events,
+            rng=rng,
+        )
         self.wheel = WheelCoordinator(self.service, self.config, events=self.events, rng=rng)
         self.flatter = FlatterCoordinator(
             self.service,
@@ -223,6 +236,7 @@ class Harness:
         self.events.attach_bet(self.bet)
         self.events.attach_pk(self.pk)
         self.events.attach_group_quiz(self.group_quiz)
+        self.events.attach_fill_blank(self.fill_blank)
         self.events.attach_wheel(self.wheel)
         self.events.attach_flatter(self.flatter)
         self.force = ForceCoordinator(
@@ -234,6 +248,7 @@ class Harness:
             pk=self.pk,
             wheel=self.wheel,
             group_quiz=self.group_quiz,
+            fill_blank=self.fill_blank,
             flatter=self.flatter,
             choice_timeout=choice_timeout,
         )
@@ -278,6 +293,7 @@ class Harness:
             *self.bet.pending.values(),
             *self.pk.pending.values(),
             *self.group_quiz.pending.values(),
+            *self.fill_blank.pending.values(),
             *self.wheel.pending.values(),
             *self.force.pending.values(),
         ):
@@ -441,7 +457,7 @@ async def test_force_choice_timeout_cancels_without_affection_change(
     await harness.cleanup()
 
 
-@pytest.mark.parametrize("text", ["10", "0", "1 2", "随便"])
+@pytest.mark.parametrize("text", ["11", "0", "1 2", "随便"])
 async def test_invalid_choice_cancels_without_affection_change(
     tmp_path: Path, bundled_texts_path: Path, monkeypatch, text: str
 ) -> None:
@@ -473,6 +489,7 @@ async def test_invalid_choice_cancels_without_affection_change(
         ("7", "wheel", "命运齿轮转盘"),
         ("8", "wheel", "小恶魔转盘"),
         ("9", "flatter", "献媚桃神"),
+        ("10", "fill_blank", "🧩 补句问答！"),
     ],
 )
 async def test_force_choice_starts_activity(

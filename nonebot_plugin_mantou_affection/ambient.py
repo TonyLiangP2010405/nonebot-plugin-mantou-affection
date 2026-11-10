@@ -14,6 +14,11 @@ from .bet import BUNDLED_ROUNDS_PATH, BetCoordinator, BetLibrary
 from .commands import GROUP_ONLY
 from .config import Config
 from .events import Event, EventLibrary, EventOption
+from .fill_blank import (
+    BUNDLED_FILL_BLANK_PATH,
+    FillBlankCoordinator,
+    FillBlankLibrary,
+)
 from .findchar import BUNDLED_PUZZLES_PATH, FindCharCoordinator, FindCharLibrary
 from .flatter import FlatterCoordinator
 from .group_quiz import BUNDLED_GROUP_QUIZ_PATH, GroupQuizCoordinator
@@ -125,6 +130,7 @@ class EventCoordinator:
         pk: PkCoordinator | None = None,
         wheel: WheelCoordinator | None = None,
         group_quiz: GroupQuizCoordinator | None = None,
+        fill_blank: FillBlankCoordinator | None = None,
         flatter: FlatterCoordinator | None = None,
     ):
         self.service = service
@@ -137,6 +143,7 @@ class EventCoordinator:
         self.pk = pk
         self.wheel = wheel
         self.group_quiz = group_quiz
+        self.fill_blank = fill_blank
         self.flatter = flatter
         self.pending: dict[str, PendingEvent] = {}
 
@@ -163,13 +170,18 @@ class EventCoordinator:
 
         self.group_quiz = group_quiz
 
+    def attach_fill_blank(self, fill_blank: FillBlankCoordinator) -> None:
+        """接入补句问答，让它和其余活动共用同一个群的席位。"""
+
+        self.fill_blank = fill_blank
+
     def attach_flatter(self, flatter: FlatterCoordinator) -> None:
         """接入献媚桃神，让它和其余活动共用同一个群的席位。"""
 
         self.flatter = flatter
 
     def busy(self, group_id: str) -> bool:
-        """本群是否已经有待结算的活动：随机事件、找字、博弈、问答、群友问答、转盘或献媚。"""
+        """本群是否已经有待结算的活动：随机事件、找字、博弈、问答、群友问答、补句问答、转盘或献媚。"""
 
         key = str(group_id)
         if key in self.pending:
@@ -181,6 +193,7 @@ class EventCoordinator:
                 self.bet,
                 self.pk,
                 self.group_quiz,
+                self.fill_blank,
                 self.wheel,
                 self.flatter,
             )
@@ -502,16 +515,17 @@ def register_ambient(
     pk: PkCoordinator | None = None,
     wheel: WheelCoordinator | None = None,
     group_quiz: GroupQuizCoordinator | None = None,
+    fill_blank: FillBlankCoordinator | None = None,
     flatter: FlatterCoordinator | None = None,
 ) -> tuple:
-    """群友发言时按概率触发找字、博弈、随机问答、群友问答、命运齿轮转盘、献媚桃神或馒头小动作。
+    """群友发言时按概率触发找字、博弈、随机问答、群友问答、补句问答、转盘、献媚桃神或馒头小动作。
 
-    找字和博弈保留各自的好感度门槛；随机问答和群友问答不看榜单或好感度，分别默认每次
-    群消息有 1%、0.05% 概率给当前发言者出一道题。命运齿轮转盘只看好感大于 0 和它自己的
-    独立概率，不参与小动作的抽签；献媚桃神让群友给桃神写一句献媚，截止后由模型统一打分。几种
-    活动互斥，不会在同一条消息上同时触发；所有数字答案都走这里的答案路由，
-    「参与 / 运作 / 不运作」也由同一个 answer matcher 转给转盘。事件预处理器只给博弈
-    记录最近发言表。
+    找字和博弈保留各自的好感度门槛；随机问答、群友问答和补句问答不看榜单或好感度，
+    分别默认每次群消息有 1%、0.05%、0.05% 概率给当前发言者出一道题。命运齿轮转盘只看
+    好感大于 0 和它自己的独立概率，不参与小动作的抽签；献媚桃神让群友给桃神写一句献媚，
+    截止后由模型统一打分。几种活动互斥，不会在同一条消息上同时触发；所有数字答案都走
+    这里的答案路由，「参与 / 运作 / 不运作」也由同一个 answer matcher 转给转盘。
+    事件预处理器只给博弈记录最近发言表。
     """
 
     coordinator = events or EventCoordinator(service, config)
@@ -548,11 +562,19 @@ def register_ambient(
         events=coordinator,
         rng=coordinator.rng,
     )
+    fill_blank_coordinator = fill_blank or FillBlankCoordinator(
+        service,
+        config,
+        FillBlankLibrary(BUNDLED_FILL_BLANK_PATH),
+        events=coordinator,
+        rng=coordinator.rng,
+    )
     coordinator.attach_find_char(find_char)
     coordinator.attach_bet(bet_coordinator)
     coordinator.attach_pk(pk_coordinator)
     coordinator.attach_wheel(wheel_coordinator)
     coordinator.attach_group_quiz(group_quiz_coordinator)
+    coordinator.attach_fill_blank(fill_blank_coordinator)
     ambient = on_message(rule=GROUP_ONLY, priority=90, block=False)
     answer = on_message(rule=GROUP_ONLY, priority=5, block=False)
 
@@ -580,6 +602,8 @@ def register_ambient(
             if await pk_coordinator.answer(group_id, user_id, name, text):
                 return
             if await group_quiz_coordinator.answer(group_id, user_id, name, text):
+                return
+            if await fill_blank_coordinator.answer(group_id, user_id, name, text):
                 return
             if await bet_coordinator.answer(group_id, user_id, name, text):
                 return
@@ -683,6 +707,25 @@ def register_ambient(
                 )
             except Exception:
                 logger.exception("[mantou-affection] 发起群友问答失败")
+                started = False
+            if started:
+                return
+
+        try:
+            fill_blank_ready = await service.fill_blank_triggered()
+        except Exception:
+            logger.exception("[mantou-affection] 判定补句问答失败")
+            fill_blank_ready = False
+        if fill_blank_ready:
+            try:
+                started = await fill_blank_coordinator.start(
+                    group_id=group_id,
+                    user_id=user_id,
+                    nickname=nickname,
+                    send=ambient.send,
+                )
+            except Exception:
+                logger.exception("[mantou-affection] 发起补句问答失败")
                 started = False
             if started:
                 return

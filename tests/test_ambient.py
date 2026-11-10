@@ -21,6 +21,11 @@ from nonebot_plugin_mantou_affection.ambient import (
 from nonebot_plugin_mantou_affection.config import Config
 from nonebot_plugin_mantou_affection.copywriting import AffectionTextLibrary
 from nonebot_plugin_mantou_affection.events import EventLibrary
+from nonebot_plugin_mantou_affection.fill_blank import (
+    FillBlankCoordinator,
+    FillBlankQuestion,
+    PendingFillBlank,
+)
 from nonebot_plugin_mantou_affection.flatter import (
     FlatterCoordinator,
     GroupMemoryUnavailable,
@@ -492,6 +497,51 @@ async def test_event_answer_wins_over_stale_wheel_meme_pick(
     assert wheel.meme_picks.get((GROUP_ID, OTHER_ID)) is pick
     assert sent == []
     events.discard(GROUP_ID)
+
+
+async def test_fill_blank_answer_is_routed_before_wheel(
+    bundled_texts_path: Path, tmp_path: Path, monkeypatch
+) -> None:
+    config = Config(
+        mantou_affection_newbie_protection_below=0,
+        mantou_affection_ambient_event_ratio=0.0,
+    )
+    service = _service(tmp_path, AffectionTextLibrary(bundled_texts_path), config)
+    events = _coordinator(service, config, bundled_texts_path, rng=random.Random(0))
+    fill_blank = FillBlankCoordinator(service, config, None, events=events)
+    wheel = WheelCoordinator(service, config, events=events)
+    ambient, answer = register_ambient(
+        service, config, events, fill_blank=fill_blank, wheel=wheel
+    )
+    _capture_send(ambient, monkeypatch)
+
+    fill_blank.pending[GROUP_ID] = PendingFillBlank(
+        GROUP_ID,
+        (TRIGGER_ID, "桃友"),
+        FillBlankQuestion("test", "____", "dch", "大出货", "口头禅"),
+    )
+    sent: list[Message] = []
+
+    async def fake_send(message: Message) -> None:
+        sent.append(message)
+
+    pick = PendingMemePick(
+        GROUP_ID,
+        OTHER_ID,
+        "路人",
+        [(SimpleNamespace(key="meme", keywords=["测试"], tags=[]), "text")],
+        bot=None,
+        send=fake_send,
+        cost=0,
+    )
+    wheel.meme_picks[(GROUP_ID, OTHER_ID)] = pick
+
+    await answer.handlers[0].call(_event("大出货", user_id=90003, nickname="路人"))
+
+    assert fill_blank.pending[GROUP_ID].answers[OTHER_ID].guess == "大出货"
+    assert wheel.meme_picks.get((GROUP_ID, OTHER_ID)) is pick
+    assert sent == []
+    fill_blank.discard(GROUP_ID)
 
 
 async def test_merged_message_lists_every_answerer(

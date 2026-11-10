@@ -37,6 +37,7 @@ FIND_CHAR_POKE_CHANCE_SETTING = "find_char_poke_chance"
 BET_PROBABILITY_SETTING = "bet_probability"
 PK_PROBABILITY_SETTING = "pk_probability"
 GROUP_QUIZ_PROBABILITY_SETTING = "group_quiz_probability"
+FILL_BLANK_PROBABILITY_SETTING = "fill_blank_probability"
 FLATTER_PROBABILITY_SETTING = "bicker_probability"  # 沿用旧键名 兼容已保存的覆盖值
 WHEEL_PROBABILITY_SETTING = "wheel_probability"
 MEME_CONFIRM_WHITELIST_SETTING = "meme_confirm_whitelist"
@@ -95,6 +96,11 @@ PROBABILITY_FIELDS: tuple[ProbabilityField, ...] = (
         GROUP_QUIZ_PROBABILITY_SETTING,
         "群友问答",
         "mantou_affection_group_quiz_chance",
+    ),
+    ProbabilityField(
+        FILL_BLANK_PROBABILITY_SETTING,
+        "补句问答",
+        "mantou_affection_fill_blank_chance",
     ),
     ProbabilityField(
         FLATTER_PROBABILITY_SETTING,
@@ -336,6 +342,31 @@ class AffectionService:
 
     async def set_group_quiz_probability(self, value: float) -> None:
         await self.store.set_setting(GROUP_QUIZ_PROBABILITY_SETTING, float(value))
+
+    async def fill_blank_triggered(self) -> bool:
+        """补句问答不看榜单或好感度，只按独立概率判定。"""
+
+        chance = await self.fill_blank_probability()
+        return self.rng.random() < chance
+
+    async def fill_blank_probability(self) -> float:
+        """补句问答的触发概率，运行时用 /馒头补句概率 覆盖过就优先用它。"""
+
+        return await self._stored_probability(
+            FILL_BLANK_PROBABILITY_SETTING,
+            self.config.mantou_affection_fill_blank_chance,
+        )
+
+    async def fill_blank_probability_override(self) -> float | None:
+        """读取运行时覆盖的补句问答概率，没覆盖过返回 None。"""
+
+        stored: Any = await self.store.get_setting(FILL_BLANK_PROBABILITY_SETTING, None)
+        if isinstance(stored, bool) or not isinstance(stored, (int, float)):
+            return None
+        return min(1.0, max(0.0, float(stored)))
+
+    async def set_fill_blank_probability(self, value: float) -> None:
+        await self.store.set_setting(FILL_BLANK_PROBABILITY_SETTING, float(value))
 
     async def flatter_triggered(self) -> bool:
         """献媚桃神不看好感度，只按独立概率判定。"""
