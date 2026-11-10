@@ -176,11 +176,14 @@ def test_bundled_fill_blank_library_is_valid() -> None:
 
     assert library.questions
     assert len(library.questions) == len(raw)
-    assert len(library.questions) >= 40
+    assert len(library.questions) >= 5000
     ids = [question.question_id for question in library.questions]
     assert len(ids) == len(set(ids))
+    sentences = [question.sentence for question in library.questions]
+    assert len(sentences) == len(set(sentences))
     for question in library.questions:
         assert question.sentence.count("____") == 1
+        assert question.answer not in question.sentence
         assert question.initials.isascii() and question.initials.isalpha()
         assert len(question.initials) == len(question.answer)
         assert question.answer
