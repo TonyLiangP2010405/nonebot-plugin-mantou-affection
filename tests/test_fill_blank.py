@@ -275,13 +275,21 @@ def test_score_answer_exact_partial_wrong() -> None:
 
 
 def test_looks_like_answer_filters_noise() -> None:
-    assert looks_like_answer("大出获", 3) is True
-    assert looks_like_answer(" 大出获！", 3) is True
-    assert looks_like_answer("/馒头帮助", 3) is False
-    assert looks_like_answer("这是一句特别长的闲聊内容", 3) is False
-    assert looks_like_answer("123", 3) is False
-    assert looks_like_answer("https://example.com", 3) is False
-    assert looks_like_answer("😂😂", 3) is False
+    assert looks_like_answer("大出获", "大出货") is True
+    assert looks_like_answer(" 大出获！", "大出货") is True
+    assert looks_like_answer("大出", "大出货") is True
+    assert looks_like_answer("大", "大出货") is True
+    assert looks_like_answer("/馒头帮助", "大出货") is False
+    assert looks_like_answer("大家好", "大出货") is False
+    assert looks_like_answer("哈哈哈哈", "大出货") is False
+    assert looks_like_answer("这是一句特别长的闲聊内容", "大出货") is False
+    assert looks_like_answer("123", "大出货") is False
+    assert looks_like_answer("https://example.com", "大出货") is False
+    assert looks_like_answer("😂😂", "大出货") is False
+    assert looks_like_answer("答：完全不对", "大出货") is True
+    assert looks_like_answer("答案是什么", "大出货") is False
+    assert looks_like_answer("答案是 完全不对", "大出货") is False
+    assert looks_like_answer("答：这是一句特别长的闲聊内容", "大出货") is False
 
 
 # ---------------------------------------------------------------- 开局与作答
@@ -301,6 +309,7 @@ async def test_fill_blank_start_asks_everyone(tmp_path: Path) -> None:
     assert pending.question.sentence in body
     assert f"拼音首字母：{pending.question.initials}（{len(pending.question.answer)} 个字）" in body
     assert "大家都可以回答" in body
+    assert "答：xxx" in body
     assert "60 秒" in body
     assert "答对 +5" in body
     assert "答错 -5" in body
@@ -360,7 +369,7 @@ async def test_fill_blank_hard_mode_settles_exact_and_wrong(
     pending = coordinator.pending[GROUP_ID]
 
     assert await _submit(coordinator, TARGET, "没事的没事的") is True
-    assert await _submit(coordinator, OTHER, "哈哈哈") is True
+    assert await _submit(coordinator, OTHER, "答：哈哈哈") is True
     assert await _submit(coordinator, OTHER_B, "没事的没事") is True
 
     await asyncio.wait_for(pending.task, 1)
@@ -434,14 +443,14 @@ async def test_fill_blank_start_returns_false_when_busy_or_empty(
 async def test_fill_blank_answers_are_first_only_and_others_can_join(
     tmp_path: Path,
 ) -> None:
-    coordinator = _coordinator(tmp_path)
+    coordinator = _coordinator(tmp_path, questions=[QUESTIONS[0]])
     sent: list[Message] = []
     assert await _start(coordinator, sent) is True
 
     assert await _submit(coordinator, TARGET, "大出获") is True
     assert await _submit(coordinator, TARGET, "大出货") is False
     assert await _submit(coordinator, OTHER, "大出货") is True
-    assert await _submit(coordinator, OTHER_B, "哈哈") is True
+    assert await _submit(coordinator, OTHER_B, "答：哈哈") is True
 
     pending = coordinator.pending[GROUP_ID]
     assert set(pending.answers) == {TARGET, OTHER, OTHER_B}
@@ -482,7 +491,7 @@ async def test_fill_blank_wrong_answer_and_target_timeout_penalty(
     assert await _start(coordinator, sent) is True
     pending = coordinator.pending[GROUP_ID]
 
-    assert await _submit(coordinator, OTHER, "哈哈哈") is True
+    assert await _submit(coordinator, OTHER, "答：哈哈哈") is True
     await asyncio.wait_for(pending.task, 1)
 
     lines = _result_lines(sent[-1])
@@ -503,6 +512,22 @@ async def test_fill_blank_ignores_commands_and_long_chat(
     assert await _submit(coordinator, TARGET, "/馒头帮助") is False
     assert await _submit(coordinator, OTHER, "这是一句特别长的闲聊内容") is False
     assert coordinator.pending[GROUP_ID].answers == {}
+    await _cancel_task(coordinator)
+
+
+async def test_fill_blank_ignores_concurrent_chat(tmp_path: Path) -> None:
+    coordinator = _coordinator(tmp_path, questions=[QUESTIONS[0]])
+    sent: list[Message] = []
+    assert await _start(coordinator, sent) is True
+
+    assert await _submit(coordinator, OTHER, "大家好") is False
+    assert await _submit(coordinator, OTHER_B, "哈哈哈哈") is False
+    assert await _submit(coordinator, TARGET, "确实是这样") is False
+    assert coordinator.pending[GROUP_ID].answers == {}
+
+    # 真要提交完全不对的答案时用答题前缀强制提交
+    assert await _submit(coordinator, OTHER, "答：确实是这样") is True
+    assert set(coordinator.pending[GROUP_ID].answers) == {OTHER}
     await _cancel_task(coordinator)
 
 

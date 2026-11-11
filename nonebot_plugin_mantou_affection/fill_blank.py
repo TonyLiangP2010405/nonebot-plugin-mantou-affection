@@ -45,7 +45,8 @@ FILL_BLANK_QUESTION_REPLY = (
     "补全下面这句话：\n"
     "{sentence}\n"
     "拼音首字母：{initials}（{length} 个字）\n"
-    "大家都可以回答，直接发送答案即可（答题不用@），请在 {timeout} 秒内作答。\n"
+    "大家都可以回答，直接发完整答案即可（答题不用@）；不确定或只记得几个字时，"
+    "请用「答：xxx」开头，请在 {timeout} 秒内作答。\n"
     "{rules}"
 )
 FILL_BLANK_RULES = (
@@ -69,6 +70,7 @@ _STRIP_PUNCTUATION = re.compile(
 _ANSWER_PREFIX = re.compile(
     r"^(?:答案是|答案|答|我猜是|我猜|我觉得是|我觉得|应该是|就是)[:：\s]*"
 )
+_EXPLICIT_ANSWER_PREFIX = re.compile(r"^答\s*[:：]")
 _COMMAND_PREFIXES = ("/", "／")
 
 
@@ -215,8 +217,13 @@ def score_answer(
     return FILL_BLANK_WRONG_PENALTY, 0
 
 
-def looks_like_answer(text: str, answer_length: int) -> bool:
-    """粗筛答题窗口里的消息，避免把命令、链接和太长的闲聊当成答案。"""
+def looks_like_answer(text: str, answer: str) -> bool:
+    """粗筛答题窗口里的消息，避免把命令、链接和同时进行的闲聊当成答案。
+
+    不带「答：」前缀时，只有和答案有足够多相同字（短答案至少 2 个字，长答案
+    按长度递增）才会被当作答案；单个字允许作为只答对一个字的尝试。拿不准时
+    可以用「答：xxx」强制提交，这时即使一个字都没对上也会按答错结算。
+    """
 
     raw = str(text).strip()
     if not raw or raw.startswith(_COMMAND_PREFIXES):
@@ -226,9 +233,17 @@ def looks_like_answer(text: str, answer_length: int) -> bool:
     guess = normalize_answer(raw)
     if not guess or guess.isdigit():
         return False
-    if len(guess) > answer_length + FILL_BLANK_ANSWER_SLACK:
+    if len(guess) > len(answer) + FILL_BLANK_ANSWER_SLACK:
         return False
-    return any("\u4e00" <= char <= "\u9fff" for char in guess)
+    if not any("\u4e00" <= char <= "\u9fff" for char in guess):
+        return False
+    if _EXPLICIT_ANSWER_PREFIX.match(raw):
+        return True
+    matched = matched_characters(guess, answer)
+    if len(guess) == 1:
+        return matched == 1
+    required = min(len(answer), max(2, len(answer) // 2))
+    return matched >= required
 
 
 class FillBlankAnswer:
@@ -493,7 +508,7 @@ class FillBlankCoordinator:
         pending = self.pending.get(str(group_id))
         if pending is None or not pending.accepting:
             return False
-        if not looks_like_answer(text, len(pending.question.answer)):
+        if not looks_like_answer(text, pending.question.answer):
             return False
         guess = normalize_answer(text)
         return pending.record(
