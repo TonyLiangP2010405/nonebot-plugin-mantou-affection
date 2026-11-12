@@ -12,6 +12,8 @@ from nonebot_plugin_mantou_affection.commands import register_commands
 from nonebot_plugin_mantou_affection.config import Config
 from nonebot_plugin_mantou_affection.fill_blank import (
     BUNDLED_FILL_BLANK_PATH,
+    FILL_BLANK_HARD_HINT_PREFIX,
+    FILL_BLANK_HARD_HINT_REVEAL,
     FILL_BLANK_HARD_PREFIX,
     FILL_BLANK_PREFIX,
     FillBlankCoordinator,
@@ -37,6 +39,7 @@ HARD_QUESTIONS = [
         "answer": "没事的没事的",
         "source": "近期动态",
         "difficulty": "hard",
+        "pinyin": "méi shì de méi shì de",
     },
 ]
 
@@ -207,6 +210,10 @@ def test_bundled_fill_blank_library_is_valid() -> None:
         assert question.source
         if question.hard:
             assert 6 <= len(question.answer) <= 8
+            assert len(question.pinyin) == len(question.answer)
+            assert all(part for part in question.pinyin)
+        else:
+            assert question.pinyin == ()
 
 
 def test_fill_blank_library_skips_invalid_questions(tmp_path: Path) -> None:
@@ -231,6 +238,20 @@ def test_fill_blank_library_skips_invalid_questions(tmp_path: Path) -> None:
     )
 
     assert [question.question_id for question in library.questions] == ["dachuhuo"]
+
+
+def test_fill_blank_library_reads_optional_pinyin(tmp_path: Path) -> None:
+    library = _library(tmp_path, [HARD_QUESTIONS[0]])
+    assert library.questions[0].pinyin == ("méi", "shì", "de", "méi", "shì", "de")
+
+    as_list = _library(
+        tmp_path, [{**HARD_QUESTIONS[0], "pinyin": ["méi", "shì", "de", "méi", "shì", "de"]}]
+    )
+    assert as_list.questions[0].pinyin == ("méi", "shì", "de", "méi", "shì", "de")
+
+    # 数量对不上就当没有提示数据, 题目本身照常可用
+    broken = _library(tmp_path, [{**HARD_QUESTIONS[0], "pinyin": "méi shì"}])
+    assert broken.questions[0].pinyin == ()
 
 
 def test_fill_blank_defaults() -> None:
@@ -270,8 +291,20 @@ def test_score_answer_exact_partial_wrong() -> None:
     assert score_answer("出货", "大出货") == (2, 2)
     assert score_answer("哈哈", "大出货") == (-5, 0)
     assert score_answer("没事的没事的", "没事的没事的", hard=True) == (8, 6)
-    assert score_answer("没事的没事", "没事的没事的", hard=True) == (-8, 5)
+    # 高难度提示前答错: 每答对一个字少扣 1 点。
+    assert score_answer("没事的没事", "没事的没事的", hard=True) == (-3, 5)
+    assert score_answer("没事的", "没事的没事的", hard=True) == (-5, 3)
     assert score_answer("哈哈哈", "没事的没事的", hard=True) == (-8, 0)
+    # 提示之后答题一律扣分: 全对 -3, 没全对 -5。
+    assert score_answer(
+        "没事的没事的", "没事的没事的", hard=True, after_hint=True
+    ) == (-3, 6)
+    assert score_answer(
+        "没事的没事", "没事的没事的", hard=True, after_hint=True
+    ) == (-5, 5)
+    assert score_answer(
+        "哈哈哈", "没事的没事的", hard=True, after_hint=True
+    ) == (-5, 0)
 
 
 def test_looks_like_answer_filters_noise() -> None:
@@ -321,6 +354,7 @@ async def test_fill_blank_start_asks_everyone(tmp_path: Path) -> None:
 
 async def test_fill_blank_hard_mode_above_threshold(tmp_path: Path) -> None:
     coordinator = _coordinator(tmp_path, questions=HARD_QUESTIONS)
+    coordinator.question_timeout = 60
     await _give_affection(coordinator.service, 101, TARGET)
     sent: list[Message] = []
 
@@ -328,13 +362,18 @@ async def test_fill_blank_hard_mode_above_threshold(tmp_path: Path) -> None:
     pending = coordinator.pending[GROUP_ID]
     assert pending.hard is True
     assert 6 <= len(pending.question.answer) <= 8
+    assert coordinator.hard_round_timeout == 120
+    assert coordinator.hard_hint_delay == 60
     body = sent[0].extract_plain_text()
     assert FILL_BLANK_HARD_PREFIX in body
     assert "高难度" in body
-    assert "答对 +8" in body
+    assert "120 秒内作答" in body
+    assert "前 60 秒内答对 +8" in body
     assert "答错 -8" in body
+    assert "答对 1 个字少扣 1 点" in body
+    assert "60 秒时会公布几个字的拼音" in body
+    assert "之后答错 -5、答对 -3" in body
     assert "整局没答 -10" in body
-    assert "部分答对不加分" in body
     assert "答对其中 1 个字 +1" not in body
     assert f"拼音首字母：{pending.question.initials}" in body
     await _cancel_task(coordinator)
@@ -380,11 +419,11 @@ async def test_fill_blank_hard_mode_settles_exact_and_wrong(
     assert "全对" in lines[TARGET]
     assert "-8" in lines[OTHER]
     assert "没答对" in lines[OTHER]
-    assert "-8" in lines[OTHER_B]
-    assert "答对 5 个字但不加分" in lines[OTHER_B]
+    assert "-3" in lines[OTHER_B]
+    assert "答对 5 个字，少扣 5 点" in lines[OTHER_B]
     assert (await coordinator.service.profile(GROUP_ID, TARGET)).affection == 208
     assert (await coordinator.service.profile(GROUP_ID, OTHER)).affection == 92
-    assert (await coordinator.service.profile(GROUP_ID, OTHER_B)).affection == 92
+    assert (await coordinator.service.profile(GROUP_ID, OTHER_B)).affection == 97
 
 
 async def test_fill_blank_hard_mode_target_timeout_penalty(
@@ -401,6 +440,76 @@ async def test_fill_blank_hard_mode_target_timeout_penalty(
     assert "-10" in lines[TARGET]
     assert "整局未答" in lines[TARGET]
     assert (await coordinator.service.profile(GROUP_ID, TARGET)).affection == 91
+
+
+async def test_fill_blank_hard_hint_reveals_pinyin_and_rescores(
+    tmp_path: Path,
+) -> None:
+    coordinator = _coordinator(tmp_path, questions=HARD_QUESTIONS)
+    coordinator.question_timeout = 0.05
+    for user_id, score in (
+        (TARGET, 300),
+        (OTHER, 100),
+        (OTHER_B, 100),
+        ("96005", 100),
+    ):
+        await _give_affection(coordinator.service, score, user_id)
+    sent: list[Message] = []
+    assert await _start(coordinator, sent) is True
+    pending = coordinator.pending[GROUP_ID]
+
+    # 提示前: 全对 +8, 部分答对按字数少扣。
+    assert await _submit(coordinator, TARGET, "没事的没事的") is True
+    assert await _submit(coordinator, OTHER, "没事的") is True
+
+    await asyncio.sleep(0.06)
+    assert pending.hinted is True
+    assert len(sent) == 2
+    hint = sent[1].extract_plain_text()
+    assert FILL_BLANK_HARD_HINT_PREFIX in hint
+    assert FILL_BLANK_HARD_HINT_REVEAL == 2
+    assert "先给你前 2 个字的拼音: méi shì" in hint
+    assert "提示后答错 -5" in hint
+    assert "答对也只有 -3" in hint
+    assert "整局不答还是 -10" in hint
+    assert "「答：xxx」" in hint
+
+    # 提示后: 全对只 -3, 没全对 -5。
+    assert await _submit(coordinator, OTHER_B, "没事的没事的") is True
+    assert await _submit(coordinator, "96005", "答：哈哈哈") is True
+
+    await asyncio.wait_for(pending.task, 1)
+    lines = _result_lines(sent[-1])
+    assert "+8" in lines[TARGET]
+    assert "全对" in lines[TARGET]
+    assert "-5" in lines[OTHER]
+    assert "答对 3 个字，少扣 3 点" in lines[OTHER]
+    assert "-3" in lines[OTHER_B]
+    assert "提示后全对" in lines[OTHER_B]
+    assert "-5" in lines["96005"]
+    assert "提示后没答对" in lines["96005"]
+    assert (await coordinator.service.profile(GROUP_ID, TARGET)).affection == 308
+    assert (await coordinator.service.profile(GROUP_ID, OTHER)).affection == 95
+    assert (await coordinator.service.profile(GROUP_ID, OTHER_B)).affection == 97
+    assert (await coordinator.service.profile(GROUP_ID, "96005")).affection == 95
+
+
+async def test_fill_blank_hard_hint_falls_back_without_pinyin(
+    tmp_path: Path,
+) -> None:
+    question = {key: value for key, value in HARD_QUESTIONS[0].items() if key != "pinyin"}
+    coordinator = _coordinator(tmp_path, questions=[question])
+    coordinator.question_timeout = 0.05
+    await _give_affection(coordinator.service, 101, TARGET)
+    sent: list[Message] = []
+    assert await _start(coordinator, sent) is True
+    pending = coordinator.pending[GROUP_ID]
+
+    await asyncio.sleep(0.06)
+    assert len(sent) == 2
+    assert "先透露前 2 个字: 没 事" in sent[1].extract_plain_text()
+    await asyncio.wait_for(pending.task, 1)
+    assert "整局未答" in _result_lines(sent[-1])[TARGET]
 
 
 async def test_fill_blank_hard_mode_falls_back_without_hard_questions(

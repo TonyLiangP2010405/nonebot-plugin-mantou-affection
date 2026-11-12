@@ -1746,6 +1746,15 @@ def initials_of(answer: str) -> str:
     return "".join(part for part in parts if part.isalpha()).lower()
 
 
+def pinyin_of(answer: str) -> list[str]:
+    """取每个汉字的完整拼音（带声调），供高难度题半程提示使用。"""
+
+    parts = lazy_pinyin(answer, style=Style.TONE, errors="ignore")
+    if len(parts) != len(answer):
+        raise ValueError(f"答案必须是纯中文短语: {answer!r} -> {parts!r}")
+    return parts
+
+
 def variants(statement: str, answer: str) -> list[str]:
     base = statement.strip().rstrip("。！？")
     prefixes = [""]
@@ -1798,6 +1807,7 @@ def _rows_from_facts(
                 }
                 if difficulty == "hard":
                     row["difficulty"] = "hard"
+                    row["pinyin"] = " ".join(pinyin_of(answer))
                 rows.append(row)
     return rows
 
