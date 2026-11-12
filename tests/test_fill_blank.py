@@ -279,6 +279,7 @@ def test_looks_like_answer_filters_noise() -> None:
     assert looks_like_answer(" 大出获！", "大出货") is True
     assert looks_like_answer("大出", "大出货") is True
     assert looks_like_answer("大", "大出货") is True
+    assert looks_like_answer("钓鱼佬", "大出货") is True
     assert looks_like_answer("/馒头帮助", "大出货") is False
     assert looks_like_answer("大家好", "大出货") is False
     assert looks_like_answer("哈哈哈哈", "大出货") is False
@@ -491,7 +492,7 @@ async def test_fill_blank_wrong_answer_and_target_timeout_penalty(
     assert await _start(coordinator, sent) is True
     pending = coordinator.pending[GROUP_ID]
 
-    assert await _submit(coordinator, OTHER, "答：哈哈哈") is True
+    assert await _submit(coordinator, OTHER, "钓鱼佬") is True
     await asyncio.wait_for(pending.task, 1)
 
     lines = _result_lines(sent[-1])
