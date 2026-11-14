@@ -21,11 +21,13 @@ from .fill_blank import (
 )
 from .findchar import BUNDLED_PUZZLES_PATH, FindCharCoordinator, FindCharLibrary
 from .group_quiz import BUNDLED_GROUP_QUIZ_PATH, GroupQuizCoordinator
+from .hsr_quiz import BUNDLED_HSR_QUIZ_PATH, HsrQuizCoordinator
 from .logic import NEWBIE_PROTECTION_NOTE
 from .pk import BUNDLED_PK_PATH, PkCoordinator, PkQuestionLibrary
 from .service import AffectionService
 from .teyvat_quiz import BUNDLED_TEYVAT_QUIZ_PATH, TeyvatQuizCoordinator
 from .wheel import WheelCoordinator
+from .zzz_quiz import BUNDLED_ZZZ_QUIZ_PATH, ZzzQuizCoordinator
 
 ANSWERS = {"1": 0, "2": 1, "3": 2, "4": 3, "5": 4, "6": 5}
 EVENT_MESSAGE = (
@@ -98,6 +100,8 @@ class EventCoordinator:
         wheel: WheelCoordinator | None = None,
         group_quiz: GroupQuizCoordinator | None = None,
         teyvat_quiz: TeyvatQuizCoordinator | None = None,
+        hsr_quiz: HsrQuizCoordinator | None = None,
+        zzz_quiz: ZzzQuizCoordinator | None = None,
         fill_blank: FillBlankCoordinator | None = None,
     ):
         self.service = service
@@ -110,6 +114,8 @@ class EventCoordinator:
         self.wheel = wheel
         self.group_quiz = group_quiz
         self.teyvat_quiz = teyvat_quiz
+        self.hsr_quiz = hsr_quiz
+        self.zzz_quiz = zzz_quiz
         self.fill_blank = fill_blank
         self.pending: dict[str, PendingEvent] = {}
 
@@ -141,6 +147,16 @@ class EventCoordinator:
 
         self.teyvat_quiz = teyvat_quiz
 
+    def attach_hsr_quiz(self, hsr_quiz: HsrQuizCoordinator) -> None:
+        """接入星穹铁道问答，让它和其余活动共用同一个群的席位。"""
+
+        self.hsr_quiz = hsr_quiz
+
+    def attach_zzz_quiz(self, zzz_quiz: ZzzQuizCoordinator) -> None:
+        """接入绝区零问答，让它和其余活动共用同一个群的席位。"""
+
+        self.zzz_quiz = zzz_quiz
+
     def attach_fill_blank(self, fill_blank: FillBlankCoordinator) -> None:
         """接入补句问答，让它和其余活动共用同一个群的席位。"""
 
@@ -160,6 +176,8 @@ class EventCoordinator:
                 self.pk,
                 self.group_quiz,
                 self.teyvat_quiz,
+                self.hsr_quiz,
+                self.zzz_quiz,
                 self.fill_blank,
                 self.wheel,
             )
@@ -396,12 +414,15 @@ def register_ambient(
     wheel: WheelCoordinator | None = None,
     group_quiz: GroupQuizCoordinator | None = None,
     teyvat_quiz: TeyvatQuizCoordinator | None = None,
+    hsr_quiz: HsrQuizCoordinator | None = None,
+    zzz_quiz: ZzzQuizCoordinator | None = None,
     fill_blank: FillBlankCoordinator | None = None,
 ) -> tuple:
-    """群友发言时按概率触发找字、博弈、随机问答、群友问答、提瓦特问答、补句问答、转盘或馒头小动作。
+    """群友发言时按概率触发找字、博弈、随机问答、群友问答、提瓦特问答、星穹铁道问答、绝区零问答、补句问答、转盘或馒头小动作。
 
-    找字和博弈保留各自的好感度门槛；随机问答、群友问答、提瓦特问答和补句问答不看榜单或好感度，
-    分别默认每次群消息有 1%、0.05%、0.05%、0.05% 概率给当前发言者出一道题。命运齿轮转盘只看
+    找字和博弈保留各自的好感度门槛；随机问答、群友问答、提瓦特问答、星穹铁道问答、绝区零问答和
+    补句问答不看榜单或好感度，分别默认每次群消息有 1%、0.05%、0.05%、0.05%、0.05%、0.05% 概率
+    给当前发言者出一道题。命运齿轮转盘只看
     好感大于 0 和它自己的独立概率，不参与小动作的抽签。几种活动互斥，不会在同一条消息上同时触发；
     所有数字答案都走这里的答案路由，「参与 / 运作 / 不运作」也由同一个 answer matcher 转给转盘。
     事件预处理器只给博弈记录最近发言表。
@@ -446,6 +467,20 @@ def register_ambient(
         events=coordinator,
         rng=coordinator.rng,
     )
+    hsr_quiz_coordinator = hsr_quiz or HsrQuizCoordinator(
+        service,
+        config,
+        PkQuestionLibrary(BUNDLED_HSR_QUIZ_PATH),
+        events=coordinator,
+        rng=coordinator.rng,
+    )
+    zzz_quiz_coordinator = zzz_quiz or ZzzQuizCoordinator(
+        service,
+        config,
+        PkQuestionLibrary(BUNDLED_ZZZ_QUIZ_PATH),
+        events=coordinator,
+        rng=coordinator.rng,
+    )
     fill_blank_coordinator = fill_blank or FillBlankCoordinator(
         service,
         config,
@@ -459,6 +494,8 @@ def register_ambient(
     coordinator.attach_wheel(wheel_coordinator)
     coordinator.attach_group_quiz(group_quiz_coordinator)
     coordinator.attach_teyvat_quiz(teyvat_quiz_coordinator)
+    coordinator.attach_hsr_quiz(hsr_quiz_coordinator)
+    coordinator.attach_zzz_quiz(zzz_quiz_coordinator)
     coordinator.attach_fill_blank(fill_blank_coordinator)
     ambient = on_message(rule=GROUP_ONLY, priority=90, block=False)
     answer = on_message(rule=GROUP_ONLY, priority=5, block=False)
@@ -485,6 +522,10 @@ def register_ambient(
             if await group_quiz_coordinator.answer(group_id, user_id, name, text):
                 return
             if await teyvat_quiz_coordinator.answer(group_id, user_id, name, text):
+                return
+            if await hsr_quiz_coordinator.answer(group_id, user_id, name, text):
+                return
+            if await zzz_quiz_coordinator.answer(group_id, user_id, name, text):
                 return
             if await fill_blank_coordinator.answer(group_id, user_id, name, text):
                 return
@@ -609,6 +650,44 @@ def register_ambient(
                 )
             except Exception:
                 logger.exception("[mantou-affection] 发起提瓦特问答失败")
+                started = False
+            if started:
+                return
+
+        try:
+            hsr_quiz_ready = await service.hsr_quiz_triggered()
+        except Exception:
+            logger.exception("[mantou-affection] 判定星穹铁道问答失败")
+            hsr_quiz_ready = False
+        if hsr_quiz_ready:
+            try:
+                started = await hsr_quiz_coordinator.start(
+                    group_id=group_id,
+                    user_id=user_id,
+                    nickname=nickname,
+                    send=ambient.send,
+                )
+            except Exception:
+                logger.exception("[mantou-affection] 发起星穹铁道问答失败")
+                started = False
+            if started:
+                return
+
+        try:
+            zzz_quiz_ready = await service.zzz_quiz_triggered()
+        except Exception:
+            logger.exception("[mantou-affection] 判定绝区零问答失败")
+            zzz_quiz_ready = False
+        if zzz_quiz_ready:
+            try:
+                started = await zzz_quiz_coordinator.start(
+                    group_id=group_id,
+                    user_id=user_id,
+                    nickname=nickname,
+                    send=ambient.send,
+                )
+            except Exception:
+                logger.exception("[mantou-affection] 发起绝区零问答失败")
                 started = False
             if started:
                 return

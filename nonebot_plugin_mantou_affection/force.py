@@ -18,10 +18,12 @@ from .config import Config
 from .fill_blank import FillBlankCoordinator
 from .findchar import FindCharCoordinator
 from .group_quiz import GroupQuizCoordinator
+from .hsr_quiz import HsrQuizCoordinator
 from .pk import PkCoordinator
 from .service import AffectionService, normalize_nickname
 from .teyvat_quiz import TeyvatQuizCoordinator
 from .wheel import WheelCoordinator
+from .zzz_quiz import ZzzQuizCoordinator
 
 FORCE_COMMAND = "馒头强制事件"
 # 必须高于 ambient answer 的 priority=5 以避免选择数字被刚开启的活动当成答案。
@@ -37,6 +39,8 @@ FORCE_ACTIVITY_GROUP_QUIZ = "group_quiz"
 FORCE_ACTIVITY_FILL_BLANK = "fill_blank"
 FORCE_ACTIVITY_WHEEL = "wheel"
 FORCE_ACTIVITY_TEYVAT_QUIZ = "teyvat_quiz"
+FORCE_ACTIVITY_HSR_QUIZ = "hsr_quiz"
+FORCE_ACTIVITY_ZZZ_QUIZ = "zzz_quiz"
 
 FORCE_CHOICES: dict[str, str] = {
     "1": FORCE_ACTIVITY_AMBIENT,
@@ -48,6 +52,8 @@ FORCE_CHOICES: dict[str, str] = {
     "7": FORCE_ACTIVITY_WHEEL,
     "8": FORCE_ACTIVITY_FILL_BLANK,
     "9": FORCE_ACTIVITY_TEYVAT_QUIZ,
+    "10": FORCE_ACTIVITY_HSR_QUIZ,
+    "11": FORCE_ACTIVITY_ZZZ_QUIZ,
 }
 FORCE_ACTIVITY_LINES: tuple[str, ...] = (
     "1. 馒头小动作",
@@ -59,6 +65,8 @@ FORCE_ACTIVITY_LINES: tuple[str, ...] = (
     "7. 命运齿轮转盘",
     "8. 补句问答",
     "9. 提瓦特问答",
+    "10. 星穹铁道问答",
+    "11. 绝区零问答",
 )
 FORCE_PROMPT = (
     "🎛️ 馒头强制事件（目标：{target}）\n"
@@ -87,7 +95,7 @@ class PendingForce:
 
 
 class ForceCoordinator:
-    """管理强制事件的选择状态与九类活动分发，选择窗口默认 20 秒。
+    """管理强制事件的选择状态与十一类活动分发，选择窗口默认 20 秒。
 
     强制触发绕过概率、好感门槛和功能开关，但保留群级互斥：本群已有待结算的活动时
     命令与选择都会被拒绝。强制事件自己的选择状态不占群席位，所以命令发出去的 20 秒
@@ -106,6 +114,8 @@ class ForceCoordinator:
         wheel: WheelCoordinator,
         group_quiz: GroupQuizCoordinator | None = None,
         teyvat_quiz: TeyvatQuizCoordinator | None = None,
+        hsr_quiz: HsrQuizCoordinator | None = None,
+        zzz_quiz: ZzzQuizCoordinator | None = None,
         fill_blank: FillBlankCoordinator | None = None,
         choice_timeout: float = FORCE_CHOICE_TIMEOUT,
     ):
@@ -118,6 +128,8 @@ class ForceCoordinator:
         self.wheel = wheel
         self.group_quiz = group_quiz
         self.teyvat_quiz = teyvat_quiz
+        self.hsr_quiz = hsr_quiz
+        self.zzz_quiz = zzz_quiz
         self.fill_blank = fill_blank
         self.choice_timeout = float(choice_timeout)
         self.pending: dict[str, PendingForce] = {}
@@ -233,6 +245,10 @@ class ForceCoordinator:
             return await self._start_wheel(pending, send)
         if choice == FORCE_ACTIVITY_TEYVAT_QUIZ:
             return await self._start_teyvat_quiz(pending, send)
+        if choice == FORCE_ACTIVITY_HSR_QUIZ:
+            return await self._start_hsr_quiz(pending, send)
+        if choice == FORCE_ACTIVITY_ZZZ_QUIZ:
+            return await self._start_zzz_quiz(pending, send)
         return FORCE_FAIL_REPLY
 
     async def _send_ambient(self, pending: PendingForce, send: Send) -> str | None:
@@ -355,6 +371,32 @@ class ForceCoordinator:
         )
         return None if started else FORCE_FAIL_REPLY
 
+    async def _start_hsr_quiz(
+        self, pending: PendingForce, send: Send
+    ) -> str | None:
+        if self.hsr_quiz is None:
+            return FORCE_FAIL_REPLY
+        started = await self.hsr_quiz.start(
+            group_id=pending.group_id,
+            user_id=pending.target_id,
+            nickname=pending.target_name,
+            send=send,
+        )
+        return None if started else FORCE_FAIL_REPLY
+
+    async def _start_zzz_quiz(
+        self, pending: PendingForce, send: Send
+    ) -> str | None:
+        if self.zzz_quiz is None:
+            return FORCE_FAIL_REPLY
+        started = await self.zzz_quiz.start(
+            group_id=pending.group_id,
+            user_id=pending.target_id,
+            nickname=pending.target_name,
+            send=send,
+        )
+        return None if started else FORCE_FAIL_REPLY
+
     @staticmethod
     async def _send(send: Send, text: str) -> None:
         try:
@@ -392,6 +434,8 @@ def register_force_commands(
     *,
     group_quiz: GroupQuizCoordinator | None = None,
     teyvat_quiz: TeyvatQuizCoordinator | None = None,
+    hsr_quiz: HsrQuizCoordinator | None = None,
+    zzz_quiz: ZzzQuizCoordinator | None = None,
     fill_blank: FillBlankCoordinator | None = None,
     coordinator: ForceCoordinator | None = None,
 ) -> tuple:

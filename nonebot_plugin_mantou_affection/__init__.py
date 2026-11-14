@@ -15,9 +15,10 @@ __plugin_meta__ = PluginMetadata(
         "/馒头帮助｜/馒头互动｜/馒头好感｜/馒头好感榜｜/馒头表情免确认\n"
         "SUPERUSER：/馒头好感调整 @群友 +10｜/馒头好感重置 确认｜/馒头反应概率 5%｜"
         "/馒头找字概率 5%｜/馒头博弈概率 0.05%｜/馒头问答概率 1%｜/馒头问答题库｜"
-        "/馒头群友问答概率 0.05%｜/馒头提瓦特概率 0.05%｜/馒头补句概率 0.05%｜"
+        "/馒头群友问答概率 0.05%｜/馒头提瓦特概率 0.05%｜/馒头星铁概率 0.05%｜"
+        "/馒头绝区零概率 0.05%｜/馒头补句概率 0.05%｜"
         "/馒头转盘概率 0.1%｜/馒头概率总调 0.05%（或 ×2 / 重置）｜"
-        "/馒头强制事件 @群友（回复 1~9 强制开一场活动）"
+        "/馒头强制事件 @群友（回复 1~11 强制开一场活动）"
     ),
     type="application",
     homepage="https://github.com/TonyLiangP2010405/nonebot-plugin-mantou-affection",
@@ -43,6 +44,7 @@ from .fill_blank import (
 from .findchar import BUNDLED_PUZZLES_PATH, FindCharCoordinator, FindCharLibrary
 from .force import register_force_commands
 from .group_quiz import BUNDLED_GROUP_QUIZ_PATH, GroupQuizCoordinator
+from .hsr_quiz import BUNDLED_HSR_QUIZ_PATH, HsrQuizCoordinator
 from .integration import register_plugin_linkage
 from .models import AffectionResponse, AffectionSnapshot, PokeResult
 from .pk import BUNDLED_PK_PATH, PkCoordinator, PkQuestionLibrary
@@ -57,6 +59,7 @@ from .wheel_memes import (
     parse_blocked_terms,
 )
 from .wheel_stickers import TaoziStickerLibrary
+from .zzz_quiz import BUNDLED_ZZZ_QUIZ_PATH, ZzzQuizCoordinator
 
 plugin_config = get_plugin_config(Config)
 data_file = Path(get_plugin_data_dir()) / "affection.json"
@@ -93,6 +96,16 @@ teyvat_quiz_coordinator = TeyvatQuizCoordinator(
     service, plugin_config, teyvat_quiz_library, events=event_coordinator
 )
 event_coordinator.attach_teyvat_quiz(teyvat_quiz_coordinator)
+hsr_quiz_library = PkQuestionLibrary(BUNDLED_HSR_QUIZ_PATH)
+hsr_quiz_coordinator = HsrQuizCoordinator(
+    service, plugin_config, hsr_quiz_library, events=event_coordinator
+)
+event_coordinator.attach_hsr_quiz(hsr_quiz_coordinator)
+zzz_quiz_library = PkQuestionLibrary(BUNDLED_ZZZ_QUIZ_PATH)
+zzz_quiz_coordinator = ZzzQuizCoordinator(
+    service, plugin_config, zzz_quiz_library, events=event_coordinator
+)
+event_coordinator.attach_zzz_quiz(zzz_quiz_coordinator)
 fill_blank_library = FillBlankLibrary(BUNDLED_FILL_BLANK_PATH)
 fill_blank_coordinator = FillBlankCoordinator(
     service, plugin_config, fill_blank_library, events=event_coordinator
@@ -134,6 +147,8 @@ ambient_matcher, answer_matcher = register_ambient(
     wheel_coordinator,
     group_quiz_coordinator,
     teyvat_quiz_coordinator,
+    hsr_quiz_coordinator,
+    zzz_quiz_coordinator,
     fill_blank_coordinator,
 )
 force_matchers = register_force_commands(
@@ -146,6 +161,8 @@ force_matchers = register_force_commands(
     wheel=wheel_coordinator,
     group_quiz=group_quiz_coordinator,
     teyvat_quiz=teyvat_quiz_coordinator,
+    hsr_quiz=hsr_quiz_coordinator,
+    zzz_quiz=zzz_quiz_coordinator,
     fill_blank=fill_blank_coordinator,
 )
 plugin_linkage = register_plugin_linkage(service, plugin_config)

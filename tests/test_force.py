@@ -47,6 +47,10 @@ from nonebot_plugin_mantou_affection.group_quiz import (
     BUNDLED_GROUP_QUIZ_PATH,
     GroupQuizCoordinator,
 )
+from nonebot_plugin_mantou_affection.hsr_quiz import (
+    BUNDLED_HSR_QUIZ_PATH,
+    HsrQuizCoordinator,
+)
 from nonebot_plugin_mantou_affection.pk import (
     BUNDLED_PK_PATH,
     PkCoordinator,
@@ -59,6 +63,10 @@ from nonebot_plugin_mantou_affection.teyvat_quiz import (
     TeyvatQuizCoordinator,
 )
 from nonebot_plugin_mantou_affection.wheel import WheelCoordinator
+from nonebot_plugin_mantou_affection.zzz_quiz import (
+    BUNDLED_ZZZ_QUIZ_PATH,
+    ZzzQuizCoordinator,
+)
 
 GROUP_ID = "90001"
 SUPER_ID = "10001"
@@ -77,6 +85,8 @@ EXPECTED_ACTIVITY_LINES = (
     "7. 命运齿轮转盘",
     "8. 补句问答",
     "9. 提瓦特问答",
+    "10. 星穹铁道问答",
+    "11. 绝区零问答",
 )
 
 
@@ -199,6 +209,20 @@ class Harness:
             events=self.events,
             rng=rng,
         )
+        self.hsr_quiz = HsrQuizCoordinator(
+            self.service,
+            self.config,
+            PkQuestionLibrary(BUNDLED_HSR_QUIZ_PATH),
+            events=self.events,
+            rng=rng,
+        )
+        self.zzz_quiz = ZzzQuizCoordinator(
+            self.service,
+            self.config,
+            PkQuestionLibrary(BUNDLED_ZZZ_QUIZ_PATH),
+            events=self.events,
+            rng=rng,
+        )
         self.fill_blank = FillBlankCoordinator(
             self.service,
             self.config,
@@ -212,6 +236,8 @@ class Harness:
         self.events.attach_pk(self.pk)
         self.events.attach_group_quiz(self.group_quiz)
         self.events.attach_teyvat_quiz(self.teyvat_quiz)
+        self.events.attach_hsr_quiz(self.hsr_quiz)
+        self.events.attach_zzz_quiz(self.zzz_quiz)
         self.events.attach_fill_blank(self.fill_blank)
         self.events.attach_wheel(self.wheel)
         self.force = ForceCoordinator(
@@ -224,6 +250,8 @@ class Harness:
             wheel=self.wheel,
             group_quiz=self.group_quiz,
             teyvat_quiz=self.teyvat_quiz,
+            hsr_quiz=self.hsr_quiz,
+            zzz_quiz=self.zzz_quiz,
             fill_blank=self.fill_blank,
             choice_timeout=choice_timeout,
         )
@@ -268,6 +296,8 @@ class Harness:
             *self.pk.pending.values(),
             *self.group_quiz.pending.values(),
             *self.teyvat_quiz.pending.values(),
+            *self.hsr_quiz.pending.values(),
+            *self.zzz_quiz.pending.values(),
             *self.fill_blank.pending.values(),
             *self.wheel.pending.values(),
             *self.force.pending.values(),
@@ -429,7 +459,7 @@ async def test_force_choice_timeout_cancels_without_affection_change(
     await harness.cleanup()
 
 
-@pytest.mark.parametrize("text", ["11", "0", "1 2", "随便"])
+@pytest.mark.parametrize("text", ["12", "0", "1 2", "随便"])
 async def test_invalid_choice_cancels_without_affection_change(
     tmp_path: Path, bundled_texts_path: Path, monkeypatch, text: str
 ) -> None:
@@ -461,6 +491,8 @@ async def test_invalid_choice_cancels_without_affection_change(
         ("7", "wheel", "命运齿轮转盘"),
         ("8", "fill_blank", "🧩 补句问答！"),
         ("9", "teyvat_quiz", "🌍 提瓦特问答！"),
+        ("10", "hsr_quiz", "🚄 星穹铁道问答！"),
+        ("11", "zzz_quiz", "📺 绝区零问答！"),
     ],
 )
 async def test_force_choice_starts_activity(

@@ -38,6 +38,8 @@ BET_PROBABILITY_SETTING = "bet_probability"
 PK_PROBABILITY_SETTING = "pk_probability"
 GROUP_QUIZ_PROBABILITY_SETTING = "group_quiz_probability"
 TEYVAT_QUIZ_PROBABILITY_SETTING = "teyvat_quiz_probability"
+HSR_QUIZ_PROBABILITY_SETTING = "hsr_quiz_probability"
+ZZZ_QUIZ_PROBABILITY_SETTING = "zzz_quiz_probability"
 FILL_BLANK_PROBABILITY_SETTING = "fill_blank_probability"
 WHEEL_PROBABILITY_SETTING = "wheel_probability"
 MEME_CONFIRM_WHITELIST_SETTING = "meme_confirm_whitelist"
@@ -101,6 +103,16 @@ PROBABILITY_FIELDS: tuple[ProbabilityField, ...] = (
         TEYVAT_QUIZ_PROBABILITY_SETTING,
         "提瓦特问答",
         "mantou_affection_teyvat_chance",
+    ),
+    ProbabilityField(
+        HSR_QUIZ_PROBABILITY_SETTING,
+        "星穹铁道问答",
+        "mantou_affection_hsr_chance",
+    ),
+    ProbabilityField(
+        ZZZ_QUIZ_PROBABILITY_SETTING,
+        "绝区零问答",
+        "mantou_affection_zzz_chance",
     ),
     ProbabilityField(
         FILL_BLANK_PROBABILITY_SETTING,
@@ -367,6 +379,48 @@ class AffectionService:
 
     async def set_teyvat_quiz_probability(self, value: float) -> None:
         await self.store.set_setting(TEYVAT_QUIZ_PROBABILITY_SETTING, float(value))
+
+    async def hsr_quiz_triggered(self) -> bool:
+        """星穹铁道问答不看好感度，只按独立概率判定。"""
+
+        chance = await self.hsr_quiz_probability()
+        return self.rng.random() < chance
+
+    async def hsr_quiz_probability(self) -> float:
+        return await self._stored_probability(
+            HSR_QUIZ_PROBABILITY_SETTING,
+            self.config.mantou_affection_hsr_chance,
+        )
+
+    async def hsr_quiz_probability_override(self) -> float | None:
+        stored: Any = await self.store.get_setting(HSR_QUIZ_PROBABILITY_SETTING, None)
+        if isinstance(stored, bool) or not isinstance(stored, (int, float)):
+            return None
+        return min(1.0, max(0.0, float(stored)))
+
+    async def set_hsr_quiz_probability(self, value: float) -> None:
+        await self.store.set_setting(HSR_QUIZ_PROBABILITY_SETTING, float(value))
+
+    async def zzz_quiz_triggered(self) -> bool:
+        """绝区零问答不看好感度，只按独立概率判定。"""
+
+        chance = await self.zzz_quiz_probability()
+        return self.rng.random() < chance
+
+    async def zzz_quiz_probability(self) -> float:
+        return await self._stored_probability(
+            ZZZ_QUIZ_PROBABILITY_SETTING,
+            self.config.mantou_affection_zzz_chance,
+        )
+
+    async def zzz_quiz_probability_override(self) -> float | None:
+        stored: Any = await self.store.get_setting(ZZZ_QUIZ_PROBABILITY_SETTING, None)
+        if isinstance(stored, bool) or not isinstance(stored, (int, float)):
+            return None
+        return min(1.0, max(0.0, float(stored)))
+
+    async def set_zzz_quiz_probability(self, value: float) -> None:
+        await self.store.set_setting(ZZZ_QUIZ_PROBABILITY_SETTING, float(value))
 
     async def fill_blank_triggered(self) -> bool:
         """补句问答不看榜单或好感度，只按独立概率判定。"""

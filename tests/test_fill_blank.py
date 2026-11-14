@@ -441,7 +441,7 @@ async def test_fill_blank_probability_command_reports_and_sets(
     config = _config()
     service = _service(tmp_path, config)
     commands = register_commands(service, config)
-    assert len(commands) == 17
+    assert len(commands) == 19
     command = commands[15]
     sent: list[str] = []
 
