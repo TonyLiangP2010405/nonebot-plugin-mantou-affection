@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import random
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -25,21 +26,47 @@ GROUP_QUIZ_WRONG_PENALTY = -3
 GROUP_QUIZ_TIMEOUT_PENALTY = -2
 
 GROUP_QUIZ_PREFIX = "💬 群友问答！"
+GROUP_QUIZ_INTRO = "馒头翻了翻聊天记录，考考你们……"
 GROUP_QUIZ_QUESTION_REPLY = (
     "{prefix}\n"
-    "馒头翻了翻聊天记录，考考你们……\n"
+    "{intro}\n"
     "{text}\n"
     "1. {first}\n"
     "2. {second}\n"
     "3. {third}\n"
     "大家都可以回答，直接发送 1、2、3 即可（答题不用@），请在 {timeout} 秒内作答。\n"
-    "答对 +2，答错 -3；被 @ 的触发者整局没答 -2（答错算已答，不叠加）。"
+    "答对 {right:+d}，答错 {wrong:+d}；被 @ 的触发者整局没答 {timeout_penalty:+d}"
+    "（答错算已答，不叠加）。"
 )
 GROUP_QUIZ_RESULT_REPLY = "{prefix}\n答案：{number}. {option}"
 GROUP_QUIZ_ANSWER_RIGHT_REPLY = "答对了"
 GROUP_QUIZ_ANSWER_WRONG_REPLY = "答错了"
 GROUP_QUIZ_ANSWER_REPLY = "{result}，好感度 {delta:+d}，当前 {affection}"
 GROUP_QUIZ_TIMEOUT_REPLY = "整局未答，好感度 {delta:+d}，当前 {affection}"
+
+
+@dataclass(frozen=True)
+class QuizSpec:
+    """一套三选一问答的文案、分值与配置来源。"""
+
+    prefix: str
+    intro: str
+    right_reward: int
+    wrong_penalty: int
+    timeout_penalty: int
+    timeout_attr: str
+    log_label: str
+
+
+GROUP_QUIZ_SPEC = QuizSpec(
+    prefix=GROUP_QUIZ_PREFIX,
+    intro=GROUP_QUIZ_INTRO,
+    right_reward=GROUP_QUIZ_RIGHT_REWARD,
+    wrong_penalty=GROUP_QUIZ_WRONG_PENALTY,
+    timeout_penalty=GROUP_QUIZ_TIMEOUT_PENALTY,
+    timeout_attr="mantou_affection_group_quiz_timeout",
+    log_label="群友问答",
+)
 
 
 class GroupQuizAnswer:
@@ -72,7 +99,7 @@ class PendingGroupQuiz:
 
 
 class GroupQuizCoordinator:
-    """管理群友问答的出题、作答与结算，同一个群同时只有一个活动。"""
+    """管理三选一问答的出题、作答与结算，同一个群同时只有一个活动。"""
 
     def __init__(
         self,
@@ -82,15 +109,17 @@ class GroupQuizCoordinator:
         *,
         events: EventCoordinator | None = None,
         rng: random.Random | None = None,
+        spec: QuizSpec = GROUP_QUIZ_SPEC,
     ):
         self.service = service
         self.config = config
         self.library = library
         self.events = events
         self.rng = rng or random.Random()
+        self.spec = spec
         self.pending: dict[str, PendingGroupQuiz] = {}
         self._start_lock = asyncio.Lock()
-        self.question_timeout = float(config.mantou_affection_group_quiz_timeout)
+        self.question_timeout = float(getattr(config, spec.timeout_attr))
 
     @property
     def total_questions(self) -> int:
@@ -138,12 +167,16 @@ class GroupQuizCoordinator:
                 + MessageSegment.text(
                     " "
                     + GROUP_QUIZ_QUESTION_REPLY.format(
-                        prefix=GROUP_QUIZ_PREFIX,
+                        prefix=self.spec.prefix,
+                        intro=self.spec.intro,
                         text=question.text,
                         first=question.options[0],
                         second=question.options[1],
                         third=question.options[2],
                         timeout=int(self.question_timeout),
+                        right=self.spec.right_reward,
+                        wrong=self.spec.wrong_penalty,
+                        timeout_penalty=self.spec.timeout_penalty,
                     )
                 )
             )
@@ -154,7 +187,7 @@ class GroupQuizCoordinator:
         return True
 
     def _draw_question(self) -> PkQuestion | None:
-        """随机抽一道题；群友问答不标记已出，允许重复抽到同一题。"""
+        """随机抽一道题，允许重复抽到同一题。"""
 
         if self.library is None:
             return None
@@ -179,7 +212,7 @@ class GroupQuizCoordinator:
             except asyncio.CancelledError:
                 raise
             except Exception:
-                logger.exception("[mantou-affection] 群友问答流程失败")
+                logger.exception(f"[mantou-affection] {self.spec.log_label}流程失败")
             finally:
                 self.discard(pending.group_id, pending)
 
@@ -196,7 +229,7 @@ class GroupQuizCoordinator:
         segments = [
             MessageSegment.text(
                 GROUP_QUIZ_RESULT_REPLY.format(
-                    prefix=GROUP_QUIZ_PREFIX,
+                    prefix=self.spec.prefix,
                     number=question.answer + 1,
                     option=question.options[question.answer],
                 )
@@ -205,7 +238,7 @@ class GroupQuizCoordinator:
         target_id, target_name = pending.target
         for answer in pending.answers.values():
             correct = answer.index == question.answer
-            delta = GROUP_QUIZ_RIGHT_REWARD if correct else GROUP_QUIZ_WRONG_PENALTY
+            delta = self.spec.right_reward if correct else self.spec.wrong_penalty
             applied, profile, protected = await self.service.adjust(
                 pending.group_id, answer.user_id, answer.nickname, delta
             )
@@ -213,7 +246,11 @@ class GroupQuizCoordinator:
                 await self.service.send_gift(
                     send, pending.group_id, answer.user_id, answer.nickname
                 )
-            result = GROUP_QUIZ_ANSWER_RIGHT_REPLY if correct else GROUP_QUIZ_ANSWER_WRONG_REPLY
+            result = (
+                GROUP_QUIZ_ANSWER_RIGHT_REPLY
+                if correct
+                else GROUP_QUIZ_ANSWER_WRONG_REPLY
+            )
             self._add_line(
                 segments,
                 answer.user_id,
@@ -225,7 +262,10 @@ class GroupQuizCoordinator:
 
         if target_id not in pending.answers:
             applied, profile, protected = await self.service.adjust(
-                pending.group_id, target_id, target_name, GROUP_QUIZ_TIMEOUT_PENALTY
+                pending.group_id,
+                target_id,
+                target_name,
+                self.spec.timeout_penalty,
             )
             if applied < 0:
                 await self.service.send_gift(
@@ -234,7 +274,9 @@ class GroupQuizCoordinator:
             self._add_line(
                 segments,
                 target_id,
-                GROUP_QUIZ_TIMEOUT_REPLY.format(delta=applied, affection=profile.affection)
+                GROUP_QUIZ_TIMEOUT_REPLY.format(
+                    delta=applied, affection=profile.affection
+                )
                 + (NEWBIE_PROTECTION_NOTE if protected else ""),
             )
 
@@ -246,7 +288,9 @@ class GroupQuizCoordinator:
         segments.append(MessageSegment.at(user_id))
         segments.append(MessageSegment.text(f" {line}"))
 
-    async def answer(self, group_id: str, user_id: str, nickname: str, text: str) -> bool:
+    async def answer(
+        self, group_id: str, user_id: str, nickname: str, text: str
+    ) -> bool:
         """收到群消息时调用：答题窗口内认 1/2/3，每人只算第一次。"""
 
         pending = self.pending.get(str(group_id))

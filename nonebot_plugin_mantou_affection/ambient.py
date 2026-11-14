@@ -25,6 +25,7 @@ from .group_quiz import BUNDLED_GROUP_QUIZ_PATH, GroupQuizCoordinator
 from .logic import NEWBIE_PROTECTION_NOTE
 from .pk import BUNDLED_PK_PATH, PkCoordinator, PkQuestionLibrary
 from .service import AffectionService
+from .teyvat_quiz import BUNDLED_TEYVAT_QUIZ_PATH, TeyvatQuizCoordinator
 from .wheel import WheelCoordinator
 
 ANSWERS = {"1": 0, "2": 1, "3": 2, "4": 3, "5": 4, "6": 5}
@@ -97,6 +98,7 @@ class EventCoordinator:
         pk: PkCoordinator | None = None,
         wheel: WheelCoordinator | None = None,
         group_quiz: GroupQuizCoordinator | None = None,
+        teyvat_quiz: TeyvatQuizCoordinator | None = None,
         fill_blank: FillBlankCoordinator | None = None,
         flatter: FlatterCoordinator | None = None,
     ):
@@ -109,6 +111,7 @@ class EventCoordinator:
         self.pk = pk
         self.wheel = wheel
         self.group_quiz = group_quiz
+        self.teyvat_quiz = teyvat_quiz
         self.fill_blank = fill_blank
         self.flatter = flatter
         self.pending: dict[str, PendingEvent] = {}
@@ -136,6 +139,11 @@ class EventCoordinator:
 
         self.group_quiz = group_quiz
 
+    def attach_teyvat_quiz(self, teyvat_quiz: TeyvatQuizCoordinator) -> None:
+        """接入提瓦特问答，让它和其余活动共用同一个群的席位。"""
+
+        self.teyvat_quiz = teyvat_quiz
+
     def attach_fill_blank(self, fill_blank: FillBlankCoordinator) -> None:
         """接入补句问答，让它和其余活动共用同一个群的席位。"""
 
@@ -147,7 +155,7 @@ class EventCoordinator:
         self.flatter = flatter
 
     def busy(self, group_id: str) -> bool:
-        """本群是否已经有待结算的活动：随机事件、找字、博弈、问答、群友问答、补句问答、转盘或献媚。"""
+        """本群是否已经有待结算的活动：随机事件、找字、博弈、问答、群友问答、提瓦特问答、补句问答、转盘或献媚。"""
 
         key = str(group_id)
         if key in self.pending:
@@ -159,6 +167,7 @@ class EventCoordinator:
                 self.bet,
                 self.pk,
                 self.group_quiz,
+                self.teyvat_quiz,
                 self.fill_blank,
                 self.wheel,
                 self.flatter,
@@ -395,13 +404,14 @@ def register_ambient(
     pk: PkCoordinator | None = None,
     wheel: WheelCoordinator | None = None,
     group_quiz: GroupQuizCoordinator | None = None,
+    teyvat_quiz: TeyvatQuizCoordinator | None = None,
     fill_blank: FillBlankCoordinator | None = None,
     flatter: FlatterCoordinator | None = None,
 ) -> tuple:
-    """群友发言时按概率触发找字、博弈、随机问答、群友问答、补句问答、转盘、献媚桃神或馒头小动作。
+    """群友发言时按概率触发找字、博弈、随机问答、群友问答、提瓦特问答、补句问答、转盘、献媚桃神或馒头小动作。
 
-    找字和博弈保留各自的好感度门槛；随机问答、群友问答和补句问答不看榜单或好感度，
-    分别默认每次群消息有 1%、0.05%、0.05% 概率给当前发言者出一道题。命运齿轮转盘只看
+    找字和博弈保留各自的好感度门槛；随机问答、群友问答、提瓦特问答和补句问答不看榜单或好感度，
+    分别默认每次群消息有 1%、0.05%、0.05%、0.05% 概率给当前发言者出一道题。命运齿轮转盘只看
     好感大于 0 和它自己的独立概率，不参与小动作的抽签；献媚桃神让群友给桃神写一句献媚，
     截止后由模型统一打分。几种活动互斥，不会在同一条消息上同时触发；所有数字答案都走
     这里的答案路由，「参与 / 运作 / 不运作」也由同一个 answer matcher 转给转盘。
@@ -442,6 +452,13 @@ def register_ambient(
         events=coordinator,
         rng=coordinator.rng,
     )
+    teyvat_quiz_coordinator = teyvat_quiz or TeyvatQuizCoordinator(
+        service,
+        config,
+        PkQuestionLibrary(BUNDLED_TEYVAT_QUIZ_PATH),
+        events=coordinator,
+        rng=coordinator.rng,
+    )
     fill_blank_coordinator = fill_blank or FillBlankCoordinator(
         service,
         config,
@@ -454,6 +471,7 @@ def register_ambient(
     coordinator.attach_pk(pk_coordinator)
     coordinator.attach_wheel(wheel_coordinator)
     coordinator.attach_group_quiz(group_quiz_coordinator)
+    coordinator.attach_teyvat_quiz(teyvat_quiz_coordinator)
     coordinator.attach_fill_blank(fill_blank_coordinator)
     ambient = on_message(rule=GROUP_ONLY, priority=90, block=False)
     answer = on_message(rule=GROUP_ONLY, priority=5, block=False)
@@ -482,6 +500,8 @@ def register_ambient(
             if await pk_coordinator.answer(group_id, user_id, name, text):
                 return
             if await group_quiz_coordinator.answer(group_id, user_id, name, text):
+                return
+            if await teyvat_quiz_coordinator.answer(group_id, user_id, name, text):
                 return
             if await fill_blank_coordinator.answer(group_id, user_id, name, text):
                 return
@@ -587,6 +607,25 @@ def register_ambient(
                 )
             except Exception:
                 logger.exception("[mantou-affection] 发起群友问答失败")
+                started = False
+            if started:
+                return
+
+        try:
+            teyvat_quiz_ready = await service.teyvat_quiz_triggered()
+        except Exception:
+            logger.exception("[mantou-affection] 判定提瓦特问答失败")
+            teyvat_quiz_ready = False
+        if teyvat_quiz_ready:
+            try:
+                started = await teyvat_quiz_coordinator.start(
+                    group_id=group_id,
+                    user_id=user_id,
+                    nickname=nickname,
+                    send=ambient.send,
+                )
+            except Exception:
+                logger.exception("[mantou-affection] 发起提瓦特问答失败")
                 started = False
             if started:
                 return

@@ -15,10 +15,10 @@ __plugin_meta__ = PluginMetadata(
         "/馒头帮助｜/馒头互动｜/馒头好感｜/馒头好感榜｜/馒头表情免确认\n"
         "SUPERUSER：/馒头好感调整 @群友 +10｜/馒头好感重置 确认｜/馒头反应概率 5%｜"
         "/馒头找字概率 5%｜/馒头博弈概率 0.05%｜/馒头问答概率 1%｜/馒头问答题库｜"
-        "/馒头群友问答概率 0.05%｜/馒头补句概率 0.05%｜"
+        "/馒头群友问答概率 0.05%｜/馒头提瓦特概率 0.05%｜/馒头补句概率 0.05%｜"
         "/馒头转盘概率 0.1%｜/馒头献媚概率 0.05%｜"
         "/馒头概率总调 0.05%（或 ×2 / 重置）｜"
-        "/馒头强制事件 @群友（回复 1~9 强制开一场活动）"
+        "/馒头强制事件 @群友（回复 1~10 强制开一场活动）"
     ),
     type="application",
     homepage="https://github.com/TonyLiangP2010405/nonebot-plugin-mantou-affection",
@@ -50,6 +50,7 @@ from .models import AffectionResponse, AffectionSnapshot, PokeResult
 from .pk import BUNDLED_PK_PATH, PkCoordinator, PkQuestionLibrary
 from .service import AffectionService
 from .storage import AffectionStore
+from .teyvat_quiz import BUNDLED_TEYVAT_QUIZ_PATH, TeyvatQuizCoordinator
 from .wheel import WheelCoordinator
 from .wheel_memes import (
     MemeGeneratorAdapter,
@@ -89,6 +90,11 @@ group_quiz_coordinator = GroupQuizCoordinator(
     service, plugin_config, group_quiz_library, events=event_coordinator
 )
 event_coordinator.attach_group_quiz(group_quiz_coordinator)
+teyvat_quiz_library = PkQuestionLibrary(BUNDLED_TEYVAT_QUIZ_PATH)
+teyvat_quiz_coordinator = TeyvatQuizCoordinator(
+    service, plugin_config, teyvat_quiz_library, events=event_coordinator
+)
+event_coordinator.attach_teyvat_quiz(teyvat_quiz_coordinator)
 fill_blank_library = FillBlankLibrary(BUNDLED_FILL_BLANK_PATH)
 fill_blank_coordinator = FillBlankCoordinator(
     service, plugin_config, fill_blank_library, events=event_coordinator
@@ -136,6 +142,7 @@ ambient_matcher, answer_matcher = register_ambient(
     pk_coordinator,
     wheel_coordinator,
     group_quiz_coordinator,
+    teyvat_quiz_coordinator,
     fill_blank_coordinator,
     flatter=flatter_coordinator,
 )
@@ -148,6 +155,7 @@ force_matchers = register_force_commands(
     pk=pk_coordinator,
     wheel=wheel_coordinator,
     group_quiz=group_quiz_coordinator,
+    teyvat_quiz=teyvat_quiz_coordinator,
     fill_blank=fill_blank_coordinator,
     flatter=flatter_coordinator,
 )

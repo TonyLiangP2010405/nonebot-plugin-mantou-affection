@@ -9,3 +9,4 @@ dist/
 data/
 .worktrees/
 .textgen_*/
+node_modules/

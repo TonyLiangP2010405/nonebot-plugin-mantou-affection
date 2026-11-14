@@ -30,6 +30,9 @@ PK_CHANCE_USAGE = "请输入 0~1 的小数（如 0.01）或百分数（如 1%）
 GROUP_QUIZ_CHANCE_USAGE = (
     "请输入 0~1 的小数（如 0.0005）或百分数（如 0.05%），0 即关闭群友问答"
 )
+TEYVAT_CHANCE_USAGE = (
+    "请输入 0~1 的小数（如 0.0005）或百分数（如 0.05%），0 即关闭提瓦特问答"
+)
 FILL_BLANK_CHANCE_USAGE = (
     "请输入 0~1 的小数（如 0.0005）或百分数（如 0.05%），0 即关闭补句问答"
 )
@@ -223,6 +226,13 @@ def register_commands(
         priority=10,
         block=True,
     )
+    teyvat_quiz_cmd = on_command(
+        "馒头提瓦特概率",
+        aliases={"馒头提瓦特问答概率", "馒头提瓦特触发概率"},
+        permission=SUPERUSER,
+        priority=10,
+        block=True,
+    )
     fill_blank_cmd = on_command(
         "馒头补句概率",
         aliases={"馒头补句触发概率"},
@@ -341,12 +351,13 @@ def register_commands(
             "/馒头问答概率 1% —— 查看或调整桃子问答概率\n"
             "/馒头问答题库 —— 查看题库余量\n"
             "/馒头群友问答概率 0.05% —— 查看或调整群友问答概率\n"
+            "/馒头提瓦特概率 0.05% —— 查看或调整提瓦特问答概率\n"
             "/馒头补句概率 0.05% —— 查看或调整补句问答概率\n"
             "/馒头献媚概率 0.05% —— 查看或调整献媚桃神概率\n"
             "/馒头转盘概率 0.1% —— 查看或调整命运齿轮概率\n"
             "/馒头概率总调 —— 总览全部概率；带数值统一设置，"
             "×倍率缩放，重置恢复默认\n"
-            "/馒头强制事件 @群友 —— 回复 1~9 强制开一场活动\n"
+            "/馒头强制事件 @群友 —— 回复 1~10 强制开一场活动\n"
             "\n"
             "提示：概率命令不带参数就查看当前值，0 即关闭对应活动；"
             "旧命令 /馒头好感帮助 仍然可用。"
@@ -606,6 +617,42 @@ def register_commands(
             f"群友问答概率已调整为 {_format_probability(value)}"
         )
 
+    @teyvat_quiz_cmd.handle()
+    async def handle_teyvat_quiz_probability(args: Message = CommandArg()) -> None:
+        raw = args.extract_plain_text().strip()
+        if not raw:
+            try:
+                current = await service.teyvat_quiz_probability()
+                override = await service.teyvat_quiz_probability_override()
+            except Exception:
+                logger.exception("[mantou-affection] 读取提瓦特问答概率失败")
+                await teyvat_quiz_cmd.finish("读取失败，请检查数据目录权限后重试。")
+                return
+            default = config.mantou_affection_teyvat_chance
+            if override is None:
+                source = f"配置默认 {_format_probability(default)}"
+            else:
+                source = f"运行时覆盖，配置默认 {_format_probability(default)}"
+            await teyvat_quiz_cmd.finish(
+                f"当前提瓦特问答概率：{_format_probability(current)}（{source}）\n"
+                f"用法：{TEYVAT_CHANCE_USAGE}"
+            )
+            return
+        try:
+            value = parse_probability(raw)
+        except ValueError as error:
+            await teyvat_quiz_cmd.finish(f"{error}。{TEYVAT_CHANCE_USAGE}")
+            return
+        try:
+            await service.set_teyvat_quiz_probability(value)
+        except Exception:
+            logger.exception("[mantou-affection] 保存提瓦特问答概率失败")
+            await teyvat_quiz_cmd.finish("保存失败，请检查数据目录权限后重试。")
+            return
+        await teyvat_quiz_cmd.finish(
+            f"提瓦特问答概率已调整为 {_format_probability(value)}"
+        )
+
     @fill_blank_cmd.handle()
     async def handle_fill_blank_probability(args: Message = CommandArg()) -> None:
         raw = args.extract_plain_text().strip()
@@ -820,4 +867,5 @@ def register_commands(
         flatter_cmd,
         batch_probability_cmd,
         fill_blank_cmd,
+        teyvat_quiz_cmd,
     )

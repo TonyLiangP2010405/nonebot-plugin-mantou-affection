@@ -21,6 +21,7 @@ from .flatter import FlatterCoordinator
 from .group_quiz import GroupQuizCoordinator
 from .pk import PkCoordinator
 from .service import AffectionService, normalize_nickname
+from .teyvat_quiz import TeyvatQuizCoordinator
 from .wheel import WheelCoordinator
 
 FORCE_COMMAND = "馒头强制事件"
@@ -37,6 +38,7 @@ FORCE_ACTIVITY_GROUP_QUIZ = "group_quiz"
 FORCE_ACTIVITY_FILL_BLANK = "fill_blank"
 FORCE_ACTIVITY_WHEEL = "wheel"
 FORCE_ACTIVITY_FLATTER = "flatter"
+FORCE_ACTIVITY_TEYVAT_QUIZ = "teyvat_quiz"
 
 FORCE_CHOICES: dict[str, str] = {
     "1": FORCE_ACTIVITY_AMBIENT,
@@ -48,6 +50,7 @@ FORCE_CHOICES: dict[str, str] = {
     "7": FORCE_ACTIVITY_WHEEL,
     "8": FORCE_ACTIVITY_FLATTER,
     "9": FORCE_ACTIVITY_FILL_BLANK,
+    "10": FORCE_ACTIVITY_TEYVAT_QUIZ,
 }
 FORCE_ACTIVITY_LINES: tuple[str, ...] = (
     "1. 馒头小动作",
@@ -59,6 +62,7 @@ FORCE_ACTIVITY_LINES: tuple[str, ...] = (
     "7. 命运齿轮转盘",
     "8. 献媚桃神",
     "9. 补句问答",
+    "10. 提瓦特问答",
 )
 FORCE_PROMPT = (
     "🎛️ 馒头强制事件（目标：{target}）\n"
@@ -88,7 +92,7 @@ class PendingForce:
 
 
 class ForceCoordinator:
-    """管理强制事件的选择状态与九类活动分发，选择窗口默认 20 秒。
+    """管理强制事件的选择状态与十类活动分发，选择窗口默认 20 秒。
 
     强制触发绕过概率、好感门槛和功能开关，但保留群级互斥：本群已有待结算的活动时
     命令与选择都会被拒绝。强制事件自己的选择状态不占群席位，所以命令发出去的 20 秒
@@ -106,6 +110,7 @@ class ForceCoordinator:
         pk: PkCoordinator,
         wheel: WheelCoordinator,
         group_quiz: GroupQuizCoordinator | None = None,
+        teyvat_quiz: TeyvatQuizCoordinator | None = None,
         fill_blank: FillBlankCoordinator | None = None,
         flatter: FlatterCoordinator | None = None,
         choice_timeout: float = FORCE_CHOICE_TIMEOUT,
@@ -118,6 +123,7 @@ class ForceCoordinator:
         self.pk = pk
         self.wheel = wheel
         self.group_quiz = group_quiz
+        self.teyvat_quiz = teyvat_quiz
         self.fill_blank = fill_blank
         self.flatter = flatter
         self.choice_timeout = float(choice_timeout)
@@ -236,6 +242,8 @@ class ForceCoordinator:
             return await self._start_fill_blank(pending, send)
         if choice == FORCE_ACTIVITY_WHEEL:
             return await self._start_wheel(pending, send)
+        if choice == FORCE_ACTIVITY_TEYVAT_QUIZ:
+            return await self._start_teyvat_quiz(pending, send)
         if choice == FORCE_ACTIVITY_FLATTER:
             return await self._start_flatter(pending, send)
         return FORCE_FAIL_REPLY
@@ -347,6 +355,19 @@ class ForceCoordinator:
         )
         return None if started else FORCE_FAIL_REPLY
 
+    async def _start_teyvat_quiz(
+        self, pending: PendingForce, send: Send
+    ) -> str | None:
+        if self.teyvat_quiz is None:
+            return FORCE_FAIL_REPLY
+        started = await self.teyvat_quiz.start(
+            group_id=pending.group_id,
+            user_id=pending.target_id,
+            nickname=pending.target_name,
+            send=send,
+        )
+        return None if started else FORCE_FAIL_REPLY
+
     async def _start_flatter(
         self, pending: PendingForce, send: Send
     ) -> str | None:
@@ -394,6 +415,7 @@ def register_force_commands(
     wheel: WheelCoordinator,
     *,
     group_quiz: GroupQuizCoordinator | None = None,
+    teyvat_quiz: TeyvatQuizCoordinator | None = None,
     fill_blank: FillBlankCoordinator | None = None,
     flatter: FlatterCoordinator | None = None,
     coordinator: ForceCoordinator | None = None,
@@ -413,6 +435,7 @@ def register_force_commands(
         pk=pk,
         wheel=wheel,
         group_quiz=group_quiz,
+        teyvat_quiz=teyvat_quiz,
         fill_blank=fill_blank,
         flatter=flatter,
     )

@@ -286,6 +286,7 @@ async def test_probability_states_show_defaults_and_overrides(tmp_path: Path) ->
         "馒头博弈",
         "桃子问答",
         "群友问答",
+        "提瓦特问答",
         "补句问答",
         "献媚桃神",
         "命运齿轮",
@@ -306,12 +307,12 @@ async def test_set_all_probabilities_persists_every_field(tmp_path: Path) -> Non
     await service.set_all_probabilities(0.01)
 
     states = await service.probability_states()
-    assert len(states) == 9
+    assert len(states) == 10
     assert all(state.value == pytest.approx(0.01) for state in states)
     assert all(state.overridden is True for state in states)
 
     payload = json.loads((tmp_path / "affection.json").read_text(encoding="utf-8"))
-    assert len(payload["settings"]) == 9
+    assert len(payload["settings"]) == 10
 
 
 async def test_scale_all_probabilities_uses_effective_values(tmp_path: Path) -> None:
@@ -340,7 +341,7 @@ async def test_reset_all_probabilities_keeps_other_settings(tmp_path: Path) -> N
     await service.set_all_probabilities(0)
     await service.store.set_setting("meme_confirm_whitelist", ["10001"])
 
-    assert await service.reset_all_probabilities() == 9
+    assert await service.reset_all_probabilities() == 10
     states = await service.probability_states()
     assert all(state.overridden is False for state in states)
     assert await service.store.get_setting("meme_confirm_whitelist", []) == ["10001"]

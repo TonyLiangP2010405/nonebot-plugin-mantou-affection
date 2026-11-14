@@ -113,7 +113,7 @@ def test_format_probability(value: float, expected: str) -> None:
 def test_registered_matchers_include_probability_command() -> None:
     from nonebot_plugin_mantou_affection import matchers
 
-    assert len(matchers) == 17
+    assert len(matchers) == 18
     (
         _profile_cmd,
         _interact_cmd,
@@ -132,6 +132,7 @@ def test_registered_matchers_include_probability_command() -> None:
         flatter_cmd,
         batch_probability_cmd,
         fill_blank_cmd,
+        teyvat_quiz_cmd,
     ) = matchers
     assert probability_cmd.priority == 10
     assert probability_cmd.block is True
@@ -420,7 +421,7 @@ async def test_batch_probability_command_query_set_scale_and_reset(
     handler = batch_cmd.handlers[0]
 
     await handler.call(Message(""))
-    assert "共 9 项" in sent[-1]
+    assert "共 10 项" in sent[-1]
     assert "馒头小动作：0.05%（配置默认）" in sent[-1]
     assert "×2" in sent[-1]
 
@@ -431,7 +432,7 @@ async def test_batch_probability_command_query_set_scale_and_reset(
     assert await service.flatter_probability() == pytest.approx(0.01)
 
     await handler.call(Message("×2"))
-    assert "已按 ×2 缩放 9 项活动概率" in sent[-1]
+    assert "已按 ×2 缩放 10 项活动概率" in sent[-1]
     assert "馒头小动作：1% → 2%" in sent[-1]
     assert await service.wheel_probability() == pytest.approx(0.02)
 
@@ -439,7 +440,7 @@ async def test_batch_probability_command_query_set_scale_and_reset(
     assert "运行时覆盖，配置默认 0.05%" in sent[-1]
 
     await handler.call(Message("重置"))
-    assert "已清除 9 项运行时概率覆盖" in sent[-1]
+    assert "已清除 10 项运行时概率覆盖" in sent[-1]
     assert await service.bet_probability() == pytest.approx(
         Config().mantou_affection_bet_chance
     )
@@ -467,7 +468,7 @@ async def test_batch_probability_command_scales_percent_factor(
     monkeypatch.setattr(batch_cmd, "finish", fake_finish)
 
     await batch_cmd.handlers[0].call(Message("×50%"))
-    assert "已按 ×0.5 缩放 9 项活动概率" in sent[-1]
+    assert "已按 ×0.5 缩放 10 项活动概率" in sent[-1]
     assert await service.pk_probability() == pytest.approx(0.005)
 
 
@@ -503,6 +504,7 @@ async def test_help_lists_every_command(tmp_path: Path, monkeypatch) -> None:
         "/馒头问答概率",
         "/馒头问答题库",
         "/馒头群友问答概率",
+        "/馒头提瓦特概率",
         "/馒头补句概率",
         "/馒头献媚概率",
         "/馒头转盘概率",

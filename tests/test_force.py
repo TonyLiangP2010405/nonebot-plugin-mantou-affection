@@ -1,4 +1,4 @@
-"""SUPERUSER 强制事件：命令校验、选择状态与七类活动分发。"""
+"""SUPERUSER 强制事件：命令校验、选择状态与十类活动分发。"""
 
 import asyncio
 import json
@@ -58,6 +58,10 @@ from nonebot_plugin_mantou_affection.pk import (
 )
 from nonebot_plugin_mantou_affection.service import AffectionService
 from nonebot_plugin_mantou_affection.storage import AffectionStore
+from nonebot_plugin_mantou_affection.teyvat_quiz import (
+    BUNDLED_TEYVAT_QUIZ_PATH,
+    TeyvatQuizCoordinator,
+)
 from nonebot_plugin_mantou_affection.wheel import WheelCoordinator
 
 GROUP_ID = "90001"
@@ -77,6 +81,7 @@ EXPECTED_ACTIVITY_LINES = (
     "7. 命运齿轮转盘",
     "8. 献媚桃神",
     "9. 补句问答",
+    "10. 提瓦特问答",
 )
 
 
@@ -216,6 +221,13 @@ class Harness:
             events=self.events,
             rng=rng,
         )
+        self.teyvat_quiz = TeyvatQuizCoordinator(
+            self.service,
+            self.config,
+            PkQuestionLibrary(BUNDLED_TEYVAT_QUIZ_PATH),
+            events=self.events,
+            rng=rng,
+        )
         self.fill_blank = FillBlankCoordinator(
             self.service,
             self.config,
@@ -235,6 +247,7 @@ class Harness:
         self.events.attach_bet(self.bet)
         self.events.attach_pk(self.pk)
         self.events.attach_group_quiz(self.group_quiz)
+        self.events.attach_teyvat_quiz(self.teyvat_quiz)
         self.events.attach_fill_blank(self.fill_blank)
         self.events.attach_wheel(self.wheel)
         self.events.attach_flatter(self.flatter)
@@ -247,6 +260,7 @@ class Harness:
             pk=self.pk,
             wheel=self.wheel,
             group_quiz=self.group_quiz,
+            teyvat_quiz=self.teyvat_quiz,
             fill_blank=self.fill_blank,
             flatter=self.flatter,
             choice_timeout=choice_timeout,
@@ -292,6 +306,7 @@ class Harness:
             *self.bet.pending.values(),
             *self.pk.pending.values(),
             *self.group_quiz.pending.values(),
+            *self.teyvat_quiz.pending.values(),
             *self.fill_blank.pending.values(),
             *self.wheel.pending.values(),
             *self.force.pending.values(),
@@ -488,6 +503,7 @@ async def test_invalid_choice_cancels_without_affection_change(
         ("7", "wheel", "命运齿轮转盘"),
         ("8", "flatter", "献媚桃神"),
         ("9", "fill_blank", "🧩 补句问答！"),
+        ("10", "teyvat_quiz", "🌍 提瓦特问答！"),
     ],
 )
 async def test_force_choice_starts_activity(
