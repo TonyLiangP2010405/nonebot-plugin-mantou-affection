@@ -6,7 +6,8 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Ubuntu 26.04 (ubuntu-latest) no longer ships Python 3.9 in setup-python.
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
