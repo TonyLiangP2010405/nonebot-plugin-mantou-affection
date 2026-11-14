@@ -20,10 +20,6 @@ from nonebot_plugin_mantou_affection.ambient import (
 from nonebot_plugin_mantou_affection.config import Config
 from nonebot_plugin_mantou_affection.copywriting import AffectionTextLibrary
 from nonebot_plugin_mantou_affection.events import EventLibrary
-from nonebot_plugin_mantou_affection.flatter import (
-    FlatterCoordinator,
-    GroupMemoryUnavailable,
-)
 from nonebot_plugin_mantou_affection.models import Profile
 from nonebot_plugin_mantou_affection.service import AffectionService
 from nonebot_plugin_mantou_affection.storage import AffectionStore
@@ -43,30 +39,6 @@ class FixedRng(random.Random):
 
     def random(self) -> float:
         return self.value
-
-
-class FakeMemory:
-    def __init__(self, responses, recent=None, available=True):
-        self.responses = list(responses)
-        self.recent = (
-            recent
-            if recent is not None
-            else [("甲", "我昨天十点就睡了"), ("乙", "早睡都是假的")]
-        )
-        self.available_flag = available
-        self.calls: list[str] = []
-
-    def available(self) -> bool:
-        return self.available_flag
-
-    async def recent_messages(self, group_id, limit=30):
-        return list(self.recent)
-
-    async def complete(self, group_id, text, *, timeout=20.0):
-        self.calls.append(text)
-        if not self.responses:
-            raise GroupMemoryUnavailable("模型没有返回")
-        return self.responses.pop(0)
 
 
 def _event(
@@ -614,67 +586,3 @@ def test_normal_event_message_lists_three_options(
     for position, option in enumerate(pending.options, start=1):
         assert f"{position}. {option.text}" in message
     assert "4." not in message
-
-
-async def test_ambient_starts_flatter_when_probability_hits(
-    tmp_path: Path, monkeypatch
-) -> None:
-    config = Config(
-        mantou_affection_find_char_chance=0.0,
-        mantou_affection_bet_chance=0.0,
-        mantou_affection_pk_chance=0.0,
-        mantou_affection_group_quiz_chance=0.0,
-        mantou_affection_wheel_chance=0.0,
-        mantou_affection_ambient_enabled=False,
-        mantou_affection_bicker_chance=1.0,
-        mantou_affection_newbie_protection_below=0,
-    )
-    service = _service(tmp_path, config=config)
-    events = EventCoordinator(service, config)
-    flatter = FlatterCoordinator(service, config, FakeMemory([]), events=events)
-    ambient, _ = register_ambient(service, config, events, flatter=flatter)
-    sent = _capture_send(ambient, monkeypatch)
-
-    await ambient.handlers[0].call(_event())
-
-    assert "献媚桃神" in sent[-1].extract_plain_text()
-    assert GROUP_ID in flatter.pending
-    flatter.pending[GROUP_ID].task.cancel()
-
-
-async def test_ambient_routes_flatter_entry_before_other_activities(
-    tmp_path: Path, monkeypatch
-) -> None:
-    config = Config(
-        mantou_affection_find_char_chance=1.0,
-        mantou_affection_bet_chance=0.0,
-        mantou_affection_pk_chance=0.0,
-        mantou_affection_group_quiz_chance=0.0,
-        mantou_affection_wheel_chance=0.0,
-        mantou_affection_ambient_enabled=False,
-        mantou_affection_newbie_protection_below=0,
-    )
-    service = _service(tmp_path, config=config)
-    events = EventCoordinator(service, config)
-    flatter = FlatterCoordinator(service, config, FakeMemory([]), events=events)
-    flatter.window = 0.03
-    ambient, answer = register_ambient(service, config, events, flatter=flatter)
-    sent = _capture_send(ambient, monkeypatch)
-
-    await flatter.start(group_id=GROUP_ID, send=ambient.send)
-    pending = flatter.pending[GROUP_ID]
-    await answer.handlers[0].call(_event(text="参与", user_id=TRIGGER_ID))
-    for _ in range(400):
-        if pending.phase == "collecting":
-            break
-        await asyncio.sleep(0.005)
-    assert pending.phase == "collecting"
-    sent.clear()
-
-    await answer.handlers[0].call(
-        _event(text="桃神七点开播从不迟到", user_id=TRIGGER_ID)
-    )
-
-    assert pending.entries[TRIGGER_ID].text == "桃神七点开播从不迟到"
-    assert "献媚已收下" in sent[-1].extract_plain_text()
-    pending.task.cancel()

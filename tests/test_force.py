@@ -31,10 +31,6 @@ from nonebot_plugin_mantou_affection.findchar import (
     FindCharCoordinator,
     FindCharLibrary,
 )
-from nonebot_plugin_mantou_affection.flatter import (
-    FlatterCoordinator,
-    GroupMemoryUnavailable,
-)
 from nonebot_plugin_mantou_affection.force import (
     FORCE_ACTIVITY_LINES,
     FORCE_ANSWER_PRIORITY,
@@ -79,9 +75,8 @@ EXPECTED_ACTIVITY_LINES = (
     "5. 桃子问答",
     "6. 群友问答",
     "7. 命运齿轮转盘",
-    "8. 献媚桃神",
-    "9. 补句问答",
-    "10. 提瓦特问答",
+    "8. 补句问答",
+    "9. 提瓦特问答",
 )
 
 
@@ -94,30 +89,6 @@ class FixedRng(random.Random):
 
     def random(self) -> float:
         return self.value
-
-
-class FakeMemory:
-    def __init__(self, responses, recent=None, available=True):
-        self.responses = list(responses)
-        self.recent = (
-            recent
-            if recent is not None
-            else [("甲", "我昨天十点就睡了"), ("乙", "早睡都是假的")]
-        )
-        self.available_flag = available
-        self.calls: list[str] = []
-
-    def available(self) -> bool:
-        return self.available_flag
-
-    async def recent_messages(self, group_id, limit=30):
-        return list(self.recent)
-
-    async def complete(self, group_id, text, *, timeout=20.0):
-        self.calls.append(text)
-        if not self.responses:
-            raise GroupMemoryUnavailable("模型没有返回")
-        return self.responses.pop(0)
 
 
 def _event(text: str, user_id: str = SUPER_ID, nickname: str = "管理员") -> GroupMessageEvent:
@@ -236,13 +207,6 @@ class Harness:
             rng=rng,
         )
         self.wheel = WheelCoordinator(self.service, self.config, events=self.events, rng=rng)
-        self.flatter = FlatterCoordinator(
-            self.service,
-            self.config,
-            FakeMemory([]),
-            events=self.events,
-            rng=rng,
-        )
         self.events.attach_find_char(self.findchar)
         self.events.attach_bet(self.bet)
         self.events.attach_pk(self.pk)
@@ -250,7 +214,6 @@ class Harness:
         self.events.attach_teyvat_quiz(self.teyvat_quiz)
         self.events.attach_fill_blank(self.fill_blank)
         self.events.attach_wheel(self.wheel)
-        self.events.attach_flatter(self.flatter)
         self.force = ForceCoordinator(
             self.service,
             self.config,
@@ -262,7 +225,6 @@ class Harness:
             group_quiz=self.group_quiz,
             teyvat_quiz=self.teyvat_quiz,
             fill_blank=self.fill_blank,
-            flatter=self.flatter,
             choice_timeout=choice_timeout,
         )
         self.force_cmd, self.force_answer = register_force_commands(
@@ -273,7 +235,6 @@ class Harness:
             self.bet,
             self.pk,
             self.wheel,
-            flatter=self.flatter,
             coordinator=self.force,
         )
         self.sent: list[Message] = []
@@ -314,9 +275,6 @@ class Harness:
             task = getattr(pending, "task", None)
             if task is not None:
                 tasks.append(task)
-        for pending in self.flatter.pending.values():
-            if pending.task is not None:
-                tasks.append(pending.task)
         for task in tasks:
             task.cancel()
             with suppress(asyncio.CancelledError):
@@ -501,9 +459,8 @@ async def test_invalid_choice_cancels_without_affection_change(
         ("5", "pk", "🍑 桃子问答！"),
         ("6", "group_quiz", "💬 群友问答！"),
         ("7", "wheel", "命运齿轮转盘"),
-        ("8", "flatter", "献媚桃神"),
-        ("9", "fill_blank", "🧩 补句问答！"),
-        ("10", "teyvat_quiz", "🌍 提瓦特问答！"),
+        ("8", "fill_blank", "🧩 补句问答！"),
+        ("9", "teyvat_quiz", "🌍 提瓦特问答！"),
     ],
 )
 async def test_force_choice_starts_activity(
@@ -524,33 +481,8 @@ async def test_force_choice_starts_activity(
     assert harness.force.pending == {}
     assert GROUP_ID in getattr(harness, attribute).pending
     assert marker in _body(harness.sent[-1])
-    if attribute != "flatter":
-        assert _at_ids(harness.sent[-1])[0] == TARGET_ID
+    assert _at_ids(harness.sent[-1])[0] == TARGET_ID
     await harness.cleanup()
-
-
-async def test_force_flatter_choice_starts_flatter(
-    tmp_path: Path, bundled_texts_path: Path, monkeypatch
-) -> None:
-    harness = Harness(tmp_path, bundled_texts_path, monkeypatch)
-    await harness.start_command()
-    harness.sent.clear()
-
-    await harness.choose("8")
-
-    assert GROUP_ID in harness.flatter.pending
-    assert "献媚桃神" in _body(harness.sent[-1])
-    harness.flatter.pending[GROUP_ID].task.cancel()
-    await harness.cleanup()
-
-
-def test_force_prompt_hides_flatter_when_unavailable(
-    tmp_path: Path, bundled_texts_path: Path, monkeypatch
-) -> None:
-    harness = Harness(tmp_path, bundled_texts_path, monkeypatch)
-    harness.flatter.memory.available_flag = False
-
-    assert "8. 献媚桃神" not in harness.force.prompt("桃友")
 
 
 async def test_force_bet_choice_names_target_and_two_rivals(

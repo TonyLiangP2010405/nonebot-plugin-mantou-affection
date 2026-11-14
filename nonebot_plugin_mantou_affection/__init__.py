@@ -16,9 +16,8 @@ __plugin_meta__ = PluginMetadata(
         "SUPERUSER：/馒头好感调整 @群友 +10｜/馒头好感重置 确认｜/馒头反应概率 5%｜"
         "/馒头找字概率 5%｜/馒头博弈概率 0.05%｜/馒头问答概率 1%｜/馒头问答题库｜"
         "/馒头群友问答概率 0.05%｜/馒头提瓦特概率 0.05%｜/馒头补句概率 0.05%｜"
-        "/馒头转盘概率 0.1%｜/馒头献媚概率 0.05%｜"
-        "/馒头概率总调 0.05%（或 ×2 / 重置）｜"
-        "/馒头强制事件 @群友（回复 1~10 强制开一场活动）"
+        "/馒头转盘概率 0.1%｜/馒头概率总调 0.05%（或 ×2 / 重置）｜"
+        "/馒头强制事件 @群友（回复 1~9 强制开一场活动）"
     ),
     type="application",
     homepage="https://github.com/TonyLiangP2010405/nonebot-plugin-mantou-affection",
@@ -42,7 +41,6 @@ from .fill_blank import (
     FillBlankLibrary,
 )
 from .findchar import BUNDLED_PUZZLES_PATH, FindCharCoordinator, FindCharLibrary
-from .flatter import FlatterCoordinator, GroupMemoryAdapter
 from .force import register_force_commands
 from .group_quiz import BUNDLED_GROUP_QUIZ_PATH, GroupQuizCoordinator
 from .integration import register_plugin_linkage
@@ -125,13 +123,6 @@ wheel_coordinator = WheelCoordinator(
     stickers=taozi_stickers,
 )
 event_coordinator.attach_wheel(wheel_coordinator)
-flatter_coordinator = FlatterCoordinator(
-    service,
-    plugin_config,
-    GroupMemoryAdapter(),
-    events=event_coordinator,
-)
-event_coordinator.attach_flatter(flatter_coordinator)
 matchers = register_commands(service, plugin_config, pk_coordinator)
 ambient_matcher, answer_matcher = register_ambient(
     service,
@@ -144,7 +135,6 @@ ambient_matcher, answer_matcher = register_ambient(
     group_quiz_coordinator,
     teyvat_quiz_coordinator,
     fill_blank_coordinator,
-    flatter=flatter_coordinator,
 )
 force_matchers = register_force_commands(
     service,
@@ -157,7 +147,6 @@ force_matchers = register_force_commands(
     group_quiz=group_quiz_coordinator,
     teyvat_quiz=teyvat_quiz_coordinator,
     fill_blank=fill_blank_coordinator,
-    flatter=flatter_coordinator,
 )
 plugin_linkage = register_plugin_linkage(service, plugin_config)
 

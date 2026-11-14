@@ -17,7 +17,6 @@ from .commands import GROUP_ONLY
 from .config import Config
 from .fill_blank import FillBlankCoordinator
 from .findchar import FindCharCoordinator
-from .flatter import FlatterCoordinator
 from .group_quiz import GroupQuizCoordinator
 from .pk import PkCoordinator
 from .service import AffectionService, normalize_nickname
@@ -37,7 +36,6 @@ FORCE_ACTIVITY_PK = "pk"
 FORCE_ACTIVITY_GROUP_QUIZ = "group_quiz"
 FORCE_ACTIVITY_FILL_BLANK = "fill_blank"
 FORCE_ACTIVITY_WHEEL = "wheel"
-FORCE_ACTIVITY_FLATTER = "flatter"
 FORCE_ACTIVITY_TEYVAT_QUIZ = "teyvat_quiz"
 
 FORCE_CHOICES: dict[str, str] = {
@@ -48,9 +46,8 @@ FORCE_CHOICES: dict[str, str] = {
     "5": FORCE_ACTIVITY_PK,
     "6": FORCE_ACTIVITY_GROUP_QUIZ,
     "7": FORCE_ACTIVITY_WHEEL,
-    "8": FORCE_ACTIVITY_FLATTER,
-    "9": FORCE_ACTIVITY_FILL_BLANK,
-    "10": FORCE_ACTIVITY_TEYVAT_QUIZ,
+    "8": FORCE_ACTIVITY_FILL_BLANK,
+    "9": FORCE_ACTIVITY_TEYVAT_QUIZ,
 }
 FORCE_ACTIVITY_LINES: tuple[str, ...] = (
     "1. 馒头小动作",
@@ -60,9 +57,8 @@ FORCE_ACTIVITY_LINES: tuple[str, ...] = (
     "5. 桃子问答",
     "6. 群友问答",
     "7. 命运齿轮转盘",
-    "8. 献媚桃神",
-    "9. 补句问答",
-    "10. 提瓦特问答",
+    "8. 补句问答",
+    "9. 提瓦特问答",
 )
 FORCE_PROMPT = (
     "🎛️ 馒头强制事件（目标：{target}）\n"
@@ -75,7 +71,6 @@ FORCE_TIMEOUT_REPLY = "馒头强制事件超时取消，好感度没有变化。
 FORCE_INVALID_REPLY = "这不是有效的活动编号，馒头强制事件已取消，好感度没有变化。"
 FORCE_RIVAL_REPLY = "最近发言的群友不足两位，凑不齐对手，馒头博弈开不了局。"
 FORCE_FAIL_REPLY = "馒头没能把这场活动摆出来，已经取消，好感度没有变化。"
-FORCE_FLATTER_UNAVAILABLE = "群聊记忆插件不可用，献媚桃神开不了。"
 
 Send = Callable[[Union[Message, str]], Awaitable[object]]
 
@@ -92,7 +87,7 @@ class PendingForce:
 
 
 class ForceCoordinator:
-    """管理强制事件的选择状态与十类活动分发，选择窗口默认 20 秒。
+    """管理强制事件的选择状态与九类活动分发，选择窗口默认 20 秒。
 
     强制触发绕过概率、好感门槛和功能开关，但保留群级互斥：本群已有待结算的活动时
     命令与选择都会被拒绝。强制事件自己的选择状态不占群席位，所以命令发出去的 20 秒
@@ -112,7 +107,6 @@ class ForceCoordinator:
         group_quiz: GroupQuizCoordinator | None = None,
         teyvat_quiz: TeyvatQuizCoordinator | None = None,
         fill_blank: FillBlankCoordinator | None = None,
-        flatter: FlatterCoordinator | None = None,
         choice_timeout: float = FORCE_CHOICE_TIMEOUT,
     ):
         self.service = service
@@ -125,7 +119,6 @@ class ForceCoordinator:
         self.group_quiz = group_quiz
         self.teyvat_quiz = teyvat_quiz
         self.fill_blank = fill_blank
-        self.flatter = flatter
         self.choice_timeout = float(choice_timeout)
         self.pending: dict[str, PendingForce] = {}
 
@@ -138,11 +131,7 @@ class ForceCoordinator:
         return self.events.busy(str(group_id))
 
     def activity_lines(self) -> tuple[str, ...]:
-        if self.flatter is not None and self.flatter.available():
-            return FORCE_ACTIVITY_LINES
-        return tuple(
-            line for line in FORCE_ACTIVITY_LINES if not line.startswith("8.")
-        )
+        return FORCE_ACTIVITY_LINES
 
     def prompt(self, target: str) -> str:
         return FORCE_PROMPT.format(
@@ -244,8 +233,6 @@ class ForceCoordinator:
             return await self._start_wheel(pending, send)
         if choice == FORCE_ACTIVITY_TEYVAT_QUIZ:
             return await self._start_teyvat_quiz(pending, send)
-        if choice == FORCE_ACTIVITY_FLATTER:
-            return await self._start_flatter(pending, send)
         return FORCE_FAIL_REPLY
 
     async def _send_ambient(self, pending: PendingForce, send: Send) -> str | None:
@@ -368,17 +355,6 @@ class ForceCoordinator:
         )
         return None if started else FORCE_FAIL_REPLY
 
-    async def _start_flatter(
-        self, pending: PendingForce, send: Send
-    ) -> str | None:
-        if self.flatter is None:
-            return FORCE_FLATTER_UNAVAILABLE
-        started = await self.flatter.start(
-            group_id=pending.group_id,
-            send=send,
-        )
-        return None if started else FORCE_FLATTER_UNAVAILABLE
-
     @staticmethod
     async def _send(send: Send, text: str) -> None:
         try:
@@ -417,7 +393,6 @@ def register_force_commands(
     group_quiz: GroupQuizCoordinator | None = None,
     teyvat_quiz: TeyvatQuizCoordinator | None = None,
     fill_blank: FillBlankCoordinator | None = None,
-    flatter: FlatterCoordinator | None = None,
     coordinator: ForceCoordinator | None = None,
 ) -> tuple:
     """/馒头强制事件：SUPERUSER 发活动列表，发起者 20 秒内回复编号强制开一场。
@@ -437,7 +412,6 @@ def register_force_commands(
         group_quiz=group_quiz,
         teyvat_quiz=teyvat_quiz,
         fill_blank=fill_blank,
-        flatter=flatter,
     )
     force_cmd = on_command(
         FORCE_COMMAND,

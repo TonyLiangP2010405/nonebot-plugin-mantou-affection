@@ -45,10 +45,6 @@ class Config(BaseModel):
     mantou_affection_teyvat_timeout: int = Field(default=60, ge=5, le=600)
     mantou_affection_fill_blank_chance: float = Field(default=0.0005, ge=0.0, le=1.0)
     mantou_affection_fill_blank_timeout: int = Field(default=60, ge=5, le=600)
-    # 献媚桃神沿用旧键名 兼容已有 .env bet_window 是献媚窗口
-    mantou_affection_bicker_chance: float = Field(default=0.0005, ge=0.0, le=1.0)
-    mantou_affection_bicker_bet_window: int = Field(default=60, ge=5, le=300)
-    mantou_affection_bicker_round_timeout: int = Field(default=60, ge=5, le=300)
     mantou_affection_link_rewards: dict[str, int] = Field(
         default_factory=lambda: {
             "nonebot_plugin_taozi": 2,

@@ -269,8 +269,8 @@ async def test_teyvat_quiz_busy_with_other_activity(tmp_path: Path) -> None:
 def test_teyvat_probability_command(tmp_path: Path) -> None:
     service = _service(tmp_path)
     commands = register_commands(service, Config(), PkCoordinator(service, Config(), None))
-    assert len(commands) == 18
-    command = commands[17]
+    assert len(commands) == 17
+    command = commands[16]
     assert [handler.call.__name__ for handler in command.handlers] == [
         "handle_teyvat_quiz_probability"
     ]
@@ -281,7 +281,7 @@ async def test_teyvat_probability_command_reports_and_sets(
 ) -> None:
     service = _service(tmp_path)
     commands = register_commands(service, Config(), PkCoordinator(service, Config(), None))
-    command = commands[17]
+    command = commands[16]
     sent: list[str] = []
 
     async def fake_finish(message: Message | str = "", **kwargs) -> None:
@@ -307,7 +307,6 @@ async def test_ambient_starts_teyvat_quiz(tmp_path: Path, monkeypatch) -> None:
         mantou_affection_teyvat_chance=1.0,
         mantou_affection_fill_blank_chance=0.0,
         mantou_affection_wheel_chance=0.0,
-        mantou_affection_bicker_chance=0.0,
         mantou_affection_newbie_protection_below=0,
     )
     service = _service(tmp_path, config)

@@ -39,7 +39,6 @@ PK_PROBABILITY_SETTING = "pk_probability"
 GROUP_QUIZ_PROBABILITY_SETTING = "group_quiz_probability"
 TEYVAT_QUIZ_PROBABILITY_SETTING = "teyvat_quiz_probability"
 FILL_BLANK_PROBABILITY_SETTING = "fill_blank_probability"
-FLATTER_PROBABILITY_SETTING = "bicker_probability"  # 沿用旧键名 兼容已保存的覆盖值
 WHEEL_PROBABILITY_SETTING = "wheel_probability"
 MEME_CONFIRM_WHITELIST_SETTING = "meme_confirm_whitelist"
 NEWBIE_GIFT_REPLY = " 扣分安慰：送你一张桃子表情包「{caption}」"
@@ -107,11 +106,6 @@ PROBABILITY_FIELDS: tuple[ProbabilityField, ...] = (
         FILL_BLANK_PROBABILITY_SETTING,
         "补句问答",
         "mantou_affection_fill_blank_chance",
-    ),
-    ProbabilityField(
-        FLATTER_PROBABILITY_SETTING,
-        "献媚桃神",
-        "mantou_affection_bicker_chance",
     ),
     ProbabilityField(WHEEL_PROBABILITY_SETTING, "命运齿轮", "mantou_affection_wheel_chance"),
 )
@@ -398,27 +392,6 @@ class AffectionService:
 
     async def set_fill_blank_probability(self, value: float) -> None:
         await self.store.set_setting(FILL_BLANK_PROBABILITY_SETTING, float(value))
-
-    async def flatter_triggered(self) -> bool:
-        """献媚桃神不看好感度，只按独立概率判定。"""
-
-        chance = await self.flatter_probability()
-        return self.rng.random() < chance
-
-    async def flatter_probability(self) -> float:
-        return await self._stored_probability(
-            FLATTER_PROBABILITY_SETTING,
-            self.config.mantou_affection_bicker_chance,
-        )
-
-    async def flatter_probability_override(self) -> float | None:
-        stored: Any = await self.store.get_setting(FLATTER_PROBABILITY_SETTING, None)
-        if isinstance(stored, bool) or not isinstance(stored, (int, float)):
-            return None
-        return min(1.0, max(0.0, float(stored)))
-
-    async def set_flatter_probability(self, value: float) -> None:
-        await self.store.set_setting(FLATTER_PROBABILITY_SETTING, float(value))
 
     async def wheel_triggered(self, group_id: str, user_id: str) -> bool:
         profile = await self.store.get_profile(group_id, user_id)

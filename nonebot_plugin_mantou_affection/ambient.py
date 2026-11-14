@@ -20,7 +20,6 @@ from .fill_blank import (
     FillBlankLibrary,
 )
 from .findchar import BUNDLED_PUZZLES_PATH, FindCharCoordinator, FindCharLibrary
-from .flatter import FlatterCoordinator
 from .group_quiz import BUNDLED_GROUP_QUIZ_PATH, GroupQuizCoordinator
 from .logic import NEWBIE_PROTECTION_NOTE
 from .pk import BUNDLED_PK_PATH, PkCoordinator, PkQuestionLibrary
@@ -100,7 +99,6 @@ class EventCoordinator:
         group_quiz: GroupQuizCoordinator | None = None,
         teyvat_quiz: TeyvatQuizCoordinator | None = None,
         fill_blank: FillBlankCoordinator | None = None,
-        flatter: FlatterCoordinator | None = None,
     ):
         self.service = service
         self.config = config
@@ -113,7 +111,6 @@ class EventCoordinator:
         self.group_quiz = group_quiz
         self.teyvat_quiz = teyvat_quiz
         self.fill_blank = fill_blank
-        self.flatter = flatter
         self.pending: dict[str, PendingEvent] = {}
 
     def attach_find_char(self, findchar: FindCharCoordinator) -> None:
@@ -149,13 +146,8 @@ class EventCoordinator:
 
         self.fill_blank = fill_blank
 
-    def attach_flatter(self, flatter: FlatterCoordinator) -> None:
-        """接入献媚桃神，让它和其余活动共用同一个群的席位。"""
-
-        self.flatter = flatter
-
     def busy(self, group_id: str) -> bool:
-        """本群是否已经有待结算的活动：随机事件、找字、博弈、问答、群友问答、提瓦特问答、补句问答、转盘或献媚。"""
+        """本群是否已经有待结算的活动：随机事件、找字、博弈、问答、群友问答、提瓦特问答、补句问答或转盘。"""
 
         key = str(group_id)
         if key in self.pending:
@@ -170,7 +162,6 @@ class EventCoordinator:
                 self.teyvat_quiz,
                 self.fill_blank,
                 self.wheel,
-                self.flatter,
             )
         )
 
@@ -406,21 +397,17 @@ def register_ambient(
     group_quiz: GroupQuizCoordinator | None = None,
     teyvat_quiz: TeyvatQuizCoordinator | None = None,
     fill_blank: FillBlankCoordinator | None = None,
-    flatter: FlatterCoordinator | None = None,
 ) -> tuple:
-    """群友发言时按概率触发找字、博弈、随机问答、群友问答、提瓦特问答、补句问答、转盘、献媚桃神或馒头小动作。
+    """群友发言时按概率触发找字、博弈、随机问答、群友问答、提瓦特问答、补句问答、转盘或馒头小动作。
 
     找字和博弈保留各自的好感度门槛；随机问答、群友问答、提瓦特问答和补句问答不看榜单或好感度，
     分别默认每次群消息有 1%、0.05%、0.05%、0.05% 概率给当前发言者出一道题。命运齿轮转盘只看
-    好感大于 0 和它自己的独立概率，不参与小动作的抽签；献媚桃神让群友给桃神写一句献媚，
-    截止后由模型统一打分。几种活动互斥，不会在同一条消息上同时触发；所有数字答案都走
-    这里的答案路由，「参与 / 运作 / 不运作」也由同一个 answer matcher 转给转盘。
+    好感大于 0 和它自己的独立概率，不参与小动作的抽签。几种活动互斥，不会在同一条消息上同时触发；
+    所有数字答案都走这里的答案路由，「参与 / 运作 / 不运作」也由同一个 answer matcher 转给转盘。
     事件预处理器只给博弈记录最近发言表。
     """
 
     coordinator = events or EventCoordinator(service, config)
-    if flatter is not None:
-        coordinator.attach_flatter(flatter)
     find_char = findchar or FindCharCoordinator(
         service,
         config,
@@ -493,10 +480,6 @@ def register_ambient(
             user_id = str(event.user_id)
             name = _sender_name(event)
             text = event.message.extract_plain_text()
-            if flatter is not None and await flatter.answer(
-                group_id, user_id, name, text
-            ):
-                return
             if await pk_coordinator.answer(group_id, user_id, name, text):
                 return
             if await group_quiz_coordinator.answer(group_id, user_id, name, text):
@@ -665,23 +648,6 @@ def register_ambient(
                 )
             except Exception:
                 logger.exception("[mantou-affection] 发起命运齿轮转盘失败")
-                started = False
-            if started:
-                return
-
-        try:
-            flatter_ready = await service.flatter_triggered()
-        except Exception:
-            logger.exception("[mantou-affection] 判定献媚桃神失败")
-            flatter_ready = False
-        if flatter is not None and flatter_ready:
-            try:
-                started = await flatter.start(
-                    group_id=group_id,
-                    send=ambient.send,
-                )
-            except Exception:
-                logger.exception("[mantou-affection] 发起献媚桃神失败")
                 started = False
             if started:
                 return

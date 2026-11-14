@@ -65,13 +65,6 @@ def test_wheel_defaults() -> None:
     assert config.mantou_affection_wheel_timeout == 60
 
 
-def test_flatter_defaults() -> None:
-    config = Config()
-    assert config.mantou_affection_bicker_chance == 0.0005
-    assert config.mantou_affection_bicker_bet_window == 60
-    assert config.mantou_affection_bicker_round_timeout == 60
-
-
 def test_gain_text_shows_sign() -> None:
     assert _gain_text(3) == "好感度 +3"
     assert _gain_text(1) == "好感度 +1"
@@ -113,7 +106,7 @@ def test_format_probability(value: float, expected: str) -> None:
 def test_registered_matchers_include_probability_command() -> None:
     from nonebot_plugin_mantou_affection import matchers
 
-    assert len(matchers) == 18
+    assert len(matchers) == 17
     (
         _profile_cmd,
         _interact_cmd,
@@ -129,7 +122,6 @@ def test_registered_matchers_include_probability_command() -> None:
         wheel_cmd,
         group_quiz_cmd,
         meme_whitelist_cmd,
-        flatter_cmd,
         batch_probability_cmd,
         fill_blank_cmd,
         _teyvat_quiz_cmd,
@@ -155,7 +147,6 @@ def test_registered_matchers_include_probability_command() -> None:
         wheel_cmd: "handle_wheel_probability",
         group_quiz_cmd: "handle_group_quiz_probability",
         meme_whitelist_cmd: "handle_meme_whitelist",
-        flatter_cmd: "handle_flatter_probability",
         fill_blank_cmd: "handle_fill_blank_probability",
     }
     for matcher, handler_name in expected_handlers.items():
@@ -269,26 +260,6 @@ async def test_wheel_probability_command_query_and_set(tmp_path: Path, monkeypat
     await handler.call(Message("not-a-probability"))
     assert "请输入 0~1" in sent[-1]
     assert await service.wheel_probability() == 0.002
-
-
-async def test_flatter_probability_command_query_and_set(tmp_path: Path, monkeypatch) -> None:
-    service = AffectionService(AffectionStore(tmp_path / "affection.json"), Config())
-    flatter_cmd = register_commands(service, Config())[14]
-    sent = []
-
-    async def fake_finish(message: Message | str = "", **kwargs) -> None:
-        sent.append(str(message))
-
-    monkeypatch.setattr(flatter_cmd, "finish", fake_finish)
-    handler = flatter_cmd.handlers[0]
-    await handler.call(Message(""))
-    assert "当前献媚桃神概率：0.05%" in sent[-1]
-    await handler.call(Message("0.2%"))
-    assert "已调整为 0.2%" in sent[-1]
-    assert await service.flatter_probability() == 0.002
-    await handler.call(Message("not-a-probability"))
-    assert "请输入 0~1" in sent[-1]
-    assert await service.flatter_probability() == 0.002
 
 
 def _meme_whitelist_handler(tmp_path: Path, monkeypatch) -> tuple:
@@ -411,7 +382,7 @@ async def test_batch_probability_command_query_set_scale_and_reset(
     tmp_path: Path, monkeypatch
 ) -> None:
     service = AffectionService(AffectionStore(tmp_path / "affection.json"), Config())
-    batch_cmd = register_commands(service, Config())[15]
+    batch_cmd = register_commands(service, Config())[14]
     sent: list[str] = []
 
     async def fake_finish(message: Message | str = "", **kwargs) -> None:
@@ -421,7 +392,7 @@ async def test_batch_probability_command_query_set_scale_and_reset(
     handler = batch_cmd.handlers[0]
 
     await handler.call(Message(""))
-    assert "共 10 项" in sent[-1]
+    assert "共 9 项" in sent[-1]
     assert "馒头小动作：0.05%（配置默认）" in sent[-1]
     assert "×2" in sent[-1]
 
@@ -429,10 +400,9 @@ async def test_batch_probability_command_query_set_scale_and_reset(
     assert "统一设为 1%" in sent[-1]
     assert await service.ambient_probability() == pytest.approx(0.01)
     assert await service.bet_probability() == pytest.approx(0.01)
-    assert await service.flatter_probability() == pytest.approx(0.01)
 
     await handler.call(Message("×2"))
-    assert "已按 ×2 缩放 10 项活动概率" in sent[-1]
+    assert "已按 ×2 缩放 9 项活动概率" in sent[-1]
     assert "馒头小动作：1% → 2%" in sent[-1]
     assert await service.wheel_probability() == pytest.approx(0.02)
 
@@ -440,7 +410,7 @@ async def test_batch_probability_command_query_set_scale_and_reset(
     assert "运行时覆盖，配置默认 0.05%" in sent[-1]
 
     await handler.call(Message("重置"))
-    assert "已清除 10 项运行时概率覆盖" in sent[-1]
+    assert "已清除 9 项运行时概率覆盖" in sent[-1]
     assert await service.bet_probability() == pytest.approx(
         Config().mantou_affection_bet_chance
     )
@@ -459,7 +429,7 @@ async def test_batch_probability_command_scales_percent_factor(
     tmp_path: Path, monkeypatch
 ) -> None:
     service = AffectionService(AffectionStore(tmp_path / "affection.json"), Config())
-    batch_cmd = register_commands(service, Config())[15]
+    batch_cmd = register_commands(service, Config())[14]
     sent: list[str] = []
 
     async def fake_finish(message: Message | str = "", **kwargs) -> None:
@@ -468,7 +438,7 @@ async def test_batch_probability_command_scales_percent_factor(
     monkeypatch.setattr(batch_cmd, "finish", fake_finish)
 
     await batch_cmd.handlers[0].call(Message("×50%"))
-    assert "已按 ×0.5 缩放 10 项活动概率" in sent[-1]
+    assert "已按 ×0.5 缩放 9 项活动概率" in sent[-1]
     assert await service.pk_probability() == pytest.approx(0.005)
 
 
@@ -506,7 +476,6 @@ async def test_help_lists_every_command(tmp_path: Path, monkeypatch) -> None:
         "/馒头群友问答概率",
         "/馒头提瓦特概率",
         "/馒头补句概率",
-        "/馒头献媚概率",
         "/馒头转盘概率",
         "/馒头概率总调",
         "/馒头强制事件",
@@ -518,7 +487,7 @@ async def test_batch_probability_finish_is_not_caught(
     tmp_path: Path, monkeypatch, argument: str
 ) -> None:
     service = AffectionService(AffectionStore(tmp_path / "affection.json"), Config())
-    batch_cmd = register_commands(service, Config())[15]
+    batch_cmd = register_commands(service, Config())[14]
     sent: list[str] = []
 
     async def fake_finish(message: Message | str = "", **kwargs) -> None:
