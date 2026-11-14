@@ -58,7 +58,7 @@ from nonebot_plugin_mantou_affection.pk import (
 )
 from nonebot_plugin_mantou_affection.service import AffectionService
 from nonebot_plugin_mantou_affection.storage import AffectionStore
-from nonebot_plugin_mantou_affection.wheel import DEVIL_SPEC, WheelCoordinator
+from nonebot_plugin_mantou_affection.wheel import WheelCoordinator
 
 GROUP_ID = "90001"
 SUPER_ID = "10001"
@@ -75,9 +75,8 @@ EXPECTED_ACTIVITY_LINES = (
     "5. 桃子问答",
     "6. 群友问答",
     "7. 命运齿轮转盘",
-    "8. 小恶魔转盘",
-    "9. 献媚桃神",
-    "10. 补句问答",
+    "8. 献媚桃神",
+    "9. 补句问答",
 )
 
 
@@ -487,9 +486,8 @@ async def test_invalid_choice_cancels_without_affection_change(
         ("5", "pk", "🍑 桃子问答！"),
         ("6", "group_quiz", "💬 群友问答！"),
         ("7", "wheel", "命运齿轮转盘"),
-        ("8", "wheel", "小恶魔转盘"),
-        ("9", "flatter", "献媚桃神"),
-        ("10", "fill_blank", "🧩 补句问答！"),
+        ("8", "flatter", "献媚桃神"),
+        ("9", "fill_blank", "🧩 补句问答！"),
     ],
 )
 async def test_force_choice_starts_activity(
@@ -515,19 +513,6 @@ async def test_force_choice_starts_activity(
     await harness.cleanup()
 
 
-async def test_force_devil_choice_starts_devil_wheel(
-    tmp_path: Path, bundled_texts_path: Path, monkeypatch
-) -> None:
-    harness = Harness(tmp_path, bundled_texts_path, monkeypatch)
-    await harness.start_command()
-    harness.sent.clear()
-
-    await harness.choose("8")
-
-    assert harness.wheel.pending[GROUP_ID].spec is DEVIL_SPEC
-    await harness.cleanup()
-
-
 async def test_force_flatter_choice_starts_flatter(
     tmp_path: Path, bundled_texts_path: Path, monkeypatch
 ) -> None:
@@ -535,7 +520,7 @@ async def test_force_flatter_choice_starts_flatter(
     await harness.start_command()
     harness.sent.clear()
 
-    await harness.choose("9")
+    await harness.choose("8")
 
     assert GROUP_ID in harness.flatter.pending
     assert "献媚桃神" in _body(harness.sent[-1])
@@ -549,7 +534,7 @@ def test_force_prompt_hides_flatter_when_unavailable(
     harness = Harness(tmp_path, bundled_texts_path, monkeypatch)
     harness.flatter.memory.available_flag = False
 
-    assert "9. 献媚桃神" not in harness.force.prompt("桃友")
+    assert "8. 献媚桃神" not in harness.force.prompt("桃友")
 
 
 async def test_force_bet_choice_names_target_and_two_rivals(

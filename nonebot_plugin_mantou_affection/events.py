@@ -9,9 +9,7 @@ from typing import Any
 from nonebot import logger
 
 EVENT_DELTAS = (-2, 1, 2)
-UPSET_DELTAS = (-15, -10, -5, -3, 2, 5)
 NORMAL_OPTION_COUNT = 3
-UPSET_OPTION_COUNT = 6
 
 
 @dataclass(frozen=True)
@@ -24,12 +22,6 @@ class EventOption:
 class Event:
     text: str
     options: tuple[EventOption, ...]
-
-    @property
-    def upset(self) -> bool:
-        """闹别扭事件：+5 / +2 两档哄法，另有 -3 / -5 / -10 / -15 四个按比例扣分的档位。"""
-
-        return sorted(option.delta for option in self.options) == list(UPSET_DELTAS)
 
 
 class EventLibrary:
@@ -81,17 +73,16 @@ class EventLibrary:
                 else []
             )
             valid = [option for option in options if option is not None]
-            if not text or len(valid) not in (NORMAL_OPTION_COUNT, UPSET_OPTION_COUNT):
+            if not text or len(valid) != NORMAL_OPTION_COUNT:
                 logger.warning(
                     f"[mantou-affection] 跳过第 {index + 1} 条随机事件："
-                    f"选项数量必须是 {NORMAL_OPTION_COUNT} 或 {UPSET_OPTION_COUNT}"
+                    f"选项数量必须是 {NORMAL_OPTION_COUNT}"
                 )
                 continue
-            deltas = sorted(option.delta for option in valid)
-            if deltas not in (sorted(EVENT_DELTAS), list(UPSET_DELTAS)):
+            if sorted(option.delta for option in valid) != sorted(EVENT_DELTAS):
                 logger.warning(
                     f"[mantou-affection] 跳过第 {index + 1} 条随机事件："
-                    f"选项数值必须是 {EVENT_DELTAS} 或 {UPSET_DELTAS}"
+                    f"选项数值必须是 {EVENT_DELTAS}"
                 )
                 continue
             events.append(Event(text, tuple(valid)))

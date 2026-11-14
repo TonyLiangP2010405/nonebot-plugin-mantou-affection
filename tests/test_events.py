@@ -22,20 +22,6 @@ def _event_text(index: int) -> dict:
     }
 
 
-def _upset_event(index: int) -> dict:
-    return {
-        "text": f"闹别扭 {index}",
-        "options": [
-            {"text": f"最佳哄法 {index}", "delta": 5},
-            {"text": f"次佳哄法 {index}", "delta": 2},
-            {"text": f"轻扣 {index}", "delta": -3},
-            {"text": f"中扣 {index}", "delta": -5},
-            {"text": f"重扣 {index}", "delta": -10},
-            {"text": f"最重扣 {index}", "delta": -15},
-        ],
-    }
-
-
 def test_bundled_event_library_is_valid(bundled_texts_path: Path) -> None:
     library = EventLibrary(bundled_texts_path.with_name("affection_events.json"))
     assert len(library.events) >= 6
@@ -151,154 +137,25 @@ def test_shuffled_options_keep_content_and_change_order(tmp_path: Path) -> None:
         assert set(order) == {"甲", "乙", "丙"}
 
 
-def test_bundled_upset_library_is_valid(bundled_texts_path: Path) -> None:
-    library = EventLibrary(bundled_texts_path.with_name("affection_events_upset.json"))
-    assert len(library.events) >= 6
 
-    for event in library.events:
-        assert event.text
-        assert event.upset is True
-        assert len(event.options) == 6
-        assert sorted(option.delta for option in event.options) == [-15, -10, -5, -3, 2, 5]
+def test_six_option_events_are_rejected(tmp_path: Path) -> None:
+    """移除闹别扭事件后，只有 3 选项的普通事件才合法。"""
 
-
-def test_normal_event_is_not_upset(tmp_path: Path) -> None:
-    library = EventLibrary(_write(tmp_path / "events.json", {"events": [_event_text(1)]}))
-    event = library.pick()
-    assert event is not None
-    assert event.upset is False
-    assert sorted(option.delta for option in event.options) == [-2, 1, 2]
-
-
-def test_upset_event_keeps_values_after_shuffle(tmp_path: Path) -> None:
-    library = EventLibrary(
-        _write(tmp_path / "events.json", {"events": [_upset_event(1)]})
-    )
-    event = library.pick()
-    assert event is not None
-
-    for _ in range(10):
-        options = EventLibrary.shuffled_options(event)
-        assert event.upset is True
-        assert sorted(option.delta for option in options) == [-15, -10, -5, -3, 2, 5]
-        texts = [option.text for option in options]
-        assert texts.count("最佳哄法 1") == 1
-        assert len(set(texts)) == 6
-
-
-@pytest.mark.parametrize(
-    "broken",
-    [
-        {
-            "text": "只有 5 个选项",
-            "options": [
-                {"text": "甲", "delta": 5},
-                {"text": "乙", "delta": 2},
-                {"text": "丙", "delta": -3},
-                {"text": "丁", "delta": -5},
-                {"text": "戊", "delta": -10},
-            ],
-        },
-        {
-            "text": "只有 7 个选项",
-            "options": [
-                {"text": "甲", "delta": 5},
-                {"text": "乙", "delta": 2},
-                {"text": "丙", "delta": -3},
-                {"text": "丁", "delta": -5},
-                {"text": "戊", "delta": -10},
-                {"text": "己", "delta": -15},
-                {"text": "庚", "delta": -15},
-            ],
-        },
-        {
-            "text": "上一版的三档结构",
-            "options": [
-                {"text": "甲", "delta": 10},
-                {"text": "乙", "delta": 5},
-                {"text": "丙", "delta": 2},
-                {"text": "丁", "delta": -5},
-                {"text": "戊", "delta": -5},
-                {"text": "己", "delta": -10},
-            ],
-        },
-        {
-            "text": "更早的 1 对 5 错结构",
-            "options": [
-                {"text": "甲", "delta": 10},
-                {"text": "乙", "delta": -5},
-                {"text": "丙", "delta": -5},
-                {"text": "丁", "delta": -5},
-                {"text": "戊", "delta": -10},
-                {"text": "己", "delta": -10},
-            ],
-        },
-        {
-            "text": "少了 +2 档",
-            "options": [
-                {"text": "甲", "delta": 5},
-                {"text": "乙", "delta": 5},
-                {"text": "丙", "delta": -3},
-                {"text": "丁", "delta": -5},
-                {"text": "戊", "delta": -10},
-                {"text": "己", "delta": -15},
-            ],
-        },
-        {
-            "text": "两个最重扣",
-            "options": [
-                {"text": "甲", "delta": 5},
-                {"text": "乙", "delta": 2},
-                {"text": "丙", "delta": -3},
-                {"text": "丁", "delta": -5},
-                {"text": "戊", "delta": -15},
-                {"text": "己", "delta": -15},
-            ],
-        },
-        {
-            "text": "仍然是 3 选项的旧格式",
-            "options": [
-                {"text": "甲", "delta": 5},
-                {"text": "乙", "delta": -5},
-                {"text": "丙", "delta": -15},
-            ],
-        },
-        {
-            "text": "普通题混入 6 选项",
-            "options": [
-                {"text": "甲", "delta": 2},
-                {"text": "乙", "delta": 1},
-                {"text": "丙", "delta": -2},
-                {"text": "丁", "delta": 2},
-                {"text": "戊", "delta": 1},
-                {"text": "己", "delta": -2},
-            ],
-        },
-        {
-            "text": "选项缺少 delta",
-            "options": [
-                {"text": "甲", "delta": 5},
-                {"text": "乙", "delta": 2},
-                {"text": "丙", "delta": -3},
-                {"text": "丁", "delta": -5},
-                {"text": "戊", "delta": -10},
-                {"text": "己"},
-            ],
-        },
-    ],
-)
-def test_invalid_upset_events_are_skipped(tmp_path: Path, broken: dict) -> None:
-    library = EventLibrary(
-        _write(tmp_path / "events.json", {"events": [broken, _upset_event(2)]})
-    )
-    assert [event.text for event in library.events] == ["闹别扭 2"]
-
-
-def test_normal_and_upset_events_can_share_a_library(tmp_path: Path) -> None:
-    library = EventLibrary(
-        _write(
-            tmp_path / "events.json",
-            {"events": [_event_text(1), _upset_event(2)]},
-        )
-    )
-    assert [event.upset for event in library.events] == [False, True]
+    payload = {
+        "events": [
+            {
+                "text": "六选项旧格式",
+                "options": [
+                    {"text": "甲", "delta": 5},
+                    {"text": "乙", "delta": 2},
+                    {"text": "丙", "delta": -3},
+                    {"text": "丁", "delta": -5},
+                    {"text": "戊", "delta": -10},
+                    {"text": "己", "delta": -15},
+                ],
+            },
+            _event_text(4),
+        ]
+    }
+    library = EventLibrary(_write(tmp_path / "events.json", payload))
+    assert [event.text for event in library.events] == ["场景 4"]

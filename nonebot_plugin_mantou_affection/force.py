@@ -36,7 +36,6 @@ FORCE_ACTIVITY_PK = "pk"
 FORCE_ACTIVITY_GROUP_QUIZ = "group_quiz"
 FORCE_ACTIVITY_FILL_BLANK = "fill_blank"
 FORCE_ACTIVITY_WHEEL = "wheel"
-FORCE_ACTIVITY_DEVIL = "devil"
 FORCE_ACTIVITY_FLATTER = "flatter"
 
 FORCE_CHOICES: dict[str, str] = {
@@ -47,9 +46,8 @@ FORCE_CHOICES: dict[str, str] = {
     "5": FORCE_ACTIVITY_PK,
     "6": FORCE_ACTIVITY_GROUP_QUIZ,
     "7": FORCE_ACTIVITY_WHEEL,
-    "8": FORCE_ACTIVITY_DEVIL,
-    "9": FORCE_ACTIVITY_FLATTER,
-    "10": FORCE_ACTIVITY_FILL_BLANK,
+    "8": FORCE_ACTIVITY_FLATTER,
+    "9": FORCE_ACTIVITY_FILL_BLANK,
 }
 FORCE_ACTIVITY_LINES: tuple[str, ...] = (
     "1. 馒头小动作",
@@ -59,9 +57,8 @@ FORCE_ACTIVITY_LINES: tuple[str, ...] = (
     "5. 桃子问答",
     "6. 群友问答",
     "7. 命运齿轮转盘",
-    "8. 小恶魔转盘",
-    "9. 献媚桃神",
-    "10. 补句问答",
+    "8. 献媚桃神",
+    "9. 补句问答",
 )
 FORCE_PROMPT = (
     "🎛️ 馒头强制事件（目标：{target}）\n"
@@ -91,7 +88,7 @@ class PendingForce:
 
 
 class ForceCoordinator:
-    """管理强制事件的选择状态与十类活动分发，选择窗口默认 20 秒。
+    """管理强制事件的选择状态与九类活动分发，选择窗口默认 20 秒。
 
     强制触发绕过概率、好感门槛和功能开关，但保留群级互斥：本群已有待结算的活动时
     命令与选择都会被拒绝。强制事件自己的选择状态不占群席位，所以命令发出去的 20 秒
@@ -138,7 +135,7 @@ class ForceCoordinator:
         if self.flatter is not None and self.flatter.available():
             return FORCE_ACTIVITY_LINES
         return tuple(
-            line for line in FORCE_ACTIVITY_LINES if not line.startswith("9.")
+            line for line in FORCE_ACTIVITY_LINES if not line.startswith("8.")
         )
 
     def prompt(self, target: str) -> str:
@@ -239,8 +236,6 @@ class ForceCoordinator:
             return await self._start_fill_blank(pending, send)
         if choice == FORCE_ACTIVITY_WHEEL:
             return await self._start_wheel(pending, send)
-        if choice == FORCE_ACTIVITY_DEVIL:
-            return await self._start_wheel(pending, send, devil=True)
         if choice == FORCE_ACTIVITY_FLATTER:
             return await self._start_flatter(pending, send)
         return FORCE_FAIL_REPLY
@@ -257,11 +252,8 @@ class ForceCoordinator:
         return None
 
     async def _start_event(self, pending: PendingForce, send: Send) -> str | None:
-        affection = (
-            await self.service.profile(pending.group_id, pending.target_id)
-        ).affection
         game = self.events.start(
-            pending.group_id, pending.target_id, pending.target_name, affection=affection
+            pending.group_id, pending.target_id, pending.target_name
         )
         if game is None:
             return FORCE_FAIL_REPLY
@@ -273,7 +265,7 @@ class ForceCoordinator:
             game,
             group_id=pending.group_id,
             send=send,
-            timeout=self.events.timeout_for(game),
+            timeout=self.config.mantou_affection_event_timeout,
         )
         return None
 
@@ -345,16 +337,13 @@ class ForceCoordinator:
         )
         return None if started else FORCE_FAIL_REPLY
 
-    async def _start_wheel(
-        self, pending: PendingForce, send: Send, *, devil: bool = False
-    ) -> str | None:
+    async def _start_wheel(self, pending: PendingForce, send: Send) -> str | None:
         started = await self.wheel.start(
             group_id=pending.group_id,
             user_id=pending.target_id,
             nickname=pending.target_name,
             bot=_current_bot(),
             send=send,
-            devil=devil,
         )
         return None if started else FORCE_FAIL_REPLY
 

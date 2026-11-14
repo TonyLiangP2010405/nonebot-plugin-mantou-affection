@@ -292,13 +292,13 @@ def test_score_answer_exact_partial_wrong() -> None:
     assert score_answer("哈哈", "大出货") == (-5, 0)
     assert score_answer("没事的没事的", "没事的没事的", hard=True) == (8, 6)
     # 高难度提示前答错: 每答对一个字少扣 1 点。
-    assert score_answer("没事的没事", "没事的没事的", hard=True) == (-3, 5)
-    assert score_answer("没事的", "没事的没事的", hard=True) == (-5, 3)
-    assert score_answer("哈哈哈", "没事的没事的", hard=True) == (-8, 0)
-    # 提示之后答题一律扣分: 全对 -3, 没全对 -5。
+    assert score_answer("没事的没事", "没事的没事的", hard=True) == (0, 5)
+    assert score_answer("没事的", "没事的没事的", hard=True) == (-2, 3)
+    assert score_answer("哈哈哈", "没事的没事的", hard=True) == (-5, 0)
+    # 提示之后: 全对不扣分, 没全对 -5。
     assert score_answer(
         "没事的没事的", "没事的没事的", hard=True, after_hint=True
-    ) == (-3, 6)
+    ) == (0, 6)
     assert score_answer(
         "没事的没事", "没事的没事的", hard=True, after_hint=True
     ) == (-5, 5)
@@ -369,10 +369,10 @@ async def test_fill_blank_hard_mode_above_threshold(tmp_path: Path) -> None:
     assert "高难度" in body
     assert "120 秒内作答" in body
     assert "前 60 秒内答对 +8" in body
-    assert "答错 -8" in body
+    assert "答错 -5" in body
     assert "答对 1 个字少扣 1 点" in body
     assert "60 秒时会公布几个字的拼音" in body
-    assert "之后答错 -5、答对 -3" in body
+    assert "之后答错 -5、答对不扣分" in body
     assert "整局没答 -10" in body
     assert "答对其中 1 个字 +1" not in body
     assert f"拼音首字母：{pending.question.initials}" in body
@@ -417,13 +417,13 @@ async def test_fill_blank_hard_mode_settles_exact_and_wrong(
     assert "答案：没事的没事的" in sent[-1].extract_plain_text()
     assert "+8" in lines[TARGET]
     assert "全对" in lines[TARGET]
-    assert "-8" in lines[OTHER]
+    assert "-5" in lines[OTHER]
     assert "没答对" in lines[OTHER]
-    assert "-3" in lines[OTHER_B]
+    assert "+0" in lines[OTHER_B]
     assert "答对 5 个字，少扣 5 点" in lines[OTHER_B]
     assert (await coordinator.service.profile(GROUP_ID, TARGET)).affection == 208
-    assert (await coordinator.service.profile(GROUP_ID, OTHER)).affection == 92
-    assert (await coordinator.service.profile(GROUP_ID, OTHER_B)).affection == 97
+    assert (await coordinator.service.profile(GROUP_ID, OTHER)).affection == 95
+    assert (await coordinator.service.profile(GROUP_ID, OTHER_B)).affection == 100
 
 
 async def test_fill_blank_hard_mode_target_timeout_penalty(
@@ -470,11 +470,11 @@ async def test_fill_blank_hard_hint_reveals_pinyin_and_rescores(
     assert FILL_BLANK_HARD_HINT_REVEAL == 2
     assert "先给你前 2 个字的拼音: méi shì" in hint
     assert "提示后答错 -5" in hint
-    assert "答对也只有 -3" in hint
+    assert "答对不扣分" in hint
     assert "整局不答还是 -10" in hint
     assert "「答：xxx」" in hint
 
-    # 提示后: 全对只 -3, 没全对 -5。
+    # 提示后: 全对不扣分, 没全对 -5。
     assert await _submit(coordinator, OTHER_B, "没事的没事的") is True
     assert await _submit(coordinator, "96005", "答：哈哈哈") is True
 
@@ -482,15 +482,15 @@ async def test_fill_blank_hard_hint_reveals_pinyin_and_rescores(
     lines = _result_lines(sent[-1])
     assert "+8" in lines[TARGET]
     assert "全对" in lines[TARGET]
-    assert "-5" in lines[OTHER]
+    assert "-2" in lines[OTHER]
     assert "答对 3 个字，少扣 3 点" in lines[OTHER]
-    assert "-3" in lines[OTHER_B]
     assert "提示后全对" in lines[OTHER_B]
+    assert "好感度不扣" in lines[OTHER_B]
     assert "-5" in lines["96005"]
     assert "提示后没答对" in lines["96005"]
     assert (await coordinator.service.profile(GROUP_ID, TARGET)).affection == 308
-    assert (await coordinator.service.profile(GROUP_ID, OTHER)).affection == 95
-    assert (await coordinator.service.profile(GROUP_ID, OTHER_B)).affection == 97
+    assert (await coordinator.service.profile(GROUP_ID, OTHER)).affection == 98
+    assert (await coordinator.service.profile(GROUP_ID, OTHER_B)).affection == 100
     assert (await coordinator.service.profile(GROUP_ID, "96005")).affection == 95
 
 

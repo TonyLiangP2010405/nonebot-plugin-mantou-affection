@@ -22,7 +22,6 @@ class Config(BaseModel):
     mantou_affection_ambient_probability: float = Field(default=0.0005, ge=0.0, le=1.0)
     mantou_affection_ambient_event_ratio: float = Field(default=0.333, ge=0.0, le=1.0)
     mantou_affection_event_timeout: int = Field(default=20, ge=3, le=120)
-    mantou_affection_upset_event_timeout: int = Field(default=60, ge=3, le=600)
     mantou_affection_event_timeout_penalty: int = Field(default=5, ge=1, le=100)
     mantou_affection_poke_event_chance: float = Field(default=0.0005, ge=0.0, le=1.0)
     mantou_affection_find_char_chance: float = Field(default=0.0005, ge=0.0, le=1.0)
@@ -34,10 +33,6 @@ class Config(BaseModel):
     mantou_affection_bet_window: int = Field(default=60, ge=3, le=600)
     mantou_affection_wheel_chance: float = Field(default=0.001, ge=0.0, le=1.0)
     mantou_affection_wheel_timeout: int = Field(default=60, ge=3, le=300)
-    mantou_affection_wheel_devil_chance: float = Field(default=0.667, ge=0.0, le=1.0)
-    mantou_affection_wheel_devil_min_affection: int = Field(
-        default=200, ge=0, le=999999
-    )
     mantou_affection_wheel_meme_confirm_timeout: int = Field(default=30, ge=5, le=300)
     mantou_affection_wheel_taozi_timeout: int = Field(default=30, ge=5, le=300)
     mantou_affection_memes_extra_repos: bool = True

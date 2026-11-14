@@ -30,14 +30,14 @@ FILL_BLANK_MAX_PARTIAL_REWARD = 4
 FILL_BLANK_TIMEOUT_PENALTY = -2
 
 FILL_BLANK_HARD_RIGHT_REWARD = 8
-FILL_BLANK_HARD_WRONG_PENALTY = -8
+FILL_BLANK_HARD_WRONG_PENALTY = -5
 FILL_BLANK_HARD_TIMEOUT_PENALTY = -10
 FILL_BLANK_HARD_MIN_LENGTH = 6
 FILL_BLANK_HARD_MAX_LENGTH = 8
 
-# 高难度局: 答错时每答对一个字少扣 1 点; 半程给提示, 提示后答题一律扣分。
+# 高难度局: 答错时每答对一个字少扣 1 点; 半程给提示, 提示后答错仍扣分、答对不扣分。
 FILL_BLANK_HARD_CHAR_REDUCTION = 1
-FILL_BLANK_HARD_HINT_RIGHT_PENALTY = -3
+FILL_BLANK_HARD_HINT_RIGHT_PENALTY = 0
 FILL_BLANK_HARD_HINT_WRONG_PENALTY = -5
 # 提示里公布前几个字的完整拼音, 不足时公布全部。
 FILL_BLANK_HARD_HINT_REVEAL = 2
@@ -60,8 +60,8 @@ FILL_BLANK_RULES = (
     "答对 +5；答错 -5；答对其中 1 个字 +1；被 @ 的触发者整局没答 -2。"
 )
 FILL_BLANK_HARD_RULES = (
-    "高难度：前 {hint_after} 秒内答对 +8；答错 -8，答对 1 个字少扣 1 点；"
-    "{hint_after} 秒时会公布几个字的拼音，之后答错 -5、答对 -3；"
+    "高难度：前 {hint_after} 秒内答对 +8；答错 -5，答对 1 个字少扣 1 点；"
+    "{hint_after} 秒时会公布几个字的拼音，之后答错 -5、答对不扣分；"
     "被 @ 的触发者整局没答 -10。"
 )
 FILL_BLANK_RESULT_REPLY = "{prefix}\n答案：{answer}（{source}）"
@@ -76,12 +76,10 @@ FILL_BLANK_HARD_HINT_PREFIX = "🧩 补句问答·高难度！提示时间到"
 FILL_BLANK_HARD_HINT_REPLY = (
     "{prefix}\n"
     "{detail}\n"
-    "提示后答错 -5、答对也只有 -3；被 @ 的触发者整局不答还是 -10。\n"
+    "提示后答错 -5、答对不扣分；被 @ 的触发者整局不答还是 -10。\n"
     "还想继续答的，请在剩下的 {remaining} 秒内发「答：xxx」。"
 )
-FILL_BLANK_HARD_HINT_EXACT_REPLY = (
-    "提示后全对，好感度 {delta:+d}，当前 {affection}"
-)
+FILL_BLANK_HARD_HINT_EXACT_REPLY = "提示后全对，好感度不扣，当前 {affection}"
 FILL_BLANK_HARD_HINT_PARTIAL_REPLY = (
     "提示后答对 {matched} 个字，好感度 {delta:+d}，当前 {affection}"
 )
@@ -316,8 +314,8 @@ def score_answer(
     """返回 (好感度变化, 答对字数)。
 
     普通题全对 +5、全错 -5；部分答对按最长公共子序列每字 +1，最多 +4。
-    高难度题分两个阶段：半程提示前全对 +8，没全对 -8 但每答对一个字少扣 1 点；
-    提示之后全对 -3、没全对 -5，部分答对不再减免。
+    高难度题分两个阶段：半程提示前全对 +8，没全对 -5 但每答对一个字少扣 1 点；
+    提示之后全对不扣分、没全对 -5，部分答对不再减免。
     """
 
     if guess == answer:

@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Iterable
 from pathlib import Path
 
-from nonebot import get_driver, get_plugin, get_plugin_config, logger, require
+from nonebot import get_driver, get_plugin, get_plugin_config, require
 from nonebot.plugin import PluginMetadata
 
 from .config import Config
@@ -18,7 +18,7 @@ __plugin_meta__ = PluginMetadata(
         "/馒头群友问答概率 0.05%｜/馒头补句概率 0.05%｜"
         "/馒头转盘概率 0.1%｜/馒头献媚概率 0.05%｜"
         "/馒头概率总调 0.05%（或 ×2 / 重置）｜"
-        "/馒头强制事件 @群友（回复 1~10 强制开一场活动）"
+        "/馒头强制事件 @群友（回复 1~9 强制开一场活动）"
     ),
     type="application",
     homepage="https://github.com/TonyLiangP2010405/nonebot-plugin-mantou-affection",
@@ -51,7 +51,6 @@ from .pk import BUNDLED_PK_PATH, PkCoordinator, PkQuestionLibrary
 from .service import AffectionService
 from .storage import AffectionStore
 from .wheel import WheelCoordinator
-from .wheel_corpus import BUNDLED_CORPUS_PATH, GroupCorpus
 from .wheel_memes import (
     MemeGeneratorAdapter,
     MemeRepoManager,
@@ -68,13 +67,8 @@ text_library = AffectionTextLibrary(
     plugin_config.mantou_affection_text_path,
 )
 event_library = EventLibrary(Path(__file__).parent / "resources" / "affection_events.json")
-upset_event_library = EventLibrary(
-    Path(__file__).parent / "resources" / "affection_events_upset.json"
-)
 service = AffectionService(store, plugin_config, text_library=text_library)
-event_coordinator = EventCoordinator(
-    service, plugin_config, event_library, upset_library=upset_event_library
-)
+event_coordinator = EventCoordinator(service, plugin_config, event_library)
 find_char_library = FindCharLibrary(BUNDLED_PUZZLES_PATH)
 find_char_coordinator = FindCharCoordinator(
     service, plugin_config, find_char_library, events=event_coordinator
@@ -116,7 +110,6 @@ taozi_stickers = TaoziStickerLibrary(
     base_dir=Path(get_plugin_data_dir()) / "taozi_stickers"
 )
 service.stickers = taozi_stickers
-group_corpus = GroupCorpus(BUNDLED_CORPUS_PATH)
 wheel_coordinator = WheelCoordinator(
     service,
     plugin_config,
@@ -124,7 +117,6 @@ wheel_coordinator = WheelCoordinator(
     memes=meme_generator_adapter,
     resources=meme_resources,
     stickers=taozi_stickers,
-    corpus=group_corpus,
 )
 event_coordinator.attach_wheel(wheel_coordinator)
 flatter_coordinator = FlatterCoordinator(
@@ -271,18 +263,12 @@ async def poke(
     if send is None:
         return result
 
-    try:
-        affection = (await service.snapshot(str(group_id), str(user_id))).affection
-    except Exception:
-        logger.exception("[mantou-affection] 读取好感度失败")
-        affection = 0
     event_text = await event_coordinator.start_poke_event(
         group_id=str(group_id),
         user_id=str(user_id),
         nickname=nickname,
         send=send,
         chance=plugin_config.mantou_affection_poke_event_chance,
-        affection=affection,
     )
     if event_text is None:
         event_text = await find_char_coordinator.start_poke_find_char(

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import random
-import re
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -12,7 +11,6 @@ from nonebot.adapters.onebot.v11 import MessageSegment
 
 from .logic import NEWBIE_PROTECTION_NOTE, protect_deduction
 from .service import normalize_nickname
-from .wheel_corpus import CorpusError
 from .wheel_memes import MemeAssetMissing, MemeGenerationError
 from .wheel_stickers import StickerAssetMissing, StickerError
 
@@ -48,27 +46,11 @@ WHEEL_OUTCOMES: tuple[tuple[WheelOutcome, int], ...] = (
     (WheelOutcome("affection", -20), 1),
 )
 
-DEVIL_WHEEL_OUTCOMES: tuple[tuple[WheelOutcome, int], ...] = (
-    (WheelOutcome("meme"), 10),
-    (WheelOutcome("taozi"), 25),
-    (WheelOutcome("corpus"), 10),
-    (WheelOutcome("affection", 2), 4),
-    (WheelOutcome("affection", 4), 2),
-    (WheelOutcome("affection", 6), 2),
-    (WheelOutcome("affection", 10), 1),
-    (WheelOutcome("affection", 20), 1),
-    (WheelOutcome("affection", -9), 30),
-    (WheelOutcome("affection", -10), 15),
-)
 
-
-def draw_wheel_outcome(
-    rng: random.Random,
-    outcomes: tuple[tuple[WheelOutcome, int], ...] = WHEEL_OUTCOMES,
-) -> WheelOutcome:
+def draw_wheel_outcome(rng: random.Random) -> WheelOutcome:
     roll = rng.randrange(100)
     cursor = 0
-    for outcome, weight in outcomes:
+    for outcome, weight in WHEEL_OUTCOMES:
         cursor += weight
         if roll < cursor:
             return outcome
@@ -83,47 +65,6 @@ WHEEL_MAX_PARTICIPANTS = 4
 WHEEL_TOTAL_SEATS = WHEEL_MAX_PARTICIPANTS + 1
 WHEEL_JOIN_COST = 2
 WHEEL_TAOZI_COST = 10
-@dataclass(frozen=True)
-class WheelSpec:
-    """一张转盘表的权重与流程开关；普通表和恶魔表只在这份数据上不同。"""
-
-    name: str
-    outcomes: tuple[tuple[WheelOutcome, int], ...]
-    join_cost: int
-    max_participants: int | None
-    auto_start: bool
-    refund: bool
-    meme_cost: int
-    meme_candidates: int
-    corpus_cost: int
-    taozi_cost: int
-
-
-NORMAL_SPEC = WheelSpec(
-    name="normal",
-    outcomes=WHEEL_OUTCOMES,
-    join_cost=WHEEL_JOIN_COST,
-    max_participants=WHEEL_MAX_PARTICIPANTS,
-    auto_start=False,
-    refund=True,
-    meme_cost=0,
-    meme_candidates=1,
-    corpus_cost=0,
-    taozi_cost=WHEEL_TAOZI_COST,
-)
-
-DEVIL_SPEC = WheelSpec(
-    name="devil",
-    outcomes=DEVIL_WHEEL_OUTCOMES,
-    join_cost=5,
-    max_participants=None,
-    auto_start=True,
-    refund=False,
-    meme_cost=5,
-    meme_candidates=5,
-    corpus_cost=5,
-    taozi_cost=30,
-)
 
 
 def _join_weights(items: list[tuple[int, int]], prefix: str) -> str:
@@ -155,48 +96,6 @@ def format_wheel_rules(timeout: int, newbie_below: int = 50) -> str:
     )
 
 
-def format_devil_wheel_rules(
-    timeout: int, min_affection: int, newbie_below: int = 50
-) -> str:
-    meme_weight = sum(
-        weight for outcome, weight in DEVIL_WHEEL_OUTCOMES if outcome.kind == "meme"
-    )
-    taozi_weight = sum(
-        weight for outcome, weight in DEVIL_WHEEL_OUTCOMES if outcome.kind == "taozi"
-    )
-    corpus_weight = sum(
-        weight for outcome, weight in DEVIL_WHEEL_OUTCOMES if outcome.kind == "corpus"
-    )
-    gains = [
-        (o.value, w)
-        for o, w in DEVIL_WHEEL_OUTCOMES
-        if o.kind == "affection" and o.value > 0
-    ]
-    losses = [
-        (-o.value, w)
-        for o, w in DEVIL_WHEEL_OUTCOMES
-        if o.kind == "affection" and o.value < 0
-    ]
-
-    return (
-        " 馒头小恶魔转盘出现了！"
-        f"（触发者好感度大于 {min_affection} 才会出现恶魔转盘）\n"
-        "含触发者不限人数，其他群友发送“参与”即可加入，"
-        f"参与一次扣 {DEVIL_SPEC.join_cost} 点好感度。\n"
-        f"本轮不需要“运作”或“确认”，{timeout} 秒后自动开转，"
-        "每人独立抽取一次；开转后不退款。\n"
-        f"好感度低于 {newbie_below} 的群友有新手保护："
-        "所有扣分只扣 1/3。\n"
-        "恶魔转盘各项概率：\n"
-        f"· 馒头制作随机表情 {meme_weight}%（抽中扣 {DEVIL_SPEC.meme_cost} 点好感，"
-        f"从 {DEVIL_SPEC.meme_candidates} 个模板里选 1 个）\n"
-        f"· 桃子表情包 {taozi_weight}%（换一张需 {DEVIL_SPEC.taozi_cost} 点好感）\n"
-        f"· 群友语料库 {corpus_weight}%（抽中扣 {DEVIL_SPEC.corpus_cost} 点好感）\n"
-        f"· 好感增加：{_join_weights(gains, '+')}\n"
-        f"· 好感减少：{_join_weights(losses, '-')}"
-    )
-
-
 def format_wheel_confirm(remaining: int) -> str:
     return (
         " 二次确认：回复“确认”后立即开转，一旦确认其他群友就无法再参与了；"
@@ -217,25 +116,9 @@ WHEEL_MEME_TIMEOUT_REPLY = " 表情确认超时，已放弃制作，好感 {delt
 WHEEL_MEME_ASSET_MISSING_REPLY = " 表情素材尚未下载完成，本次不重抽"
 WHEEL_MEME_FAILED_REPLY = " 本次表情生成失败，不重抽"
 
-WHEEL_MEME_PICK_REPLY = (
-    " 你抽中了「随机表情」，已扣除 {cost} 点好感{note}，当前 {affection}。"
-    "直接回复 1 到 {count} 挑一个，{timeout} 秒内有效：\n{options}"
-)
-WHEEL_MEME_PICK_CONFIRMED_REPLY = " 馒头为你做了这张表情："
-WHEEL_MEME_PICK_TIMEOUT_REPLY = (
-    " 表情选择超时，馒头随机给你挑了一张（已扣的好感不退）："
-)
-WHEEL_MEME_PICK_INVALID_REPLY = " 只能回复 1 到 {count}，超时会随机发一张。"
-
-_MEME_PICK_PATTERN = re.compile(r"(?:选)?([1-9])")
-
 WHEEL_JOIN_COST_REPLY = (
     " 参与成功，已扣除 {cost} 点好感度{note}，当前 {affection}，"
     "已加入本轮转盘，等待触发者选择是否运作。"
-)
-WHEEL_DEVIL_JOIN_COST_REPLY = (
-    " 参与成功，已扣除 {cost} 点好感度{note}，当前 {affection}，"
-    "已加入本轮恶魔转盘，到点自动开转。"
 )
 WHEEL_JOIN_POOR_REPLY = " 好感度不足 {cost} 点，暂时无法参与本轮转盘（当前 {affection}）。"
 WHEEL_JOIN_REFUND_REPLY = " 本轮没有开转，参与费 {amount:+d} 已退回，当前 {affection}"
@@ -250,19 +133,6 @@ WHEEL_TAOZI_TIMEOUT_REPLY = " 桃子表情包确认超时，本次没有兑换�
 WHEEL_TAOZI_POOR_REPLY = " 好感不足 {cost} 点，本次没有兑换，当前 {affection}"
 WHEEL_TAOZI_MISSING_REPLY = " 桃子表情包素材还没准备好，本次不重抽"
 WHEEL_TAOZI_FAILED_REPLY = " 本次桃子表情包发送失败，不重抽"
-
-WHEEL_DEVIL_NO_CHOICE_REPLY = " 恶魔转盘不需要“运作”或“确认”，60 秒后会自动开转。"
-WHEEL_DEVIL_AUTO_START_REPLY = " 60 秒到，恶魔转盘自动开转。"
-
-WHEEL_CORPUS_MISSING_REPLY = " 群友语料库还没准备好，本次不扣好感也不重抽"
-WHEEL_CORPUS_FAILED_REPLY = " 群友语料库这次没取到内容，不重抽"
-
-
-def format_corpus_line(line: str, cost: int, affection: int) -> str:
-    return (
-        f" 群友语料库：已扣 {cost} 点好感，当前 {affection}。\n"
-        f"馒头记得有群友说过：「{line}」"
-    )
 
 
 def format_sticker_prompt(
@@ -296,28 +166,6 @@ def format_meme_confirm(meme: Any, timeout: int) -> str:
     )
 
 
-def format_meme_pick(
-    candidates: list[tuple[Any, str]],
-    timeout: int,
-    cost: int,
-    affection: int,
-    note: str = "",
-) -> str:
-    options = "\n".join(
-        f"{index}. {_meme_name(meme)}（种类：{_meme_tags(meme)}，"
-        f"键名：{str(getattr(meme, 'key', '') or '').strip() or '未知'}）"
-        for index, (meme, _kind) in enumerate(candidates, start=1)
-    )
-    return WHEEL_MEME_PICK_REPLY.format(
-        cost=cost,
-        affection=affection,
-        count=len(candidates),
-        timeout=timeout,
-        options=options,
-        note=note,
-    )
-
-
 @dataclass
 class WheelParticipant:
     user_id: str
@@ -325,22 +173,12 @@ class WheelParticipant:
 
 
 class PendingWheel:
-    def __init__(
-        self,
-        group_id: str,
-        user_id: str,
-        nickname: str,
-        *,
-        bot,
-        send,
-        spec: WheelSpec = NORMAL_SPEC,
-    ):
+    def __init__(self, group_id: str, user_id: str, nickname: str, *, bot, send):
         self.group_id = group_id
         self.trigger = WheelParticipant(user_id, nickname)
         self.participants: list[WheelParticipant] = []
         self.bot = bot
         self.send = send
-        self.spec = spec
         self.accepting = True
         self.awaiting_confirm = False
         self.started_at = time.monotonic()
@@ -393,29 +231,6 @@ class PendingStickerConfirm:
         self.task: asyncio.Task | None = None
 
 
-class PendingMemePick:
-    def __init__(
-        self,
-        group_id: str,
-        user_id: str,
-        nickname: str,
-        candidates: list[tuple[Any, str]],
-        *,
-        bot,
-        send,
-        cost: int,
-    ):
-        self.group_id = group_id
-        self.user_id = user_id
-        self.nickname = nickname
-        self.candidates = candidates
-        self.bot = bot
-        self.send = send
-        self.cost = cost
-        self.accepting = True
-        self.task: asyncio.Task | None = None
-
-
 class WheelCoordinator:
     def __init__(
         self,
@@ -427,7 +242,6 @@ class WheelCoordinator:
         memes=None,
         resources=None,
         stickers=None,
-        corpus=None,
         poke_delay: float = 0.2,
     ):
         self.service = service
@@ -437,7 +251,6 @@ class WheelCoordinator:
         self.memes = memes
         self.resources = resources
         self.stickers = stickers
-        self.corpus = corpus
         self.poke_delay = poke_delay
         self.choice_timeout = float(config.mantou_affection_wheel_timeout)
         self.meme_confirm_timeout = float(
@@ -448,7 +261,6 @@ class WheelCoordinator:
         )
         self.pending: dict[str, PendingWheel] = {}
         self.meme_confirms: dict[tuple[str, str], PendingMemeConfirm] = {}
-        self.meme_picks: dict[tuple[str, str], PendingMemePick] = {}
         self.sticker_confirms: dict[tuple[str, str], PendingStickerConfirm] = {}
         self._lock = asyncio.Lock()
 
@@ -458,26 +270,13 @@ class WheelCoordinator:
             return True
         return self.events is not None and self.events.busy(key)
 
-    def pick_mode(self, affection: int) -> bool:
-        """按好感门槛与 2/3 概率决定这一轮是否走恶魔表。"""
-
-        if affection <= self.config.mantou_affection_wheel_devil_min_affection:
-            return False
-        chance = float(self.config.mantou_affection_wheel_devil_chance)
-        if chance <= 0:
-            return False
-        return self.rng.random() < chance
-
     def discard(self, pending: PendingWheel) -> None:
         if self.pending.get(pending.group_id) is pending:
             self.pending.pop(pending.group_id, None)
 
-    async def start(
-        self, *, group_id: str, user_id: str, nickname: str, bot, send, devil: bool = False
-    ) -> bool:
+    async def start(self, *, group_id: str, user_id: str, nickname: str, bot, send) -> bool:
         group = str(group_id)
         user = str(user_id)
-        spec = DEVIL_SPEC if devil else NORMAL_SPEC
         async with self._lock:
             if self.busy(group):
                 return False
@@ -487,21 +286,12 @@ class WheelCoordinator:
                 normalize_nickname(nickname, user),
                 bot=bot,
                 send=send,
-                spec=spec,
             )
             self.pending[group] = pending
         try:
-            rules = (
-                format_devil_wheel_rules(
-                    int(self.choice_timeout),
-                    self.config.mantou_affection_wheel_devil_min_affection,
-                    self.config.mantou_affection_newbie_protection_below,
-                )
-                if devil
-                else format_wheel_rules(
-                    int(self.choice_timeout),
-                    self.config.mantou_affection_newbie_protection_below,
-                )
+            rules = format_wheel_rules(
+                int(self.choice_timeout),
+                self.config.mantou_affection_newbie_protection_below,
             )
             await send(MessageSegment.at(user) + MessageSegment.text(rules))
         except Exception:
@@ -535,21 +325,11 @@ class WheelCoordinator:
             )
             return True
 
-        meme_pick = self.meme_picks.get((str(group_id), user))
-        if meme_pick is not None and meme_pick.accepting:
-            pick_match = _MEME_PICK_PATTERN.fullmatch(keyword)
-            if pick_match is not None:
-                await self._answer_meme_pick(meme_pick, int(pick_match.group(1)))
-                return True
-
         pending = self.pending.get(str(group_id))
         if pending is None or keyword not in {"参与", "运作", "不运作", "确认"}:
             return False
         if keyword == "参与":
             return await self._join(pending, user, nickname)
-        if pending.spec.auto_start:
-            await pending.send(WHEEL_DEVIL_NO_CHOICE_REPLY)
-            return True
         if user != pending.trigger.user_id:
             if pending.accepting:
                 await pending.send("只有被 @ 的触发者能选择是否运作。")
@@ -595,14 +375,11 @@ class WheelCoordinator:
             if any(item.user_id == user_id for item in pending.participants):
                 await pending.send("你已经参与本轮转盘了。")
                 return True
-            if (
-                pending.spec.max_participants is not None
-                and len(pending.participants) >= pending.spec.max_participants
-            ):
+            if len(pending.participants) >= WHEEL_MAX_PARTICIPANTS:
                 await pending.send(f"本轮转盘名额已满（含触发者最多 {WHEEL_TOTAL_SEATS} 人）。")
                 return True
             name = normalize_nickname(nickname, user_id)
-            cost = pending.spec.join_cost
+            cost = WHEEL_JOIN_COST
             current = (await self.service.profile(pending.group_id, user_id)).affection
             if current < cost:
                 await pending.send(
@@ -621,15 +398,10 @@ class WheelCoordinator:
                 await self.service.send_gift(
                     pending.send, pending.group_id, user_id, name
                 )
-            template = (
-                WHEEL_DEVIL_JOIN_COST_REPLY
-                if pending.spec.auto_start
-                else WHEEL_JOIN_COST_REPLY
-            )
             await pending.send(
                 MessageSegment.at(user_id)
                 + MessageSegment.text(
-                    template.format(
+                    WHEEL_JOIN_COST_REPLY.format(
                         cost=-applied, affection=profile.affection, note=note
                     )
                 )
@@ -675,12 +447,6 @@ class WheelCoordinator:
             if self.pending.get(pending.group_id) is not pending or not pending.accepting:
                 return
             pending.accepting = False
-        if pending.spec.auto_start:
-            try:
-                await pending.send(WHEEL_DEVIL_AUTO_START_REPLY)
-            finally:
-                await self._run_operation(pending)
-            return
         try:
             if pending.awaiting_confirm:
                 await pending.send("馒头命运齿轮转盘超时未确认，本轮取消，不会运作。")
@@ -729,7 +495,7 @@ class WheelCoordinator:
         try:
             for participant in [pending.trigger, *pending.participants]:
                 try:
-                    outcome = draw_wheel_outcome(self.rng, pending.spec.outcomes)
+                    outcome = draw_wheel_outcome(self.rng)
                     if outcome.kind == "affection":
                         applied, profile, protected = await self.service.adjust(
                             pending.group_id,
@@ -755,8 +521,6 @@ class WheelCoordinator:
                         await self._run_poke(pending, participant, outcome.value)
                     elif outcome.kind == "taozi":
                         await self._run_sticker_outcome(pending, participant)
-                    elif outcome.kind == "corpus":
-                        await self._run_corpus_outcome(pending, participant)
                     else:
                         await self._run_meme_outcome(pending, participant)
                 except Exception:
@@ -766,52 +530,6 @@ class WheelCoordinator:
                     )
         finally:
             self.discard(pending)
-
-    async def _run_corpus_outcome(
-        self, pending: PendingWheel, participant: WheelParticipant
-    ) -> None:
-        try:
-            if self.corpus is None:
-                raise CorpusError("群友语料库未装配")
-            line = self.corpus.pick()
-        except CorpusError as error:
-            logger.warning(f"[mantou-affection] 群友语料库不可用: {error}")
-            await pending.send(
-                MessageSegment.at(participant.user_id)
-                + MessageSegment.text(WHEEL_CORPUS_MISSING_REPLY)
-            )
-            return
-        try:
-            applied, profile, protected = await self.service.adjust(
-                pending.group_id,
-                participant.user_id,
-                participant.nickname,
-                -pending.spec.corpus_cost,
-            )
-            if applied < 0:
-                await self.service.send_gift(
-                    pending.send,
-                    pending.group_id,
-                    participant.user_id,
-                    participant.nickname,
-                )
-        except Exception:
-            logger.exception(
-                f"[mantou-affection] 转盘语料库扣费失败 group={pending.group_id} "
-                f"user={participant.user_id}"
-            )
-            await pending.send(
-                MessageSegment.at(participant.user_id)
-                + MessageSegment.text(WHEEL_CORPUS_FAILED_REPLY)
-            )
-            return
-        note = NEWBIE_PROTECTION_NOTE if protected else ""
-        await pending.send(
-            MessageSegment.at(participant.user_id)
-            + MessageSegment.text(
-                format_corpus_line(line, -applied, profile.affection) + note
-            )
-        )
 
     async def _run_poke(
         self, pending: PendingWheel, participant: WheelParticipant, count: int
@@ -840,9 +558,6 @@ class WheelCoordinator:
     async def _run_meme_outcome(
         self, pending: PendingWheel, participant: WheelParticipant
     ) -> None:
-        if pending.spec.meme_candidates > 1:
-            await self._run_meme_pick_outcome(pending, participant)
-            return
         try:
             whitelist = await self.service.meme_confirm_whitelist()
         except Exception:
@@ -861,234 +576,6 @@ class WheelCoordinator:
             await self._report_meme_error(participant.user_id, pending.send, error)
             return
         await self._request_meme_confirm(pending, participant, meme, kind)
-
-    async def _run_meme_pick_outcome(
-        self, pending: PendingWheel, participant: WheelParticipant
-    ) -> None:
-        try:
-            if self.memes is None:
-                raise MemeGenerationError("meme-generator 未安装")
-            candidates = await self.memes.draw_candidates_for_group(
-                group_id=pending.group_id,
-                bot=pending.bot,
-                user_id=participant.user_id,
-                count=pending.spec.meme_candidates,
-            )
-        except MemeGenerationError as error:
-            await self._report_meme_error(participant.user_id, pending.send, error)
-            return
-        except Exception:
-            logger.exception("[mantou-affection] 转盘表情候选抽取失败")
-            await pending.send(
-                MessageSegment.at(participant.user_id)
-                + MessageSegment.text(WHEEL_MEME_FAILED_REPLY)
-            )
-            return
-        if not candidates:
-            await pending.send(
-                MessageSegment.at(participant.user_id)
-                + MessageSegment.text(WHEEL_MEME_FAILED_REPLY)
-            )
-            return
-
-        cost = pending.spec.meme_cost
-        applied = 0
-        affection = (
-            await self.service.profile(pending.group_id, participant.user_id)
-        ).affection
-        note = ""
-        if cost > 0:
-            try:
-                applied, profile, protected = await self.service.adjust(
-                    pending.group_id,
-                    participant.user_id,
-                    participant.nickname,
-                    -cost,
-                )
-                affection = profile.affection
-                if protected:
-                    note = NEWBIE_PROTECTION_NOTE
-                if applied < 0:
-                    await self.service.send_gift(
-                        pending.send,
-                        pending.group_id,
-                        participant.user_id,
-                        participant.nickname,
-                    )
-            except Exception:
-                logger.exception(
-                    f"[mantou-affection] 转盘表情扣费失败 group={pending.group_id} "
-                    f"user={participant.user_id}"
-                )
-                await pending.send(
-                    MessageSegment.at(participant.user_id)
-                    + MessageSegment.text(WHEEL_MEME_FAILED_REPLY)
-                )
-                return
-
-        try:
-            whitelist = await self.service.meme_confirm_whitelist()
-        except Exception:
-            logger.exception("[mantou-affection] 读取表情免确认白名单失败")
-            whitelist = set()
-        if participant.user_id in whitelist:
-            meme, kind = self.rng.choice(candidates)
-            await self._send_chosen_meme(
-                participant.user_id,
-                pending.send,
-                meme,
-                kind,
-                bot=pending.bot,
-                nickname=participant.nickname,
-                group_id=pending.group_id,
-            )
-            return
-        await self._request_meme_pick(
-            pending, participant, candidates, -applied, affection, note
-        )
-
-    async def _send_chosen_meme(
-        self,
-        user_id: str,
-        send,
-        meme: Any,
-        kind: str,
-        *,
-        bot,
-        nickname: str,
-        group_id: str,
-        prefix: str = WHEEL_MEME_PICK_CONFIRMED_REPLY,
-    ) -> None:
-        try:
-            if self.memes is None:
-                raise MemeGenerationError("meme-generator 未安装")
-            image = await self.memes.generate_with(
-                meme,
-                kind,
-                bot=bot,
-                user_id=user_id,
-                nickname=nickname,
-                group_id=group_id,
-            )
-        except MemeGenerationError as error:
-            await self._report_meme_error(user_id, send, error)
-            return
-        except Exception:
-            logger.exception("[mantou-affection] 转盘表情生成失败")
-            await send(
-                MessageSegment.at(user_id)
-                + MessageSegment.text(WHEEL_MEME_FAILED_REPLY)
-            )
-            return
-        await send(
-            MessageSegment.at(user_id)
-            + MessageSegment.text(prefix)
-            + MessageSegment.image(image)
-        )
-
-    async def _request_meme_pick(
-        self,
-        pending: PendingWheel,
-        participant: WheelParticipant,
-        candidates: list[tuple[Any, str]],
-        cost: int,
-        affection: int,
-        note: str = "",
-    ) -> None:
-        key = (pending.group_id, participant.user_id)
-        old = self.meme_picks.pop(key, None)
-        if old is not None:
-            old.accepting = False
-            if old.task is not None:
-                old.task.cancel()
-        pick = PendingMemePick(
-            pending.group_id,
-            participant.user_id,
-            participant.nickname,
-            candidates,
-            bot=pending.bot,
-            send=pending.send,
-            cost=cost,
-        )
-        self.meme_picks[key] = pick
-        try:
-            await pending.send(
-                MessageSegment.at(participant.user_id)
-                + MessageSegment.text(
-                    format_meme_pick(
-                        candidates,
-                        int(self.meme_confirm_timeout),
-                        cost,
-                        affection,
-                        note,
-                    )
-                )
-            )
-        except Exception:
-            pick.accepting = False
-            if self.meme_picks.get(key) is pick:
-                self.meme_picks.pop(key, None)
-            raise
-        if self.meme_picks.get(key) is pick and pick.accepting:
-            pick.task = asyncio.create_task(self._expire_meme_pick(pick))
-
-    async def _expire_meme_pick(self, pick: PendingMemePick) -> None:
-        try:
-            await asyncio.sleep(self.meme_confirm_timeout)
-        except asyncio.CancelledError:
-            return
-        if (
-            not pick.accepting
-            or self.meme_picks.get((pick.group_id, pick.user_id)) is not pick
-        ):
-            return
-        self._cancel_meme_pick(pick)
-        meme, kind = self.rng.choice(pick.candidates)
-        await self._send_chosen_meme(
-            pick.user_id,
-            pick.send,
-            meme,
-            kind,
-            bot=pick.bot,
-            nickname=pick.nickname,
-            group_id=pick.group_id,
-            prefix=WHEEL_MEME_PICK_TIMEOUT_REPLY,
-        )
-
-    async def _answer_meme_pick(self, pick: PendingMemePick, index: int) -> None:
-        if (
-            not pick.accepting
-            or self.meme_picks.get((pick.group_id, pick.user_id)) is not pick
-        ):
-            return
-        if index < 1 or index > len(pick.candidates):
-            await pick.send(
-                MessageSegment.at(pick.user_id)
-                + MessageSegment.text(
-                    WHEEL_MEME_PICK_INVALID_REPLY.format(count=len(pick.candidates))
-                )
-            )
-            return
-        meme, kind = pick.candidates[index - 1]
-        self._cancel_meme_pick(pick)
-        await self._send_chosen_meme(
-            pick.user_id,
-            pick.send,
-            meme,
-            kind,
-            bot=pick.bot,
-            nickname=pick.nickname,
-            group_id=pick.group_id,
-        )
-
-    def _cancel_meme_pick(self, pick: PendingMemePick) -> None:
-        pick.accepting = False
-        key = (pick.group_id, pick.user_id)
-        if self.meme_picks.get(key) is pick:
-            self.meme_picks.pop(key, None)
-        task = pick.task
-        if task is not None and task is not asyncio.current_task():
-            task.cancel()
 
     async def _request_meme_confirm(
         self,
@@ -1258,7 +745,7 @@ class WheelCoordinator:
     async def _run_sticker_outcome(
         self, pending: PendingWheel, participant: WheelParticipant
     ) -> None:
-        cost = pending.spec.taozi_cost
+        cost = WHEEL_TAOZI_COST
         current = (await self.service.profile(pending.group_id, participant.user_id)).affection
         protected_cost = -protect_deduction(
             current, -cost, self.config.mantou_affection_newbie_protection_below
