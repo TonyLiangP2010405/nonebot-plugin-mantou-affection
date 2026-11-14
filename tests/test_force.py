@@ -653,3 +653,55 @@ async def test_force_choice_blocked_when_group_becomes_busy(
     assert FORCE_BUSY_REPLY in _body(harness.sent[0])
     assert harness.force.pending == {}
     await harness.cleanup()
+
+
+@pytest.mark.parametrize(
+    ("choice", "attribute", "marker"),
+    [
+        ("10", "hsr_quiz", "🚄 星穹铁道问答！"),
+        ("11", "zzz_quiz", "📺 绝区零问答！"),
+    ],
+)
+async def test_default_force_coordinator_dispatches_new_quizzes(
+    tmp_path: Path,
+    bundled_texts_path: Path,
+    monkeypatch,
+    choice: str,
+    attribute: str,
+    marker: str,
+) -> None:
+    """回归：自建协调器分支曾漏传新问答，导致 10/11 号必定回复失败文案。"""
+
+    harness = Harness(tmp_path, bundled_texts_path, monkeypatch)
+    force_cmd, force_answer = register_force_commands(
+        harness.service,
+        harness.config,
+        harness.events,
+        harness.findchar,
+        harness.bet,
+        harness.pk,
+        harness.wheel,
+        group_quiz=harness.group_quiz,
+        teyvat_quiz=harness.teyvat_quiz,
+        hsr_quiz=harness.hsr_quiz,
+        zzz_quiz=harness.zzz_quiz,
+        fill_blank=harness.fill_blank,
+    )
+    sent: list[Message] = []
+
+    async def fake_send(message, **kwargs) -> None:
+        sent.append(message if isinstance(message, Message) else Message(message))
+
+    monkeypatch.setattr(force_cmd, "finish", fake_send)
+    monkeypatch.setattr(force_answer, "send", fake_send)
+
+    await force_cmd.handlers[0].call(
+        _event("/馒头强制事件", SUPER_ID), _at_message(TARGET_ID)
+    )
+    sent.clear()
+
+    await force_answer.handlers[0].call(_event(choice, SUPER_ID))
+
+    assert marker in _body(sent[-1])
+    assert GROUP_ID in getattr(harness, attribute).pending
+    await harness.cleanup()

@@ -455,6 +455,8 @@ def register_force_commands(
         wheel=wheel,
         group_quiz=group_quiz,
         teyvat_quiz=teyvat_quiz,
+        hsr_quiz=hsr_quiz,
+        zzz_quiz=zzz_quiz,
         fill_blank=fill_blank,
     )
     force_cmd = on_command(
