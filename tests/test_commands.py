@@ -132,7 +132,7 @@ def test_registered_matchers_include_probability_command() -> None:
         flatter_cmd,
         batch_probability_cmd,
         fill_blank_cmd,
-        teyvat_quiz_cmd,
+        _teyvat_quiz_cmd,
     ) = matchers
     assert probability_cmd.priority == 10
     assert probability_cmd.block is True
