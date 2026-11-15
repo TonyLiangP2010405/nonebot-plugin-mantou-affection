@@ -106,7 +106,7 @@ def test_format_probability(value: float, expected: str) -> None:
 def test_registered_matchers_include_probability_command() -> None:
     from nonebot_plugin_mantou_affection import matchers
 
-    assert len(matchers) == 19
+    assert len(matchers) == 20
     (
         _profile_cmd,
         _interact_cmd,
@@ -127,6 +127,7 @@ def test_registered_matchers_include_probability_command() -> None:
         _teyvat_quiz_cmd,
         _hsr_quiz_cmd,
         _zzz_quiz_cmd,
+        _image_cmd,
     ) = matchers
     assert probability_cmd.priority == 10
     assert probability_cmd.block is True
@@ -485,6 +486,7 @@ async def test_help_lists_every_command(tmp_path: Path, monkeypatch) -> None:
         "/馒头转盘概率",
         "/馒头概率总调",
         "/馒头强制事件",
+        "/馒头图像处理",
     }
 
 

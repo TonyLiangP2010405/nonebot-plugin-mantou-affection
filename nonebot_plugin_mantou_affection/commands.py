@@ -4,12 +4,13 @@ import re
 
 from nonebot import get_driver, logger, on_command
 from nonebot.adapters import Event
-from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message, MessageSegment
+from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent, Message, MessageSegment
 from nonebot.params import CommandArg
 from nonebot.permission import SUPERUSER
 from nonebot.rule import Rule
 
 from .config import Config
+from .image_processing import ImageProcessingCoordinator
 from .logic import level_for, progress_text
 from .parsing import (
     FIND_CHAR_CHANCE_USAGE,
@@ -139,6 +140,7 @@ def register_commands(
     service: AffectionService,
     config: Config,
     pk: PkCoordinator | None = None,
+    image_processing: ImageProcessingCoordinator | None = None,
 ) -> tuple:
     profile_cmd = on_command(
         "馒头好感",
@@ -270,6 +272,13 @@ def register_commands(
         priority=10,
         block=True,
     )
+    image_cmd = on_command(
+        "馒头图像处理",
+        aliases={"馒头图片处理", "馒头修图", "馒头图片操作"},
+        rule=GROUP_ONLY,
+        priority=10,
+        block=True,
+    )
     pk_coordinator = pk or PkCoordinator(
         service, config, PkQuestionLibrary(BUNDLED_PK_PATH)
     )
@@ -349,6 +358,7 @@ def register_commands(
             "/馒头好感 —— 查看自己的好感档案\n"
             "/馒头好感榜 —— 查看本群排行榜\n"
             "/馒头表情免确认 —— 加入或退出表情免确认白名单\n"
+            "/馒头图像处理 —— 用转盘抽到的次数处理图片（回复图片后使用）\n"
             "/馒头帮助 —— 打开这份菜单\n"
             "\n"
             "【管理员 · SUPERUSER】\n"
@@ -900,6 +910,29 @@ def register_commands(
             "（再发一次 /馒头表情免确认 可重新加入）"
         )
 
+
+    @image_cmd.handle()
+    async def handle_image(
+        event: GroupMessageEvent, bot: Bot, args: Message = CommandArg()
+    ) -> None:
+        if image_processing is None:
+            await image_cmd.finish("馒头还没把图像处理摆出来，请稍后再试。")
+            return
+        result = await image_processing.handle(
+            group_id=str(event.group_id),
+            user_id=str(event.user_id),
+            raw=args.extract_plain_text(),
+            event=event,
+            bot=bot,
+        )
+        if result.image is not None:
+            await image_cmd.finish(
+                MessageSegment.text(result.text or "")
+                + MessageSegment.image(result.image)
+            )
+            return
+        await image_cmd.finish(result.text or "图像处理没有完成。")
+
     return (
         profile_cmd,
         interact_cmd,
@@ -920,4 +953,5 @@ def register_commands(
         teyvat_quiz_cmd,
         hsr_quiz_cmd,
         zzz_quiz_cmd,
+        image_cmd,
     )

@@ -10,6 +10,7 @@ import pytest
 from nonebot.adapters.onebot.v11 import Message
 
 from nonebot_plugin_mantou_affection.config import Config
+from nonebot_plugin_mantou_affection.image_processing import ImageQuotaStore
 from nonebot_plugin_mantou_affection.models import Profile
 from nonebot_plugin_mantou_affection.service import AffectionService
 from nonebot_plugin_mantou_affection.storage import AffectionStore
@@ -162,7 +163,14 @@ class FakeStickers:
         return True
 
 
-def make_coordinator(tmp_path: Path, rng=None, memes=None, resources=None, stickers=None):
+def make_coordinator(
+    tmp_path: Path,
+    rng=None,
+    memes=None,
+    resources=None,
+    stickers=None,
+    image_quota=None,
+):
     config = Config(mantou_affection_newbie_protection_below=0)
     service = AffectionService(AffectionStore(tmp_path / "affection.json"), config)
     coordinator = WheelCoordinator(
@@ -172,7 +180,7 @@ def make_coordinator(tmp_path: Path, rng=None, memes=None, resources=None, stick
         memes=memes,
         resources=resources,
         stickers=stickers,
-        poke_delay=0,
+        image_quota=image_quota or ImageQuotaStore(tmp_path / "image_quota.json"),
     )
     coordinator.choice_timeout = 30
     return coordinator
@@ -229,11 +237,11 @@ def test_wheel_weights_match_approved_table() -> None:
     assert weighted == [
         (("meme", 0), 19),
         (("taozi", 0), 1),
-        (("poke", 1), 12),
-        (("poke", 3), 8),
-        (("poke", 5), 5),
-        (("poke", 10), 4),
-        (("poke", 20), 1),
+        (("image", 1), 12),
+        (("image", 3), 8),
+        (("image", 5), 5),
+        (("image", 10), 4),
+        (("image", 20), 1),
         (("affection", 1), 7),
         (("affection", 2), 6),
         (("affection", 3), 5),
@@ -277,7 +285,8 @@ def test_rules_message_lists_every_probability() -> None:
     assert "确认后立即截止" in rules
     assert "馒头制作随机表情 19%" in rules
     assert "桃子表情包 1%（换一张需 10 点好感）" in rules
-    assert "×1 12%" in rules and "×20 1%" in rules
+    assert "图像处理次数：×1 12%" in rules and "×20 1%" in rules
+    assert "每张图消耗 1 次" in rules
     assert "+1 7%" in rules and "+20 1%" in rules
     assert "-1 7%" in rules and "-20 1%" in rules
 
@@ -494,13 +503,13 @@ async def test_wheel_operation_draws_each_person_independently(tmp_path: Path) -
     assert any("转盘好感 +20，当前 28" in message.extract_plain_text() for message in sent)
 
 
-async def test_wheel_poke_failure_reports_without_calling_incoming_poke(
+async def test_wheel_image_quota_does_not_call_poke_api(
     tmp_path: Path, monkeypatch
 ) -> None:
     coordinator = make_coordinator(tmp_path, rng=SequenceRng([50, 20]))
 
     async def forbidden_poke(*args, **kwargs):
-        raise AssertionError("不得调用入向 poke")
+        raise AssertionError("不得调用 poke")
 
     monkeypatch.setattr(coordinator.service, "poke", forbidden_poke)
     await give(coordinator.service, TRIGGER, 10)
@@ -512,11 +521,11 @@ async def test_wheel_poke_failure_reports_without_calling_incoming_poke(
     await coordinator.answer(GROUP, TRIGGER, "触发者", "确认")
     await wait_for_choice(pending)
 
-    assert bot.calls == [{"group_id": int(GROUP), "user_id": int(OTHER)}]
+    assert bot.calls == []
     assert (await coordinator.service.profile(GROUP, OTHER)).affection == 8
-    failure = "\n".join(message.extract_plain_text() for message in sent)
-    assert "馒头主动戳你失败" in failure
-    assert "不用你回戳" in failure
+    assert await coordinator.image_quota.get(GROUP, OTHER) == 1
+    body = "\n".join(message.extract_plain_text() for message in sent)
+    assert "抽到图像处理次数 ×1" in body
 
 
 async def test_wheel_meme_missing_requests_throttled_recheck(tmp_path: Path) -> None:
@@ -567,17 +576,16 @@ async def test_wheel_affection_outcomes(tmp_path: Path, roll: int, delta: int) -
 
 
 @pytest.mark.parametrize(("roll", "count"), [(20, 1), (32, 3), (40, 5), (45, 10), (49, 20)])
-async def test_wheel_poke_counts(tmp_path: Path, roll: int, count: int) -> None:
+async def test_wheel_image_quota_counts(tmp_path: Path, roll: int, count: int) -> None:
     coordinator = make_coordinator(tmp_path, rng=SequenceRng([roll]))
-    pending, _, bot = await start(coordinator)
+    pending, _, _ = await start(coordinator)
     await coordinator.answer(GROUP, TRIGGER, "触发者", "运作")
     await coordinator.answer(GROUP, TRIGGER, "触发者", "确认")
     await wait_for_choice(pending)
-    assert len(bot.calls) == count
-    assert all(call["user_id"] == int(TRIGGER) for call in bot.calls)
+    assert await coordinator.image_quota.get(GROUP, TRIGGER) == count
 
 
-async def test_wheel_poke_message_clearly_says_mantou_pokes_you(tmp_path: Path) -> None:
+async def test_wheel_image_quota_message_explains_usage(tmp_path: Path) -> None:
     coordinator = make_coordinator(tmp_path, rng=SequenceRng([20]))
     pending, sent, _ = await start(coordinator)
     await coordinator.answer(GROUP, TRIGGER, "触发者", "运作")
@@ -585,8 +593,9 @@ async def test_wheel_poke_message_clearly_says_mantou_pokes_you(tmp_path: Path) 
     await wait_for_choice(pending)
 
     body = sent[-1].extract_plain_text()
-    assert "馒头主动戳了你 1 次" in body
-    assert "是馒头戳你，不用你回戳" in body
+    assert "抽到图像处理次数 ×1" in body
+    assert "当前共 1 次" in body
+    assert "/馒头图像处理" in body
 
 
 async def test_wheel_uses_actual_applied_delta_at_bounds(tmp_path: Path) -> None:

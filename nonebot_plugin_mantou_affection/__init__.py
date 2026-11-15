@@ -12,7 +12,7 @@ __plugin_meta__ = PluginMetadata(
     name="馒头好感度",
     description="为群聊机器人馒头提供互动、关系阶段和跨插件共享好感状态",
     usage=(
-        "/馒头帮助｜/馒头互动｜/馒头好感｜/馒头好感榜｜/馒头表情免确认\n"
+        "/馒头帮助｜/馒头互动｜/馒头好感｜/馒头好感榜｜/馒头表情免确认｜/馒头图像处理\n"
         "SUPERUSER：/馒头好感调整 @群友 +10｜/馒头好感重置 确认｜/馒头反应概率 5%｜"
         "/馒头找字概率 5%｜/馒头博弈概率 0.05%｜/馒头问答概率 1%｜/馒头问答题库｜"
         "/馒头群友问答概率 0.05%｜/馒头提瓦特概率 0.05%｜/馒头星铁概率 0.05%｜"
@@ -45,6 +45,7 @@ from .findchar import BUNDLED_PUZZLES_PATH, FindCharCoordinator, FindCharLibrary
 from .force import register_force_commands
 from .group_quiz import BUNDLED_GROUP_QUIZ_PATH, GroupQuizCoordinator
 from .hsr_quiz import BUNDLED_HSR_QUIZ_PATH, HsrQuizCoordinator
+from .image_processing import ImageProcessingCoordinator, ImageQuotaStore
 from .integration import register_plugin_linkage
 from .models import AffectionResponse, AffectionSnapshot, PokeResult
 from .pk import BUNDLED_PK_PATH, PkCoordinator, PkQuestionLibrary
@@ -64,12 +65,14 @@ from .zzz_quiz import BUNDLED_ZZZ_QUIZ_PATH, ZzzQuizCoordinator
 plugin_config = get_plugin_config(Config)
 data_file = Path(get_plugin_data_dir()) / "affection.json"
 store = AffectionStore(data_file)
+image_quota = ImageQuotaStore(Path(get_plugin_data_dir()) / "image_quota.json")
 text_library = AffectionTextLibrary(
     Path(__file__).parent / "resources" / "affection_texts.json",
     plugin_config.mantou_affection_text_path,
 )
 event_library = EventLibrary(Path(__file__).parent / "resources" / "affection_events.json")
 service = AffectionService(store, plugin_config, text_library=text_library)
+image_processing = ImageProcessingCoordinator(image_quota, plugin_config)
 event_coordinator = EventCoordinator(service, plugin_config, event_library)
 find_char_library = FindCharLibrary(BUNDLED_PUZZLES_PATH)
 find_char_coordinator = FindCharCoordinator(
@@ -134,9 +137,12 @@ wheel_coordinator = WheelCoordinator(
     memes=meme_generator_adapter,
     resources=meme_resources,
     stickers=taozi_stickers,
+    image_quota=image_quota,
 )
 event_coordinator.attach_wheel(wheel_coordinator)
-matchers = register_commands(service, plugin_config, pk_coordinator)
+matchers = register_commands(
+    service, plugin_config, pk_coordinator, image_processing
+)
 ambient_matcher, answer_matcher = register_ambient(
     service,
     plugin_config,
