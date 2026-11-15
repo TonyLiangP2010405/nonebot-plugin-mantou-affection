@@ -20,6 +20,11 @@ from nonebot_plugin_mantou_affection.hsr_quiz import (
     HsrQuizCoordinator,
 )
 from nonebot_plugin_mantou_affection.models import Profile
+from nonebot_plugin_mantou_affection.petit_planet_quiz import (
+    BUNDLED_PETIT_PLANET_QUIZ_PATH,
+    PETIT_PLANET_QUIZ_SPEC,
+    PetitPlanetQuizCoordinator,
+)
 from nonebot_plugin_mantou_affection.pk import PkCoordinator, PkQuestionLibrary
 from nonebot_plugin_mantou_affection.service import AffectionService
 from nonebot_plugin_mantou_affection.storage import AffectionStore
@@ -62,6 +67,17 @@ CASES = [
         "zzz_quiz",
         "绝区零问答",
         id="zzz",
+    ),
+    pytest.param(
+        "petit_planet",
+        PetitPlanetQuizCoordinator,
+        PETIT_PLANET_QUIZ_SPEC,
+        BUNDLED_PETIT_PLANET_QUIZ_PATH,
+        19,
+        "petit_planet_quiz_probability",
+        "petit_planet_quiz",
+        "星布谷地问答",
+        id="petit_planet",
     ),
 ]
 
@@ -236,7 +252,7 @@ def test_quiz_probability_command(
 ) -> None:
     service = _service(tmp_path)
     commands = register_commands(service, Config(), PkCoordinator(service, Config(), None))
-    assert len(commands) == 20
+    assert len(commands) == 21
     command = commands[command_index]
     assert [handler.call.__name__ for handler in command.handlers] == [
         f"handle_{attach_name}_probability"
@@ -275,6 +291,7 @@ async def test_ambient_starts_quiz(
         "mantou_affection_teyvat_chance": 0.0,
         "mantou_affection_hsr_chance": 0.0,
         "mantou_affection_zzz_chance": 0.0,
+        "mantou_affection_petit_planet_chance": 0.0,
         "mantou_affection_fill_blank_chance": 0.0,
         "mantou_affection_wheel_chance": 0.0,
         "mantou_affection_ambient_enabled": False,
@@ -308,3 +325,7 @@ def test_new_quizzes_are_wired() -> None:
     assert plugin.event_coordinator.zzz_quiz is plugin.zzz_quiz_coordinator
     assert plugin.hsr_quiz_coordinator.total_questions == 5000
     assert plugin.zzz_quiz_coordinator.total_questions == 5000
+    assert plugin.event_coordinator.petit_planet_quiz is (
+        plugin.petit_planet_quiz_coordinator
+    )
+    assert plugin.petit_planet_quiz_coordinator.total_questions == 5000

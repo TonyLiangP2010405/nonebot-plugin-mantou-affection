@@ -47,6 +47,8 @@ class Config(BaseModel):
     mantou_affection_hsr_timeout: int = Field(default=60, ge=5, le=600)
     mantou_affection_zzz_chance: float = Field(default=0.0005, ge=0.0, le=1.0)
     mantou_affection_zzz_timeout: int = Field(default=60, ge=5, le=600)
+    mantou_affection_petit_planet_chance: float = Field(default=0.0005, ge=0.0, le=1.0)
+    mantou_affection_petit_planet_timeout: int = Field(default=60, ge=5, le=600)
     mantou_affection_fill_blank_chance: float = Field(default=0.0005, ge=0.0, le=1.0)
     mantou_affection_fill_blank_timeout: int = Field(default=60, ge=5, le=600)
     mantou_affection_link_rewards: dict[str, int] = Field(

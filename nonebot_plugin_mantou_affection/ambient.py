@@ -23,6 +23,10 @@ from .findchar import BUNDLED_PUZZLES_PATH, FindCharCoordinator, FindCharLibrary
 from .group_quiz import BUNDLED_GROUP_QUIZ_PATH, GroupQuizCoordinator
 from .hsr_quiz import BUNDLED_HSR_QUIZ_PATH, HsrQuizCoordinator
 from .logic import NEWBIE_PROTECTION_NOTE
+from .petit_planet_quiz import (
+    BUNDLED_PETIT_PLANET_QUIZ_PATH,
+    PetitPlanetQuizCoordinator,
+)
 from .pk import BUNDLED_PK_PATH, PkCoordinator, PkQuestionLibrary
 from .service import AffectionService
 from .teyvat_quiz import BUNDLED_TEYVAT_QUIZ_PATH, TeyvatQuizCoordinator
@@ -102,6 +106,7 @@ class EventCoordinator:
         teyvat_quiz: TeyvatQuizCoordinator | None = None,
         hsr_quiz: HsrQuizCoordinator | None = None,
         zzz_quiz: ZzzQuizCoordinator | None = None,
+        petit_planet_quiz: PetitPlanetQuizCoordinator | None = None,
         fill_blank: FillBlankCoordinator | None = None,
     ):
         self.service = service
@@ -116,6 +121,7 @@ class EventCoordinator:
         self.teyvat_quiz = teyvat_quiz
         self.hsr_quiz = hsr_quiz
         self.zzz_quiz = zzz_quiz
+        self.petit_planet_quiz = petit_planet_quiz
         self.fill_blank = fill_blank
         self.pending: dict[str, PendingEvent] = {}
 
@@ -152,6 +158,13 @@ class EventCoordinator:
 
         self.hsr_quiz = hsr_quiz
 
+    def attach_petit_planet_quiz(
+        self, petit_planet_quiz: PetitPlanetQuizCoordinator
+    ) -> None:
+        """接入星布谷地问答，让它和其余活动共用同一个群的席位。"""
+
+        self.petit_planet_quiz = petit_planet_quiz
+
     def attach_zzz_quiz(self, zzz_quiz: ZzzQuizCoordinator) -> None:
         """接入绝区零问答，让它和其余活动共用同一个群的席位。"""
 
@@ -178,6 +191,7 @@ class EventCoordinator:
                 self.teyvat_quiz,
                 self.hsr_quiz,
                 self.zzz_quiz,
+                self.petit_planet_quiz,
                 self.fill_blank,
                 self.wheel,
             )
@@ -416,6 +430,7 @@ def register_ambient(
     teyvat_quiz: TeyvatQuizCoordinator | None = None,
     hsr_quiz: HsrQuizCoordinator | None = None,
     zzz_quiz: ZzzQuizCoordinator | None = None,
+    petit_planet_quiz: PetitPlanetQuizCoordinator | None = None,
     fill_blank: FillBlankCoordinator | None = None,
 ) -> tuple:
     """群友发言时按概率触发找字、博弈、随机问答、群友问答、提瓦特问答、星穹铁道问答、绝区零问答、补句问答、转盘或馒头小动作。
@@ -495,6 +510,14 @@ def register_ambient(
     coordinator.attach_group_quiz(group_quiz_coordinator)
     coordinator.attach_teyvat_quiz(teyvat_quiz_coordinator)
     coordinator.attach_hsr_quiz(hsr_quiz_coordinator)
+    petit_planet_quiz_coordinator = petit_planet_quiz or PetitPlanetQuizCoordinator(
+        service,
+        config,
+        PkQuestionLibrary(BUNDLED_PETIT_PLANET_QUIZ_PATH),
+        events=coordinator,
+        rng=coordinator.rng,
+    )
+    coordinator.attach_petit_planet_quiz(petit_planet_quiz_coordinator)
     coordinator.attach_zzz_quiz(zzz_quiz_coordinator)
     coordinator.attach_fill_blank(fill_blank_coordinator)
     ambient = on_message(rule=GROUP_ONLY, priority=90, block=False)
@@ -526,6 +549,8 @@ def register_ambient(
             if await hsr_quiz_coordinator.answer(group_id, user_id, name, text):
                 return
             if await zzz_quiz_coordinator.answer(group_id, user_id, name, text):
+                return
+            if await petit_planet_quiz_coordinator.answer(group_id, user_id, name, text):
                 return
             if await fill_blank_coordinator.answer(group_id, user_id, name, text):
                 return
@@ -688,6 +713,25 @@ def register_ambient(
                 )
             except Exception:
                 logger.exception("[mantou-affection] 发起绝区零问答失败")
+                started = False
+            if started:
+                return
+
+        try:
+            petit_planet_ready = await service.petit_planet_quiz_triggered()
+        except Exception:
+            logger.exception("[mantou-affection] 判定星布谷地问答失败")
+            petit_planet_ready = False
+        if petit_planet_ready:
+            try:
+                started = await petit_planet_quiz_coordinator.start(
+                    group_id=group_id,
+                    user_id=user_id,
+                    nickname=nickname,
+                    send=ambient.send,
+                )
+            except Exception:
+                logger.exception("[mantou-affection] 发起星布谷地问答失败")
                 started = False
             if started:
                 return

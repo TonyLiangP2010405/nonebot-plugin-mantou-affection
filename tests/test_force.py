@@ -87,6 +87,7 @@ EXPECTED_ACTIVITY_LINES = (
     "9. 提瓦特问答",
     "10. 星穹铁道问答",
     "11. 绝区零问答",
+    "12. 星布谷地问答",
 )
 
 
@@ -459,7 +460,7 @@ async def test_force_choice_timeout_cancels_without_affection_change(
     await harness.cleanup()
 
 
-@pytest.mark.parametrize("text", ["12", "0", "1 2", "随便"])
+@pytest.mark.parametrize("text", ["13", "0", "1 2", "随便"])
 async def test_invalid_choice_cancels_without_affection_change(
     tmp_path: Path, bundled_texts_path: Path, monkeypatch, text: str
 ) -> None:

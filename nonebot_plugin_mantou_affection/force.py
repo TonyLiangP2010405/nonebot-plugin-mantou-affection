@@ -19,6 +19,7 @@ from .fill_blank import FillBlankCoordinator
 from .findchar import FindCharCoordinator
 from .group_quiz import GroupQuizCoordinator
 from .hsr_quiz import HsrQuizCoordinator
+from .petit_planet_quiz import PetitPlanetQuizCoordinator
 from .pk import PkCoordinator
 from .service import AffectionService, normalize_nickname
 from .teyvat_quiz import TeyvatQuizCoordinator
@@ -41,6 +42,7 @@ FORCE_ACTIVITY_WHEEL = "wheel"
 FORCE_ACTIVITY_TEYVAT_QUIZ = "teyvat_quiz"
 FORCE_ACTIVITY_HSR_QUIZ = "hsr_quiz"
 FORCE_ACTIVITY_ZZZ_QUIZ = "zzz_quiz"
+FORCE_ACTIVITY_PETIT_PLANET_QUIZ = "petit_planet_quiz"
 
 FORCE_CHOICES: dict[str, str] = {
     "1": FORCE_ACTIVITY_AMBIENT,
@@ -54,6 +56,7 @@ FORCE_CHOICES: dict[str, str] = {
     "9": FORCE_ACTIVITY_TEYVAT_QUIZ,
     "10": FORCE_ACTIVITY_HSR_QUIZ,
     "11": FORCE_ACTIVITY_ZZZ_QUIZ,
+    "12": FORCE_ACTIVITY_PETIT_PLANET_QUIZ,
 }
 FORCE_ACTIVITY_LINES: tuple[str, ...] = (
     "1. 馒头小动作",
@@ -67,6 +70,7 @@ FORCE_ACTIVITY_LINES: tuple[str, ...] = (
     "9. 提瓦特问答",
     "10. 星穹铁道问答",
     "11. 绝区零问答",
+    "12. 星布谷地问答",
 )
 FORCE_PROMPT = (
     "🎛️ 馒头强制事件（目标：{target}）\n"
@@ -116,6 +120,7 @@ class ForceCoordinator:
         teyvat_quiz: TeyvatQuizCoordinator | None = None,
         hsr_quiz: HsrQuizCoordinator | None = None,
         zzz_quiz: ZzzQuizCoordinator | None = None,
+        petit_planet_quiz: PetitPlanetQuizCoordinator | None = None,
         fill_blank: FillBlankCoordinator | None = None,
         choice_timeout: float = FORCE_CHOICE_TIMEOUT,
     ):
@@ -130,6 +135,7 @@ class ForceCoordinator:
         self.teyvat_quiz = teyvat_quiz
         self.hsr_quiz = hsr_quiz
         self.zzz_quiz = zzz_quiz
+        self.petit_planet_quiz = petit_planet_quiz
         self.fill_blank = fill_blank
         self.choice_timeout = float(choice_timeout)
         self.pending: dict[str, PendingForce] = {}
@@ -249,6 +255,8 @@ class ForceCoordinator:
             return await self._start_hsr_quiz(pending, send)
         if choice == FORCE_ACTIVITY_ZZZ_QUIZ:
             return await self._start_zzz_quiz(pending, send)
+        if choice == FORCE_ACTIVITY_PETIT_PLANET_QUIZ:
+            return await self._start_petit_planet_quiz(pending, send)
         return FORCE_FAIL_REPLY
 
     async def _send_ambient(self, pending: PendingForce, send: Send) -> str | None:
@@ -397,6 +405,19 @@ class ForceCoordinator:
         )
         return None if started else FORCE_FAIL_REPLY
 
+    async def _start_petit_planet_quiz(
+        self, pending: PendingForce, send: Send
+    ) -> str | None:
+        if self.petit_planet_quiz is None:
+            return FORCE_FAIL_REPLY
+        started = await self.petit_planet_quiz.start(
+            group_id=pending.group_id,
+            user_id=pending.target_id,
+            nickname=pending.target_name,
+            send=send,
+        )
+        return None if started else FORCE_FAIL_REPLY
+
     @staticmethod
     async def _send(send: Send, text: str) -> None:
         try:
@@ -436,6 +457,7 @@ def register_force_commands(
     teyvat_quiz: TeyvatQuizCoordinator | None = None,
     hsr_quiz: HsrQuizCoordinator | None = None,
     zzz_quiz: ZzzQuizCoordinator | None = None,
+    petit_planet_quiz: PetitPlanetQuizCoordinator | None = None,
     fill_blank: FillBlankCoordinator | None = None,
     coordinator: ForceCoordinator | None = None,
 ) -> tuple:
@@ -457,6 +479,7 @@ def register_force_commands(
         teyvat_quiz=teyvat_quiz,
         hsr_quiz=hsr_quiz,
         zzz_quiz=zzz_quiz,
+        petit_planet_quiz=petit_planet_quiz,
         fill_blank=fill_blank,
     )
     force_cmd = on_command(

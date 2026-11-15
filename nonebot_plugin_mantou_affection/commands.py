@@ -40,6 +40,9 @@ HSR_CHANCE_USAGE = (
 ZZZ_CHANCE_USAGE = (
     "请输入 0~1 的小数（如 0.0005）或百分数（如 0.05%），0 即关闭绝区零问答"
 )
+PETIT_PLANET_CHANCE_USAGE = (
+    "请输入 0~1 的小数（如 0.0005）或百分数（如 0.05%），0 即关闭星布谷地问答"
+)
 FILL_BLANK_CHANCE_USAGE = (
     "请输入 0~1 的小数（如 0.0005）或百分数（如 0.05%），0 即关闭补句问答"
 )
@@ -252,6 +255,13 @@ def register_commands(
         priority=10,
         block=True,
     )
+    petit_planet_quiz_cmd = on_command(
+        "馒头星布谷地概率",
+        aliases={"馒头星布谷地问答概率", "馒头谷地概率"},
+        permission=SUPERUSER,
+        priority=10,
+        block=True,
+    )
     fill_blank_cmd = on_command(
         "馒头补句概率",
         aliases={"馒头补句触发概率"},
@@ -374,11 +384,12 @@ def register_commands(
             "/馒头提瓦特概率 0.05% —— 查看或调整提瓦特问答概率\n"
             "/馒头星铁概率 0.05% —— 查看或调整星穹铁道问答概率\n"
             "/馒头绝区零概率 0.05% —— 查看或调整绝区零问答概率\n"
+            "/馒头星布谷地概率 0.05% —— 查看或调整星布谷地问答概率\n"
             "/馒头补句概率 0.05% —— 查看或调整补句问答概率\n"
             "/馒头转盘概率 0.1% —— 查看或调整命运齿轮概率\n"
             "/馒头概率总调 —— 总览全部概率；带数值统一设置，"
             "×倍率缩放，重置恢复默认\n"
-            "/馒头强制事件 @群友 —— 回复 1~11 强制开一场活动\n"
+            "/馒头强制事件 @群友 —— 回复 1~12 强制开一场活动\n"
             "\n"
             "提示：概率命令不带参数就查看当前值，0 即关闭对应活动；"
             "旧命令 /馒头好感帮助 仍然可用。"
@@ -748,6 +759,43 @@ def register_commands(
             f"绝区零问答概率已调整为 {_format_probability(value)}"
         )
 
+    @petit_planet_quiz_cmd.handle()
+    async def handle_petit_planet_quiz_probability(args: Message = CommandArg()) -> None:
+        raw = args.extract_plain_text().strip()
+        if not raw:
+            try:
+                current = await service.petit_planet_quiz_probability()
+                override = await service.petit_planet_quiz_probability_override()
+            except Exception:
+                logger.exception("[mantou-affection] 读取星布谷地问答概率失败")
+                await petit_planet_quiz_cmd.finish("读取失败，请检查数据目录权限后重试。")
+                return
+            default = config.mantou_affection_petit_planet_chance
+            source = (
+                f"配置默认 {_format_probability(default)}"
+                if override is None
+                else f"运行时覆盖，配置默认 {_format_probability(default)}"
+            )
+            await petit_planet_quiz_cmd.finish(
+                f"当前星布谷地问答概率：{_format_probability(current)}（{source}）\n"
+                f"用法：{PETIT_PLANET_CHANCE_USAGE}"
+            )
+            return
+        try:
+            value = parse_probability(raw)
+        except ValueError as error:
+            await petit_planet_quiz_cmd.finish(f"{error}。{PETIT_PLANET_CHANCE_USAGE}")
+            return
+        try:
+            await service.set_petit_planet_quiz_probability(value)
+        except Exception:
+            logger.exception("[mantou-affection] 保存星布谷地问答概率失败")
+            await petit_planet_quiz_cmd.finish("保存失败，请检查数据目录权限后重试。")
+            return
+        await petit_planet_quiz_cmd.finish(
+            f"星布谷地问答概率已调整为 {_format_probability(value)}"
+        )
+
     @fill_blank_cmd.handle()
     async def handle_fill_blank_probability(args: Message = CommandArg()) -> None:
         raw = args.extract_plain_text().strip()
@@ -953,5 +1001,6 @@ def register_commands(
         teyvat_quiz_cmd,
         hsr_quiz_cmd,
         zzz_quiz_cmd,
+        petit_planet_quiz_cmd,
         image_cmd,
     )
