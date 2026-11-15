@@ -27,11 +27,13 @@ class WheelOutcome:
 WHEEL_OUTCOMES: tuple[tuple[WheelOutcome, int], ...] = (
     (WheelOutcome("meme"), 19),
     (WheelOutcome("taozi"), 1),
-    (WheelOutcome("image", 1), 12),
-    (WheelOutcome("image", 3), 8),
-    (WheelOutcome("image", 5), 5),
-    (WheelOutcome("image", 10), 4),
-    (WheelOutcome("image", 20), 1),
+    (WheelOutcome("image", 1), 2),
+    (WheelOutcome("image", 2), 1),
+    (WheelOutcome("poke", 1), 11),
+    (WheelOutcome("poke", 3), 7),
+    (WheelOutcome("poke", 5), 4),
+    (WheelOutcome("poke", 10), 4),
+    (WheelOutcome("poke", 20), 1),
     (WheelOutcome("affection", 1), 7),
     (WheelOutcome("affection", 2), 6),
     (WheelOutcome("affection", 3), 5),
@@ -75,6 +77,7 @@ def format_wheel_rules(timeout: int, newbie_below: int = 50) -> str:
     meme_weight = sum(weight for outcome, weight in WHEEL_OUTCOMES if outcome.kind == "meme")
     taozi_weight = sum(weight for outcome, weight in WHEEL_OUTCOMES if outcome.kind == "taozi")
     images = [(o.value, w) for o, w in WHEEL_OUTCOMES if o.kind == "image"]
+    pokes = [(o.value, w) for o, w in WHEEL_OUTCOMES if o.kind == "poke"]
     gains = [(o.value, w) for o, w in WHEEL_OUTCOMES if o.kind == "affection" and o.value > 0]
     losses = [(-o.value, w) for o, w in WHEEL_OUTCOMES if o.kind == "affection" and o.value < 0]
 
@@ -90,6 +93,7 @@ def format_wheel_rules(timeout: int, newbie_below: int = 50) -> str:
         "转盘各项概率：\n"
         f"· 馒头制作随机表情 {meme_weight}%\n"
         f"· 桃子表情包 {taozi_weight}%（换一张需 {WHEEL_TAOZI_COST} 点好感）\n"
+        f"· 馒头主动戳一戳：{_join_weights(pokes, '×')}\n"
         f"· 图像处理次数：{_join_weights(images, '×')}（每张图消耗 1 次）\n"
         f"· 好感增加：{_join_weights(gains, '+')}\n"
         f"· 好感减少：{_join_weights(losses, '-')}"
@@ -243,6 +247,7 @@ class WheelCoordinator:
         resources=None,
         stickers=None,
         image_quota=None,
+        poke_delay: float = 0.2,
     ):
         self.service = service
         self.config = config
@@ -252,6 +257,7 @@ class WheelCoordinator:
         self.resources = resources
         self.stickers = stickers
         self.image_quota = image_quota
+        self.poke_delay = max(float(poke_delay), 0.0)
         self.choice_timeout = float(config.mantou_affection_wheel_timeout)
         self.meme_confirm_timeout = float(
             config.mantou_affection_wheel_meme_confirm_timeout
@@ -519,6 +525,8 @@ class WheelCoordinator:
                             )
                     elif outcome.kind == "image":
                         await self._run_image_quota(pending, participant, outcome.value)
+                    elif outcome.kind == "poke":
+                        await self._run_poke(pending, participant, outcome.value)
                     elif outcome.kind == "taozi":
                         await self._run_sticker_outcome(pending, participant)
                     else:
@@ -555,6 +563,30 @@ class WheelCoordinator:
                 f" 🎨 抽到图像处理次数 ×{count}，当前共 {total} 次"
                 "（发送 /馒头图像处理 使用）"
             )
+        )
+
+    async def _run_poke(
+        self, pending: PendingWheel, participant: WheelParticipant, count: int
+    ) -> None:
+        try:
+            for index in range(count):
+                await pending.bot.call_api(
+                    "send_poke",
+                    group_id=int(pending.group_id),
+                    user_id=int(participant.user_id),
+                )
+                if index + 1 < count and self.poke_delay:
+                    await asyncio.sleep(self.poke_delay)
+        except Exception:
+            logger.exception("[mantou-affection] 转盘主动戳一戳失败")
+            await pending.send(
+                MessageSegment.at(participant.user_id)
+                + MessageSegment.text(" 馒头主动戳你失败（是馒头戳你，不用你回戳）")
+            )
+            return
+        await pending.send(
+            MessageSegment.at(participant.user_id)
+            + MessageSegment.text(f" 馒头主动戳了你 {count} 次（是馒头戳你，不用你回戳）")
         )
 
     async def _run_meme_outcome(
