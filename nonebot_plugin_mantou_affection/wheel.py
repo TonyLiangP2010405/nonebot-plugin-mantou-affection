@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import random
-import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -59,10 +58,6 @@ def draw_wheel_outcome(rng: random.Random) -> WheelOutcome:
     raise AssertionError("转盘权重必须合计 100")
 
 
-def draw_not_operate_delta(rng: random.Random) -> int:
-    return 2 if rng.random() < 1 / 3 else -2
-
-
 WHEEL_MAX_PARTICIPANTS = 4
 WHEEL_TOTAL_SEATS = WHEEL_MAX_PARTICIPANTS + 1
 WHEEL_JOIN_COST = 2
@@ -84,11 +79,8 @@ def format_wheel_rules(timeout: int, newbie_below: int = 50) -> str:
     return (
         " 馒头命运齿轮转盘出现了！"
         f"含触发者最多 {WHEEL_TOTAL_SEATS} 人，参与需要扣除 {WHEEL_JOIN_COST} 点好感度。\n"
-        f"触发者请在 {timeout} 秒内发送“运作”或“不运作”"
-        "（不运作：1/3 概率好感 +2，2/3 概率好感 -2）；"
-        "发送“运作”后还需在倒计时内回复“确认”才会开转。\n"
-        "其他群友发送“参与”即可加入，触发者确认后立即截止，运作时每人独立抽取一次。\n"
-        "本轮取消或触发者选择“不运作”时，参与费会全额退回。\n"
+        f"其他群友发送“参与”即可加入，{timeout} 秒后自动开转，每人独立抽取一次。\n"
+        "倒计时结束前都可以参与，开转后不再接受新的参与者。\n"
         f"好感度低于 {newbie_below} 的群友有新手保护：所有扣分只扣 1/3。\n"
         "转盘各项概率：\n"
         f"· 馒头制作随机表情 {meme_weight}%\n"
@@ -97,14 +89,6 @@ def format_wheel_rules(timeout: int, newbie_below: int = 50) -> str:
         f"· 图像处理次数：{_join_weights(images, '×')}（每张图消耗 1 次）\n"
         f"· 好感增加：{_join_weights(gains, '+')}\n"
         f"· 好感减少：{_join_weights(losses, '-')}"
-    )
-
-
-def format_wheel_confirm(remaining: int) -> str:
-    return (
-        " 二次确认：回复“确认”后立即开转，一旦确认其他群友就无法再参与了；"
-        f"请赶在倒计时结束前（剩余约 {max(remaining, 0)} 秒）回复，"
-        "超时本轮自动取消，不会运作。要确认吗？（回复 确认 / 不运作）"
     )
 
 
@@ -122,10 +106,9 @@ WHEEL_MEME_FAILED_REPLY = " 本次表情生成失败，不重抽"
 
 WHEEL_JOIN_COST_REPLY = (
     " 参与成功，已扣除 {cost} 点好感度{note}，当前 {affection}，"
-    "已加入本轮转盘，等待触发者选择是否运作。"
+    "已加入本轮转盘，倒计时结束就开转。"
 )
 WHEEL_JOIN_POOR_REPLY = " 好感度不足 {cost} 点，暂时无法参与本轮转盘（当前 {affection}）。"
-WHEEL_JOIN_REFUND_REPLY = " 本轮没有开转，参与费 {amount:+d} 已退回，当前 {affection}"
 
 WHEEL_TAOZI_PROMPT_REPLY = (
     " 你抽中了「桃子表情包」！花 {cost} 点好感{note}可以换一张随机桃子表情包图片，"
@@ -184,8 +167,6 @@ class PendingWheel:
         self.bot = bot
         self.send = send
         self.accepting = True
-        self.awaiting_confirm = False
-        self.started_at = time.monotonic()
         self.task: asyncio.Task | None = None
 
 
@@ -305,7 +286,7 @@ class WheelCoordinator:
             raise
         async with self._lock:
             if self.pending.get(group) is pending and pending.accepting:
-                pending.task = asyncio.create_task(self._expire(pending))
+                pending.task = asyncio.create_task(self._auto_start(pending))
         return True
 
     async def answer(self, group_id: str, user_id: str, nickname: str, text: str) -> bool:
@@ -332,44 +313,9 @@ class WheelCoordinator:
             return True
 
         pending = self.pending.get(str(group_id))
-        if pending is None or keyword not in {"参与", "运作", "不运作", "确认"}:
+        if pending is None or keyword != "参与":
             return False
-        if keyword == "参与":
-            return await self._join(pending, user, nickname)
-        if user != pending.trigger.user_id:
-            if pending.accepting:
-                await pending.send("只有被 @ 的触发者能选择是否运作。")
-            return True
-        async with self._lock:
-            if self.pending.get(pending.group_id) is not pending or not pending.accepting:
-                return True
-            if pending.awaiting_confirm:
-                if keyword == "运作":
-                    await pending.send("正在等待你的二次确认：回复“确认”开转，或“不运作”放弃。")
-                    return True
-                return self._settle(pending, operate=keyword == "确认")
-            if keyword == "确认":
-                await pending.send("请先发送“运作”或“不运作”。")
-                return True
-            if keyword == "不运作":
-                return self._settle(pending, operate=False)
-            pending.awaiting_confirm = True
-            remaining = int(self.choice_timeout - (time.monotonic() - pending.started_at))
-            await pending.send(
-                MessageSegment.at(pending.trigger.user_id)
-                + MessageSegment.text(format_wheel_confirm(remaining))
-            )
-            return True
-
-    def _settle(self, pending: PendingWheel, *, operate: bool) -> bool:
-        pending.accepting = False
-        if pending.task is not None:
-            pending.task.cancel()
-        if operate:
-            pending.task = asyncio.create_task(self._run_operation(pending))
-        else:
-            pending.task = asyncio.create_task(self._run_not_operate(pending))
-        return True
+        return await self._join(pending, user, nickname)
 
     async def _join(self, pending: PendingWheel, user_id: str, nickname: str) -> bool:
         async with self._lock:
@@ -414,37 +360,9 @@ class WheelCoordinator:
             )
         return True
 
-    async def _refund_participants(self, pending: PendingWheel) -> None:
-        """本轮没有开转时把参与费退回，每人一条提示；退款失败只记日志。"""
+    async def _auto_start(self, pending: PendingWheel) -> None:
+        """倒计时结束自动开转：先截止参与，再让在场每个人各抽一次。"""
 
-        for participant in pending.participants:
-            try:
-                applied, profile, _protected = await self.service.adjust(
-                    pending.group_id,
-                    participant.user_id,
-                    participant.nickname,
-                    WHEEL_JOIN_COST,
-                )
-            except Exception:
-                logger.exception(
-                    f"[mantou-affection] 转盘参与费退款失败 group={pending.group_id} "
-                    f"user={participant.user_id}"
-                )
-                continue
-            try:
-                await pending.send(
-                    MessageSegment.at(participant.user_id)
-                    + MessageSegment.text(
-                        WHEEL_JOIN_REFUND_REPLY.format(
-                            amount=applied, affection=profile.affection
-                        )
-                    )
-                )
-            except Exception:
-                logger.exception("[mantou-affection] 发送转盘退款提示失败")
-        pending.participants.clear()
-
-    async def _expire(self, pending: PendingWheel) -> None:
         try:
             await asyncio.sleep(self.choice_timeout)
         except asyncio.CancelledError:
@@ -454,48 +372,12 @@ class WheelCoordinator:
                 return
             pending.accepting = False
         try:
-            if pending.awaiting_confirm:
-                await pending.send("馒头命运齿轮转盘超时未确认，本轮取消，不会运作。")
-            else:
-                await pending.send("馒头命运齿轮转盘超时取消。")
-        finally:
-            try:
-                await self._refund_participants(pending)
-            finally:
-                self.discard(pending)
-
-    async def _run_not_operate(self, pending: PendingWheel) -> None:
-        try:
-            trigger = pending.trigger
-            delta = draw_not_operate_delta(self.rng)
-            try:
-                applied, profile, protected = await self.service.adjust(
-                    pending.group_id, trigger.user_id, trigger.nickname, delta
-                )
-                note = NEWBIE_PROTECTION_NOTE if protected else ""
-                await pending.send(
-                    MessageSegment.at(trigger.user_id)
-                    + MessageSegment.text(
-                        f" 选择不运作，好感 {applied:+d}，当前 {profile.affection}{note}"
-                    )
-                )
-                if applied < 0:
-                    await self.service.send_gift(
-                        pending.send,
-                        pending.group_id,
-                        trigger.user_id,
-                        trigger.nickname,
-                    )
-            except Exception:
-                logger.exception(
-                    f"[mantou-affection] 转盘不运作结算失败 group={pending.group_id} "
-                    f"user={trigger.user_id}"
-                )
-        finally:
-            try:
-                await self._refund_participants(pending)
-            finally:
-                self.discard(pending)
+            await pending.send(
+                f" {int(self.choice_timeout)} 秒到，馒头命运齿轮转盘开始转动，本轮截止参与。"
+            )
+        except Exception:
+            logger.exception("[mantou-affection] 发送转盘开转提示失败")
+        await self._run_operation(pending)
 
     async def _run_operation(self, pending: PendingWheel) -> None:
         try:
