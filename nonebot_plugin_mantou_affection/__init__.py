@@ -48,6 +48,7 @@ from .hsr_quiz import BUNDLED_HSR_QUIZ_PATH, HsrQuizCoordinator
 from .image_processing import ImageProcessingCoordinator, ImageQuotaStore
 from .integration import register_plugin_linkage
 from .models import AffectionResponse, AffectionSnapshot, PokeResult
+from .panel_quota import PanelQuotaStore
 from .petit_planet_quiz import (
     BUNDLED_PETIT_PLANET_QUIZ_PATH,
     PetitPlanetQuizCoordinator,
@@ -70,6 +71,7 @@ plugin_config = get_plugin_config(Config)
 data_file = Path(get_plugin_data_dir()) / "affection.json"
 store = AffectionStore(data_file)
 image_quota = ImageQuotaStore(Path(get_plugin_data_dir()) / "image_quota.json")
+panel_quota = PanelQuotaStore(Path(get_plugin_data_dir()) / "panel_quota.json")
 text_library = AffectionTextLibrary(
     Path(__file__).parent / "resources" / "affection_texts.json",
     plugin_config.mantou_affection_text_path,
@@ -147,6 +149,7 @@ wheel_coordinator = WheelCoordinator(
     resources=meme_resources,
     stickers=taozi_stickers,
     image_quota=image_quota,
+    panel_quota=panel_quota,
 )
 event_coordinator.attach_wheel(wheel_coordinator)
 matchers = register_commands(
@@ -250,6 +253,45 @@ async def get_affection(group_id: str | int, user_id: str | int) -> int:
     """读取指定群友的当前好感度；不存在记录时返回 0。"""
 
     return (await service.profile(str(group_id), str(user_id))).affection
+
+
+async def get_panel_draws(group_id: str | int, user_id: str | int) -> int:
+    """读取指定群友剩余的角色面板次数。"""
+
+    return await panel_quota.get(str(group_id), str(user_id))
+
+
+async def add_panel_draws(group_id: str | int, user_id: str | int, amount: int = 1) -> int:
+    """给指定群友增加角色面板次数，返回新的余额。"""
+
+    return await panel_quota.add(str(group_id), str(user_id), amount)
+
+
+async def consume_panel_draw(
+    group_id: str | int, user_id: str | int, amount: int = 1
+) -> int | None:
+    """扣除角色面板次数；次数不足返回 None 且不改动余额。"""
+
+    return await panel_quota.consume(str(group_id), str(user_id), amount)
+
+
+async def spend_affection(
+    group_id: str | int,
+    user_id: str | int,
+    amount: int,
+    *,
+    nickname: str = "",
+    source: str = "external",
+) -> tuple[bool, int]:
+    """固定扣除好感度，返回 (是否成功, 当前好感度)。
+
+    与 ``change_affection`` 不同：不参与联动每日上限、冷却和新手保护，
+    适合面板查看这类明码标价的消费；余额不足时不扣款。
+    """
+
+    return await service.spend_fixed(
+        str(group_id), str(user_id), nickname, max(0, int(amount))
+    )
 
 
 async def maybe_start_bet(

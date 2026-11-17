@@ -671,6 +671,36 @@ class AffectionService:
 
         return await self.store.update_profile(group_id, user_id, nickname, update)
 
+    async def spend_fixed(
+        self,
+        group_id: str,
+        user_id: str,
+        nickname: str,
+        amount: int,
+    ) -> tuple[bool, int]:
+        """固定扣除好感度（不受插件联动每日上限/冷却/新手保护影响）。
+
+        返回 (是否扣成功, 当前好感度)。余额不足时不做任何改动。
+        """
+
+        cost = max(0, int(amount))
+        nickname = normalize_nickname(nickname, user_id)
+
+        def update(profile: Profile) -> tuple[bool, int]:
+            if cost == 0:
+                return True, profile.affection
+            if profile.affection < cost:
+                return False, profile.affection
+            adjust_affection(
+                profile,
+                -cost,
+                self.config.mantou_affection_max,
+                time.time(),
+            )
+            return True, profile.affection
+
+        return await self.store.update_profile(group_id, user_id, nickname, update)
+
     async def send_gift(
         self, send, group_id: str, user_id: str, nickname: str
     ) -> bool:
