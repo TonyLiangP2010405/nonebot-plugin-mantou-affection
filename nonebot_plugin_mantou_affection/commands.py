@@ -65,7 +65,7 @@ MEMBER_HELP_LINES: tuple[str, ...] = (
     "/馒头好感 —— 查看自己的好感档案",
     "/馒头好感榜 —— 查看本群排行榜",
     "/馒头表情免确认 —— 加入或退出表情免确认白名单",
-    "/馒头图像处理 —— 用转盘抽到的次数处理图片（回复图片后使用）",
+    "/馒头图像处理 —— 处理图片并保持动图，支持 GIF 变速（回复图片后使用）",
     "/馒头帮助 —— 打开这份菜单",
 )
 ADMIN_HELP_LINES: tuple[str, ...] = (
@@ -1125,6 +1125,7 @@ def register_commands(
             raw=args.extract_plain_text(),
             event=event,
             bot=bot,
+            unlimited=event.get_user_id() in get_driver().config.superusers,
         )
         if result.image is not None:
             await image_cmd.finish(

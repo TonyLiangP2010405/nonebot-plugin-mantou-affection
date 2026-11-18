@@ -21,6 +21,11 @@ MAX_IMAGES = 9
 MAX_INPUT_SIDE = 2000
 MAX_OUTPUT_SIDE = 4000
 MAX_OUTPUT_PIXELS = 40_000_000
+MAX_ANIMATED_FRAMES = 200
+MAX_ANIMATED_PIXELS = 25_000_000
+GIF_DEFAULT_FRAME_MS = 100
+GIF_MIN_FRAME_MS = 20
+GIF_MAX_FRAME_MS = 60_000
 
 CONCAT_OPS = frozenset({"hconcat", "vconcat"})
 
@@ -40,6 +45,8 @@ OP_ALIASES: dict[str, str] = {
     "反色": "invert",
     "横向拼接": "hconcat",
     "纵向拼接": "vconcat",
+    "gif变速": "gif_speed",
+    "变速": "gif_speed",
 }
 
 OP_LABELS: dict[str, str] = {
@@ -52,6 +59,7 @@ OP_LABELS: dict[str, str] = {
     "invert": "反相",
     "hconcat": "横向拼接",
     "vconcat": "纵向拼接",
+    "gif_speed": "GIF 变速",
 }
 
 IMAGE_USAGE = (
@@ -66,7 +74,9 @@ IMAGE_USAGE = (
     "· 灰度图 / 黑白\n"
     "· 反相 / 反色\n"
     "· 横向拼接 / 纵向拼接（至少两张图）\n"
-    "图像处理次数来自命运齿轮转盘，抽到就会记到账上。"
+    "· GIF 变速 <0.5x | 2倍 | 50% | 10fps | 0.05s>\n"
+    "动图会保留全部帧和节奏，处理完还是动图；拼接时静态图会一直显示。\n"
+    "图像处理次数来自命运齿轮转盘，抽到就会记到账上；SUPERUSER 使用不消耗次数。"
 )
 
 NO_IMAGE_REPLY = "没有找到可处理的图片：请回复一张图片，或把图片和 /馒头图像处理 一起发出来。"
@@ -85,6 +95,12 @@ _CROP_BOX_RE = re.compile(
 _CROP_SIZE_RE = re.compile(r"^(\d{1,4})\s*[*xX,，]\s*(\d{1,4})$")
 _CROP_RATIO_RE = re.compile(r"^(\d{1,2})\s*[:：比]\s*(\d{1,2})$")
 _NUMBER_RE = re.compile(r"^-?\d{1,3}(?:\.\d{1,2})?$")
+_SPEED_MULTIPLIER_RE = re.compile(
+    r"^(\d{1,4}(?:\.\d{1,3})?)\s*(?:x|倍速?)$", re.IGNORECASE
+)
+_SPEED_PERCENT_RE = re.compile(r"^(\d{1,4}(?:\.\d{1,3})?)\s*%$")
+_SPEED_FPS_RE = re.compile(r"^(\d{1,4}(?:\.\d{1,3})?)\s*fps$", re.IGNORECASE)
+_SPEED_TIME_RE = re.compile(r"^(\d{1,4}(?:\.\d{1,3})?)\s*(ms|s)$", re.IGNORECASE)
 
 
 class ImageOpError(ValueError):
@@ -101,6 +117,8 @@ class ImageRequest:
     crop_box: tuple[int, int, int, int] | None = None
     crop_size: tuple[int, int] | None = None
     crop_ratio: tuple[int, int] | None = None
+    speed: float | None = None
+    frame_duration_ms: float | None = None
 
     @property
     def label(self) -> str:
@@ -118,7 +136,7 @@ def parse_image_request(raw: str) -> ImageRequest | None:
     if not text:
         return None
     head, _, tail = text.partition(" ")
-    op = OP_ALIASES.get(head)
+    op = OP_ALIASES.get(head) or OP_ALIASES.get(head.lower())
     if op is None:
         raise ImageOpError(f"不认识「{head}」这个操作，可以看看下面的用法。")
     arg = tail.strip()
@@ -127,6 +145,13 @@ def parse_image_request(raw: str) -> ImageRequest | None:
         if arg:
             raise ImageOpError(f"{OP_LABELS[op]}不需要参数，直接回复图片就行。")
         return ImageRequest(op)
+
+    if op == "gif_speed":
+        if not arg:
+            raise ImageOpError(
+                "GIF 变速还需要一个参数，例如 gif变速 0.5x、gif变速 10fps。"
+            )
+        return _parse_gif_speed(arg)
 
     if not arg:
         if op == "rotate":
@@ -175,11 +200,53 @@ def parse_image_request(raw: str) -> ImageRequest | None:
     raise ImageOpError("裁剪参数格式不对，例如：100x100、2:1、0,0,100,100。")
 
 
+def _parse_gif_speed(arg: str) -> ImageRequest:
+    """把 0.5x / 2倍 / 50% / 10fps / 0.05s 解析成倍率或固定帧间隔。"""
+
+    match = _SPEED_MULTIPLIER_RE.fullmatch(arg)
+    if match:
+        speed = float(match.group(1))
+        if speed <= 0:
+            raise ImageOpError("变速倍率必须大于 0：0.5x 放慢，2x 加快。")
+        if speed > 100:
+            raise ImageOpError("变速倍率最大 100x。")
+        return ImageRequest("gif_speed", speed=speed)
+
+    match = _SPEED_PERCENT_RE.fullmatch(arg)
+    if match:
+        percent = float(match.group(1))
+        if percent <= 0:
+            raise ImageOpError("变速百分比必须大于 0：50% 会把速度放慢到一半。")
+        if percent > 10000:
+            raise ImageOpError("变速百分比最大 10000%。")
+        return ImageRequest("gif_speed", speed=percent / 100)
+
+    match = _SPEED_FPS_RE.fullmatch(arg)
+    if match:
+        fps = float(match.group(1))
+        if fps <= 0:
+            raise ImageOpError("帧率必须大于 0，例如 gif变速 10fps。")
+        return ImageRequest("gif_speed", frame_duration_ms=1000 / fps)
+
+    match = _SPEED_TIME_RE.fullmatch(arg)
+    if match:
+        value = float(match.group(1))
+        if value <= 0:
+            raise ImageOpError("帧间隔必须大于 0，例如 gif变速 0.05s、gif变速 50ms。")
+        duration = value * 1000 if match.group(2).lower() == "s" else value
+        return ImageRequest("gif_speed", frame_duration_ms=duration)
+
+    raise ImageOpError(
+        "变速参数格式不对，例如：0.5x、2倍、50%、10fps、0.05s、50ms。"
+    )
+
+
 def _example_for(op: str) -> str:
     return {
         "rotate": "旋转 90",
         "scale": "缩放 50%",
         "crop": "裁剪 1:1",
+        "gif_speed": "gif变速 0.5x",
     }.get(op, "看看帮助")
 
 
@@ -194,27 +261,121 @@ def _sides(match: re.Match[str]) -> tuple[int | None, int | None]:
     return width, height
 
 
-def _decode(data: bytes) -> Image.Image:
+@dataclass
+class DecodedFrames:
+    frames: list[Image.Image]
+    durations: list[int]
+    loop: int
+    animated: bool
+
+
+def _normalize_duration(value: Any) -> int:
+    try:
+        duration = round(float(value))
+    except (TypeError, ValueError):
+        duration = GIF_DEFAULT_FRAME_MS
+    return max(10, min(GIF_MAX_FRAME_MS, duration))
+
+
+def _normalize_loop(value: Any) -> int:
+    try:
+        loop = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, min(loop, 65535))
+
+
+def _decode_frames(data: bytes) -> DecodedFrames:
+    """把静态图或动图统一解成 RGBA 帧序列，并保留帧间隔和循环次数。"""
+
     try:
         image = Image.open(BytesIO(data))
         image.seek(0)
-        image.load()
+        frame_count = int(getattr(image, "n_frames", 1) or 1)
+        width, height = image.size
+        loop = _normalize_loop(image.info.get("loop", 0))
     except (UnidentifiedImageError, OSError, ValueError) as error:
         raise ImageOpError("这张图片馒头认不出来，换一张试试。") from error
-    if image.mode not in {"RGB", "RGBA"}:
-        image = image.convert("RGBA")
-    if max(image.size) > MAX_INPUT_SIDE:
-        image.thumbnail((MAX_INPUT_SIDE, MAX_INPUT_SIDE))
-    return image
+    if width < 1 or height < 1:
+        raise ImageOpError("这张图片尺寸不对，换一张试试。")
+    if frame_count > MAX_ANIMATED_FRAMES:
+        raise ImageOpError(
+            f"动图最多处理 {MAX_ANIMATED_FRAMES} 帧，这张有 {frame_count} 帧，"
+            "先裁短一点再试。"
+        )
+    if width * height * frame_count > MAX_ANIMATED_PIXELS:
+        raise ImageOpError("这张动图太大了，请先缩小或裁掉一些帧再试。")
+
+    scale = min(1.0, MAX_INPUT_SIDE / max(width, height))
+    target = (max(1, round(width * scale)), max(1, round(height * scale)))
+    frames: list[Image.Image] = []
+    durations: list[int] = []
+    try:
+        for index in range(frame_count):
+            image.seek(index)
+            frame = image.convert("RGBA")
+            if frame.size != target:
+                frame = frame.resize(target, Image.Resampling.LANCZOS)
+            frames.append(frame)
+            durations.append(_normalize_duration(image.info.get("duration")))
+    except (OSError, ValueError, EOFError) as error:
+        raise ImageOpError("这张动图有一帧读不出来，换一张试试。") from error
+    return DecodedFrames(frames, durations, loop, frame_count > 1)
 
 
-def _encode(image: Image.Image) -> bytes:
+def _check_output_size(frames: list[Image.Image], animated: bool) -> None:
+    width, height = frames[0].size
+    if max(width, height) > MAX_OUTPUT_SIDE:
+        raise ImageOpError(f"处理结果太大了，单边请控制在 {MAX_OUTPUT_SIDE} 像素以内。")
+    if animated:
+        if width * height * len(frames) > MAX_ANIMATED_PIXELS:
+            raise ImageOpError("处理后的动图太大了，请少放几张或先缩小。")
+    elif width * height > MAX_OUTPUT_PIXELS:
+        raise ImageOpError("处理后的图片太大了，请少放几张或先缩小。")
+
+
+def _encode(
+    frames: list[Image.Image],
+    durations: list[int],
+    loop: int,
+    animated: bool,
+) -> bytes:
+    animated = animated and len(frames) > 1
+    _check_output_size(frames, animated)
+    if len(durations) < len(frames):
+        durations = durations + [GIF_DEFAULT_FRAME_MS] * (len(frames) - len(durations))
     buffer = BytesIO()
     try:
-        image.save(buffer, format="PNG")
+        if animated:
+            frames[0].save(
+                buffer,
+                format="GIF",
+                save_all=True,
+                append_images=frames[1:],
+                duration=durations,
+                loop=loop,
+                disposal=2,
+                optimize=False,
+            )
+        else:
+            frames[0].save(buffer, format="PNG")
     except OSError as error:
         raise ImageOpError("处理结果保存失败，换一张图片试试。") from error
     return buffer.getvalue()
+
+
+def _check_frame_durations(durations: list[int]) -> None:
+    fastest = min(durations)
+    slowest = max(durations)
+    if fastest < GIF_MIN_FRAME_MS:
+        raise ImageOpError(
+            f"变速后帧间隔只有 {fastest / 1000:.3f} 秒，"
+            "最快只支持 0.02 秒（50 FPS），再快 GIF 播放会不正常。"
+        )
+    if slowest > GIF_MAX_FRAME_MS:
+        raise ImageOpError(
+            f"变速后帧间隔达到 {slowest / 1000:.1f} 秒，单帧最多 60 秒。"
+        )
 
 
 def _scale(image: Image.Image, request: ImageRequest) -> Image.Image:
@@ -267,26 +428,103 @@ def _invert(image: Image.Image) -> Image.Image:
     return ImageOps.invert(image.convert("RGB"))
 
 
-def _merge(images: list[bytes], *, horizontal: bool) -> Image.Image:
-    decoded = [_decode(data) for data in images]
-    if horizontal:
-        width = sum(item.width for item in decoded)
-        height = max(item.height for item in decoded)
+def _grayscale(image: Image.Image) -> Image.Image:
+    gray = ImageOps.grayscale(image)
+    if image.mode == "RGBA":
+        return Image.merge("LA", (gray, image.getchannel("A")))
+    return gray
+
+
+def _apply_single(image: Image.Image, request: ImageRequest) -> Image.Image:
+    if request.op == "hflip":
+        return ImageOps.mirror(image)
+    if request.op == "vflip":
+        return ImageOps.flip(image)
+    if request.op == "rotate":
+        return image.rotate(
+            request.angle,
+            expand=True,
+            resample=Image.Resampling.BICUBIC,
+            fillcolor=(0, 0, 0, 0),
+        )
+    if request.op == "scale":
+        return _scale(image, request)
+    if request.op == "crop":
+        return _crop(image, request)
+    if request.op == "grayscale":
+        return _grayscale(image)
+    if request.op == "invert":
+        return _invert(image)
+    # pragma: no cover - 解析阶段已拦截未知操作
+    raise ImageOpError("这个操作暂时还不支持。")
+
+
+def _change_speed(decoded: DecodedFrames, request: ImageRequest) -> bytes:
+    if not decoded.animated:
+        raise ImageOpError(
+            "GIF 变速只能处理动图：这张图只有一帧，换一张 GIF 或动态 WebP 再试。"
+        )
+    if request.frame_duration_ms is not None:
+        duration = round(request.frame_duration_ms)
+        durations = [duration] * len(decoded.frames)
     else:
-        width = max(item.width for item in decoded)
-        height = sum(item.height for item in decoded)
-    if width * height > MAX_OUTPUT_PIXELS:
-        raise ImageOpError("拼接后的图片太大了，请少放几张或先缩小。")
-    canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    offset = 0
-    for item in decoded:
-        if horizontal:
-            canvas.paste(item, (offset, (height - item.height) // 2))
-            offset += item.width
-        else:
-            canvas.paste(item, ((width - item.width) // 2, offset))
-            offset += item.height
-    return canvas
+        assert request.speed is not None
+        durations = [
+            max(1, round(item / request.speed)) for item in decoded.durations
+        ]
+    _check_frame_durations(durations)
+    return _encode(decoded.frames, durations, decoded.loop, True)
+
+
+def _merged_durations(
+    sequences: list[DecodedFrames], frame_count: int
+) -> list[int]:
+    animated = [item for item in sequences if item.animated]
+    if not animated:
+        return [GIF_DEFAULT_FRAME_MS] * frame_count
+    durations = [
+        animated[0].durations[min(index, len(animated[0].durations) - 1)]
+        for index in range(frame_count)
+    ]
+    for item in animated[1:]:
+        for index in range(frame_count):
+            durations[index] = max(
+                durations[index],
+                item.durations[min(index, len(item.durations) - 1)],
+            )
+    return durations
+
+
+def _merge(images: list[bytes], *, horizontal: bool) -> bytes:
+    sequences = [_decode_frames(data) for data in images]
+    frame_count = max(len(item.frames) for item in sequences)
+    first_frames = [item.frames[0] for item in sequences]
+    if horizontal:
+        width = sum(item.width for item in first_frames)
+        height = max(item.height for item in first_frames)
+    else:
+        width = max(item.width for item in first_frames)
+        height = sum(item.height for item in first_frames)
+    if width * height * frame_count > MAX_ANIMATED_PIXELS:
+        raise ImageOpError("拼接后的动图太大了，请少放几张、裁短帧数或先缩小。")
+
+    canvases: list[Image.Image] = []
+    for index in range(frame_count):
+        canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        offset = 0
+        for item in sequences:
+            frame = item.frames[min(index, len(item.frames) - 1)]
+            if horizontal:
+                canvas.paste(frame, (offset, (height - frame.height) // 2))
+                offset += frame.width
+            else:
+                canvas.paste(frame, ((width - frame.width) // 2, offset))
+                offset += frame.height
+        canvases.append(canvas)
+
+    loop = next((item.loop for item in sequences if item.animated), 0)
+    durations = _merged_durations(sequences, frame_count)
+    return _encode(canvases, durations, loop, frame_count > 1)
 
 
 def apply_image_request(request: ImageRequest, images: list[bytes]) -> bytes:
@@ -295,32 +533,14 @@ def apply_image_request(request: ImageRequest, images: list[bytes]) -> bytes:
     if request.uses_many_images:
         if len(images) < 2:
             raise ImageOpError("拼接至少需要两张图片，请多回复几张。")
-        result = _merge(images, horizontal=request.op == "hconcat")
-        return _encode(result)
+        return _merge(images, horizontal=request.op == "hconcat")
     if not images:
         raise ImageOpError(NO_IMAGE_REPLY)
-    image = _decode(images[0])
-    if request.op == "hflip":
-        result = ImageOps.mirror(image)
-    elif request.op == "vflip":
-        result = ImageOps.flip(image)
-    elif request.op == "rotate":
-        result = image.rotate(
-            request.angle, expand=True, resample=Image.Resampling.BICUBIC, fillcolor=(0, 0, 0, 0)
-        )
-    elif request.op == "scale":
-        result = _scale(image, request)
-    elif request.op == "crop":
-        result = _crop(image, request)
-    elif request.op == "grayscale":
-        result = ImageOps.grayscale(image)
-    elif request.op == "invert":
-        result = _invert(image)
-    else:  # pragma: no cover - 解析阶段已拦截未知操作
-        raise ImageOpError("这个操作暂时还不支持。")
-    if max(result.size) > MAX_OUTPUT_SIDE:
-        raise ImageOpError(f"处理结果太大了，单边请控制在 {MAX_OUTPUT_SIDE} 像素以内。")
-    return _encode(result)
+    decoded = _decode_frames(images[0])
+    if request.op == "gif_speed":
+        return _change_speed(decoded, request)
+    frames = [_apply_single(frame, request) for frame in decoded.frames]
+    return _encode(frames, decoded.durations, decoded.loop, decoded.animated)
 
 
 class ImageQuotaStore:
@@ -463,6 +683,7 @@ class ImageProcessingCoordinator:
         raw: str,
         event: GroupMessageEvent,
         bot: Bot,
+        unlimited: bool = False,
     ) -> ImageResult:
         try:
             request = parse_image_request(raw)
@@ -490,30 +711,35 @@ class ImageProcessingCoordinator:
             used = images[:1]
         cost = len(used)
 
-        try:
-            balance = await self.quota.consume(group_id, user_id, cost)
-        except Exception:
-            logger.exception("[mantou-affection] 扣除图像处理次数失败")
-            return ImageResult(text="图像处理次数暂时记不上账，请稍后再试。")
-        if balance is None:
-            current = await self.quota.get(group_id, user_id)
-            return ImageResult(
-                text=INSUFFICIENT_TEMPLATE.format(cost=cost, balance=current)
-            )
+        balance: int | None = None
+        if not unlimited:
+            try:
+                balance = await self.quota.consume(group_id, user_id, cost)
+            except Exception:
+                logger.exception("[mantou-affection] 扣除图像处理次数失败")
+                return ImageResult(text="图像处理次数暂时记不上账，请稍后再试。")
+            if balance is None:
+                current = await self.quota.get(group_id, user_id)
+                return ImageResult(
+                    text=INSUFFICIENT_TEMPLATE.format(cost=cost, balance=current)
+                )
 
         try:
             data = await run_sync(apply_image_request)(request, used)
         except ImageOpError as error:
-            await self._refund(group_id, user_id, cost)
+            if not unlimited:
+                await self._refund(group_id, user_id, cost)
             return ImageResult(text=str(error))
         except Exception:
             logger.exception("[mantou-affection] 图像处理失败")
-            await self._refund(group_id, user_id, cost)
+            if not unlimited:
+                await self._refund(group_id, user_id, cost)
             return ImageResult(text=FAILED_REPLY)
-        return ImageResult(
-            text=f"🎨 {request.label}完成，消耗 {cost} 次，剩余 {balance} 次",
-            image=data,
-        )
+        if unlimited:
+            text = f"🎨 {request.label}完成（SUPERUSER 不消耗次数）"
+        else:
+            text = f"🎨 {request.label}完成，消耗 {cost} 次，剩余 {balance} 次"
+        return ImageResult(text=text, image=data)
 
     async def _refund(self, group_id: str, user_id: str, amount: int) -> None:
         try:

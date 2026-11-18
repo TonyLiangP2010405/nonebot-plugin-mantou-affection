@@ -5,6 +5,7 @@ from pathlib import Path
 from time import time
 
 import pytest
+from nonebot import get_driver
 from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message, MessageSegment
 from nonebot.adapters.onebot.v11.event import Sender
 from PIL import Image
@@ -34,8 +35,43 @@ def make_image(size: tuple[int, int] = (4, 2), color=(255, 0, 0, 255), mode="RGB
     return buffer.getvalue()
 
 
+def make_gif(
+    frame_count: int = 3,
+    size: tuple[int, int] = (8, 6),
+    durations: tuple[int, ...] = (100, 200, 300),
+) -> bytes:
+    frames: list[Image.Image] = []
+    for index in range(frame_count):
+        frame = Image.new("RGBA", size, (0, 0, 0, 0))
+        frame.paste((255, 0, 0, 255), (index, 1, index + 3, 3))
+        frames.append(frame)
+    buffer = BytesIO()
+    frames[0].save(
+        buffer,
+        format="GIF",
+        save_all=True,
+        append_images=frames[1:],
+        duration=list(durations[:frame_count]),
+        loop=0,
+        disposal=2,
+        optimize=False,
+    )
+    return buffer.getvalue()
+
+
 def open_image(data: bytes) -> Image.Image:
     return Image.open(BytesIO(data))
+
+
+def open_frames(data: bytes) -> tuple[list[Image.Image], list[int]]:
+    image = Image.open(BytesIO(data))
+    frames: list[Image.Image] = []
+    durations: list[int] = []
+    for index in range(image.n_frames):
+        image.seek(index)
+        durations.append(int(image.info.get("duration", 0)))
+        frames.append(image.convert("RGBA"))
+    return frames, durations
 
 
 class FakeBot:
@@ -218,7 +254,7 @@ def test_grayscale_and_invert() -> None:
     gray = open_image(
         apply_image_request(parse_image_request("灰度图"), [make_image()])
     )
-    assert gray.mode == "L"
+    assert gray.mode in {"L", "LA"}
     red = open_image(
         apply_image_request(
             parse_image_request("反相"), [make_image(color=(255, 0, 0, 255))]
@@ -417,6 +453,155 @@ async def test_image_command_requires_quota(tmp_path: Path, monkeypatch) -> None
     )
     assert any(segment.type == "image" for segment in sent[-1])
     assert "消耗 1 次" in sent[-1].extract_plain_text()
+    assert await quota.get(GROUP, USER) == 0
+
+
+async def test_parse_gif_speed_variants() -> None:
+    cases = [
+        ("gif变速 0.5x", 0.5, None),
+        ("GIF变速 2倍", 2.0, None),
+        ("GIF变速 2倍速", 2.0, None),
+        ("gif变速 50%", 0.5, None),
+        ("gif变速 10fps", None, 100.0),
+        ("gif变速 0.05s", None, 50.0),
+        ("gif变速 50ms", None, 50.0),
+        ("变速 1.5x", 1.5, None),
+    ]
+    for raw, speed, duration in cases:
+        request = parse_image_request(raw)
+        assert request is not None
+        assert request.op == "gif_speed"
+        assert request.speed == speed
+        assert request.frame_duration_ms == pytest.approx(duration)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "gif变速",
+        "GIF变速 abc",
+        "gif变速 0x",
+        "gif变速 0%",
+        "gif变速 0fps",
+        "gif变速 0s",
+        "变速 2.5",
+    ],
+)
+def test_parse_rejects_bad_gif_speed(raw: str) -> None:
+    with pytest.raises(ImageOpError):
+        parse_image_request(raw)
+
+
+def test_gif_speed_multiplies_frame_durations() -> None:
+    source = make_gif()
+    slower_data = apply_image_request(parse_image_request("gif变速 0.5x"), [source])
+    slower = open_frames(slower_data)
+    assert slower[1] == [200, 400, 600]
+    assert Image.open(BytesIO(slower_data)).is_animated
+
+    faster = open_frames(
+        apply_image_request(parse_image_request("gif变速 2倍"), [source])
+    )
+    assert faster[1] == [50, 100, 150]
+
+
+def test_gif_speed_constant_frame_duration() -> None:
+    source = make_gif()
+    fps = open_frames(
+        apply_image_request(parse_image_request("gif变速 10fps"), [source])
+    )
+    assert fps[1] == [100, 100, 100]
+    seconds = open_frames(
+        apply_image_request(parse_image_request("gif变速 0.05s"), [source])
+    )
+    assert seconds[1] == [50, 50, 50]
+
+
+def test_gif_speed_rejects_too_fast() -> None:
+    source = make_gif(durations=(20, 30, 40))
+    with pytest.raises(ImageOpError, match=r"0\.02"):
+        apply_image_request(parse_image_request("gif变速 2x"), [source])
+
+
+def test_gif_speed_requires_animated_image() -> None:
+    with pytest.raises(ImageOpError, match="只能处理动图"):
+        apply_image_request(parse_image_request("gif变速 0.5x"), [make_image()])
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "水平翻转",
+        "竖直翻转",
+        "旋转 90",
+        "缩放 50%",
+        "裁剪 1:1",
+        "灰度图",
+        "反相",
+    ],
+)
+def test_animated_operations_keep_animation(raw: str) -> None:
+    source = make_gif()
+    result = apply_image_request(parse_image_request(raw), [source])
+    image = Image.open(BytesIO(result))
+    assert image.is_animated
+    assert image.n_frames == 3
+    frames, durations = open_frames(result)
+    assert len(frames) == 3
+    assert durations == [100, 200, 300]
+
+
+def test_concat_with_animated_image_stays_animated() -> None:
+    source = make_gif()
+    static = make_image((4, 2), (0, 255, 0, 255))
+    result = apply_image_request(parse_image_request("横向拼接"), [source, static])
+    image = Image.open(BytesIO(result))
+    assert image.is_animated
+    assert image.n_frames == 3
+    frames, durations = open_frames(result)
+    assert durations == [100, 200, 300]
+    for frame in frames:
+        assert frame.getpixel((9, 2)) == (0, 255, 0, 255)
+
+
+async def test_superuser_skips_image_quota(quota: ImageQuotaStore, images) -> None:
+    coordinator = make_coordinator(quota, images)
+
+    result = await coordinator.handle(
+        group_id=GROUP,
+        user_id=USER,
+        raw="水平翻转",
+        event=make_event(images=(images["inline0"],)),
+        bot=FakeBot(),
+        unlimited=True,
+    )
+
+    assert result.image is not None
+    assert "SUPERUSER" in result.text
+    assert await quota.get(GROUP, USER) == 0
+
+
+async def test_image_command_superuser_skips_quota(tmp_path: Path, monkeypatch) -> None:
+    service = AffectionService(AffectionStore(tmp_path / "affection.json"), Config())
+    quota = ImageQuotaStore(tmp_path / "image_quota.json")
+    images = {"inline0": make_image()}
+    coordinator = make_coordinator(quota, images)
+    commands = register_commands(service, Config(), None, coordinator)
+    image_cmd = commands[-1]
+    sent: list[Message] = []
+
+    async def fake_finish(message=Message(), **kwargs) -> None:
+        sent.append(message if isinstance(message, Message) else Message(str(message)))
+
+    monkeypatch.setattr(image_cmd, "finish", fake_finish)
+    monkeypatch.setattr(get_driver().config, "superusers", {USER})
+
+    await image_cmd.handlers[0].call(
+        make_event(images=(images["inline0"],)), FakeBot(), Message("灰度图")
+    )
+
+    assert any(segment.type == "image" for segment in sent[-1])
+    assert "SUPERUSER" in sent[-1].extract_plain_text()
     assert await quota.get(GROUP, USER) == 0
 
 
