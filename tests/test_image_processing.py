@@ -14,6 +14,8 @@ from nonebot_plugin_mantou_affection.commands import register_commands
 from nonebot_plugin_mantou_affection.config import Config
 from nonebot_plugin_mantou_affection.image_processing import (
     NO_IMAGE_REPLY,
+    NO_REPLY_IMAGE_REPLY,
+    REPLY_READ_FAILED,
     ImageOpError,
     ImageProcessingCoordinator,
     ImageQuotaStore,
@@ -390,6 +392,116 @@ async def test_reply_images_are_collected(quota: ImageQuotaStore, images) -> Non
 
     assert result.image is not None
     assert await quota.get(GROUP, USER) == 0
+
+
+async def test_reply_sticker_image_is_collected(
+    quota: ImageQuotaStore, images
+) -> None:
+    sticker = make_gif()
+    coordinator = make_coordinator(quota, {**images, "sticker": sticker})
+    await quota.add(GROUP, USER, 1)
+    bot = FakeBot(
+        replies={
+            43: {
+                "message": [
+                    {
+                        "type": "image",
+                        "data": {
+                            "file": "sticker.gif",
+                            "url": "sticker",
+                            "sub_type": 1,
+                            "summary": "[动画表情]",
+                        },
+                    }
+                ]
+            }
+        }
+    )
+
+    result = await coordinator.handle(
+        group_id=GROUP,
+        user_id=USER,
+        raw="水平翻转",
+        event=make_event(reply_id=43),
+        bot=bot,
+    )
+
+    assert result.image is not None
+    assert Image.open(BytesIO(result.image)).is_animated
+    assert await quota.get(GROUP, USER) == 0
+
+
+async def test_reply_mface_with_url_is_collected(
+    quota: ImageQuotaStore, images
+) -> None:
+    coordinator = make_coordinator(quota, images)
+    await quota.add(GROUP, USER, 1)
+    bot = FakeBot(
+        replies={
+            44: {
+                "message": [
+                    {
+                        "type": "mface",
+                        "data": {"url": "inline1", "summary": "[表情]"},
+                    }
+                ]
+            }
+        }
+    )
+
+    result = await coordinator.handle(
+        group_id=GROUP,
+        user_id=USER,
+        raw="灰度图",
+        event=make_event(reply_id=44),
+        bot=bot,
+    )
+
+    assert result.image is not None
+    assert await quota.get(GROUP, USER) == 0
+
+
+async def test_reply_without_image_is_reported(
+    quota: ImageQuotaStore, images
+) -> None:
+    coordinator = make_coordinator(quota, images)
+    await quota.add(GROUP, USER, 1)
+    bot = FakeBot(
+        replies={45: {"message": [{"type": "text", "data": {"text": "纯文字"}}]}}
+    )
+
+    result = await coordinator.handle(
+        group_id=GROUP,
+        user_id=USER,
+        raw="灰度图",
+        event=make_event(reply_id=45),
+        bot=bot,
+    )
+
+    assert result.text == NO_REPLY_IMAGE_REPLY
+    assert await quota.get(GROUP, USER) == 1
+
+
+async def test_reply_read_failure_is_reported(
+    quota: ImageQuotaStore, images
+) -> None:
+    coordinator = make_coordinator(quota, images)
+    await quota.add(GROUP, USER, 1)
+
+    class BrokenBot(FakeBot):
+        async def get_msg(self, *, message_id: int) -> dict:
+            raise RuntimeError("boom")
+
+    result = await coordinator.handle(
+        group_id=GROUP,
+        user_id=USER,
+        raw="灰度图",
+        event=make_event(reply_id=46),
+        bot=BrokenBot(),
+    )
+
+    assert result.text == REPLY_READ_FAILED
+    assert await quota.get(GROUP, USER) == 1
 
 
 async def test_failed_processing_refunds_quota(quota: ImageQuotaStore) -> None:

@@ -64,7 +64,7 @@ OP_LABELS: dict[str, str] = {
 
 IMAGE_USAGE = (
     "🎨 馒头图像处理（每张图消耗 1 次图像处理次数）\n"
-    "用法：回复一张图片，发送 /馒头图像处理 <操作> [参数]\n"
+    "用法：回复一张图片或自定义表情，发送 /馒头图像处理 <操作> [参数]\n"
     "可用操作：\n"
     "· 水平翻转 / 左翻 / 右翻\n"
     "· 竖直翻转 / 上翻 / 下翻\n"
@@ -79,7 +79,15 @@ IMAGE_USAGE = (
     "图像处理次数来自命运齿轮转盘，抽到就会记到账上；SUPERUSER 使用不消耗次数。"
 )
 
-NO_IMAGE_REPLY = "没有找到可处理的图片：请回复一张图片，或把图片和 /馒头图像处理 一起发出来。"
+NO_IMAGE_REPLY = (
+    "没有找到可处理的图片：请回复一张图片或自定义表情，"
+    "或把图片和 /馒头图像处理 一起发出来。"
+)
+NO_REPLY_IMAGE_REPLY = (
+    "回复的消息里没有找到可处理的图片或自定义表情。"
+    "QQ 系统小黄脸表情不是图片，换一张图片/收藏表情再试。"
+)
+REPLY_READ_FAILED = "读取被回复的消息失败了，请重新回复图片再试。"
 INSUFFICIENT_TEMPLATE = (
     "图像处理次数不够啦：这次要 {cost} 次，当前只有 {balance} 次。"
     "去群里等命运齿轮转盘抽到图像处理次数吧。"
@@ -748,8 +756,9 @@ class ImageProcessingCoordinator:
             logger.exception("[mantou-affection] 退回图像处理次数失败")
 
     async def _collect_images(self, event: GroupMessageEvent, bot: Bot) -> list[bytes]:
-        segments: list[MessageSegment] = []
+        reply_segments: list[MessageSegment] = []
         reply_id = _reply_id(event.message)
+        info: Any = None
         if reply_id is not None:
             try:
                 info = await bot.get_msg(message_id=int(reply_id))
@@ -757,8 +766,14 @@ class ImageProcessingCoordinator:
                 logger.exception("[mantou-affection] 读取被回复的消息失败")
                 info = None
             if isinstance(info, dict):
-                segments.extend(_image_segments(info.get("message")))
-        segments.extend(seg for seg in event.message if seg.type == "image")
+                reply_segments = _image_segments(info.get("message"))
+        segments = reply_segments + _image_segments(event.message)
+        if not segments and reply_id is not None:
+            raise ImageOpError(
+                REPLY_READ_FAILED
+                if not isinstance(info, dict)
+                else NO_REPLY_IMAGE_REPLY
+            )
 
         seen: set[str] = set()
         unique: list[MessageSegment] = []
@@ -814,16 +829,36 @@ def _reply_id(message: Message) -> int | None:
 
 def _image_segments(value: Any) -> list[MessageSegment]:
     if isinstance(value, Message):
-        return [segment for segment in value if segment.type == "image"]
-    if isinstance(value, str):
-        return [segment for segment in Message(value) if segment.type == "image"]
-    if isinstance(value, list):
-        segments: list[MessageSegment] = []
-        for item in value:
-            if isinstance(item, dict) and item.get("type") == "image":
-                data = item.get("data")
-                segments.append(
-                    MessageSegment("image", data if isinstance(data, dict) else {})
-                )
-        return segments
-    return []
+        candidates = list(value)
+    elif isinstance(value, str):
+        candidates = list(Message(value))
+    elif isinstance(value, list):
+        candidates = [
+            MessageSegment(
+                str(item.get("type") or ""),
+                item.get("data") if isinstance(item.get("data"), dict) else {},
+            )
+            for item in value
+            if isinstance(item, dict)
+        ]
+    else:
+        return []
+    images: list[MessageSegment] = []
+    for segment in candidates:
+        image = _as_image_segment(segment)
+        if image is not None:
+            images.append(image)
+    return images
+
+
+def _as_image_segment(segment: MessageSegment) -> MessageSegment | None:
+    """图片直接用；商城/收藏表情（mface）只有能拿到地址时才当成图片。"""
+
+    if segment.type == "image":
+        return segment
+    if segment.type == "mface":
+        url = segment.data.get("url")
+        file = segment.data.get("file")
+        if url or file:
+            return MessageSegment("image", {"url": url or "", "file": file or ""})
+    return None
