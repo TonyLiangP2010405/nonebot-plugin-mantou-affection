@@ -12,7 +12,7 @@ from nonebot.adapters.onebot.v11 import Message
 from nonebot_plugin_mantou_affection.config import Config
 from nonebot_plugin_mantou_affection.image_processing import ImageQuotaStore
 from nonebot_plugin_mantou_affection.models import Profile
-from nonebot_plugin_mantou_affection.panel_quota import PanelQuotaStore
+from nonebot_plugin_mantou_affection.panel_quota import PanelQuotaStore, PanelRankQuotaStore
 from nonebot_plugin_mantou_affection.service import AffectionService
 from nonebot_plugin_mantou_affection.storage import AffectionStore
 from nonebot_plugin_mantou_affection.wheel import (
@@ -172,6 +172,7 @@ def make_coordinator(
     stickers=None,
     image_quota=None,
     panel_quota=None,
+    panel_rank_quota=None,
 ):
     config = Config(mantou_affection_newbie_protection_below=0)
     service = AffectionService(AffectionStore(tmp_path / "affection.json"), config)
@@ -184,6 +185,8 @@ def make_coordinator(
         stickers=stickers,
         image_quota=image_quota or ImageQuotaStore(tmp_path / "image_quota.json"),
         panel_quota=panel_quota or PanelQuotaStore(tmp_path / "panel_quota.json"),
+        panel_rank_quota=panel_rank_quota
+        or PanelRankQuotaStore(tmp_path / "panel_rank_quota.json"),
         poke_delay=0,
     )
     coordinator.choice_timeout = 30
@@ -249,12 +252,13 @@ def test_wheel_weights_match_approved_table() -> None:
         (("taozi", 0), 1),
         (("image", 1), 2),
         (("image", 2), 1),
-        (("poke", 1), 9),
-        (("poke", 3), 6),
+        (("poke", 1), 8),
+        (("poke", 3), 5),
         (("poke", 5), 3),
-        (("poke", 10), 3),
+        (("poke", 10), 2),
         (("poke", 20), 1),
         (("panel", 1), 5),
+        (("panel_rank", 1), 3),
         (("affection", 1), 7),
         (("affection", 2), 6),
         (("affection", 3), 5),
@@ -276,9 +280,11 @@ def test_wheel_image_quota_is_rare_and_capped_at_two() -> None:
     assert [value for value, _ in images] == [1, 2]
     assert sum(weight for _, weight in images) == 3
     pokes = [w for o, w in WHEEL_OUTCOMES if o.kind == "poke"]
-    assert sum(pokes) == 22
+    assert sum(pokes) == 19
     panels = [w for o, w in WHEEL_OUTCOMES if o.kind == "panel"]
     assert panels == [5]
+    panel_ranks = [w for o, w in WHEEL_OUTCOMES if o.kind == "panel_rank"]
+    assert panel_ranks == [3]
     assert sum(weight for _, weight in WHEEL_OUTCOMES) == 100
 
 
@@ -288,14 +294,18 @@ def test_wheel_draw_uses_independent_integer_ranges() -> None:
     assert draw_wheel_outcome(FixedRollRng(20)) == WheelOutcome("image", 1)
     assert draw_wheel_outcome(FixedRollRng(22)) == WheelOutcome("image", 2)
     assert draw_wheel_outcome(FixedRollRng(23)) == WheelOutcome("poke", 1)
-    assert draw_wheel_outcome(FixedRollRng(31)) == WheelOutcome("poke", 1)
-    assert draw_wheel_outcome(FixedRollRng(32)) == WheelOutcome("poke", 3)
-    assert draw_wheel_outcome(FixedRollRng(37)) == WheelOutcome("poke", 3)
+    assert draw_wheel_outcome(FixedRollRng(30)) == WheelOutcome("poke", 1)
+    assert draw_wheel_outcome(FixedRollRng(31)) == WheelOutcome("poke", 3)
+    assert draw_wheel_outcome(FixedRollRng(35)) == WheelOutcome("poke", 3)
+    assert draw_wheel_outcome(FixedRollRng(36)) == WheelOutcome("poke", 5)
     assert draw_wheel_outcome(FixedRollRng(38)) == WheelOutcome("poke", 5)
-    assert draw_wheel_outcome(FixedRollRng(41)) == WheelOutcome("poke", 10)
-    assert draw_wheel_outcome(FixedRollRng(44)) == WheelOutcome("poke", 20)
-    assert draw_wheel_outcome(FixedRollRng(45)) == WheelOutcome("panel", 1)
-    assert draw_wheel_outcome(FixedRollRng(49)) == WheelOutcome("panel", 1)
+    assert draw_wheel_outcome(FixedRollRng(39)) == WheelOutcome("poke", 10)
+    assert draw_wheel_outcome(FixedRollRng(40)) == WheelOutcome("poke", 10)
+    assert draw_wheel_outcome(FixedRollRng(41)) == WheelOutcome("poke", 20)
+    assert draw_wheel_outcome(FixedRollRng(42)) == WheelOutcome("panel", 1)
+    assert draw_wheel_outcome(FixedRollRng(46)) == WheelOutcome("panel", 1)
+    assert draw_wheel_outcome(FixedRollRng(47)) == WheelOutcome("panel_rank", 1)
+    assert draw_wheel_outcome(FixedRollRng(49)) == WheelOutcome("panel_rank", 1)
     assert draw_wheel_outcome(FixedRollRng(50)).value == 1
     assert draw_wheel_outcome(FixedRollRng(75)).value == 20
     assert draw_wheel_outcome(FixedRollRng(76)).value == -1
@@ -312,8 +322,9 @@ def test_rules_message_lists_every_probability() -> None:
     assert "确认" not in rules
     assert "馒头制作随机表情 19%" in rules
     assert "桃子表情包 1%（换一张需 10 点好感）" in rules
-    assert "馒头主动戳一戳：×1 9%、×3 6%、×5 3%、×10 3%、×20 1%" in rules
+    assert "馒头主动戳一戳：×1 8%、×3 5%、×5 3%、×10 2%、×20 1%" in rules
     assert "角色面板次数 5%" in rules
+    assert "群面板排名次数 3%" in rules
     assert "图像处理次数：×1 2%、×2 1%" in rules
     assert "每张图消耗 1 次" in rules
     assert "+1 7%" in rules and "+20 1%" in rules
@@ -563,7 +574,7 @@ async def test_wheel_image_quota_message_explains_usage(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("roll", "count"), [(23, 1), (34, 3), (38, 5), (41, 10), (44, 20)]
+    ("roll", "count"), [(23, 1), (31, 3), (36, 5), (39, 10), (41, 20)]
 )
 async def test_wheel_poke_counts(tmp_path: Path, roll: int, count: int) -> None:
     coordinator = make_coordinator(tmp_path, rng=SequenceRng([roll]))
@@ -584,7 +595,7 @@ async def test_wheel_poke_message_clearly_says_mantou_pokes_you(tmp_path: Path) 
 
 
 async def test_wheel_poke_failure_reports_without_raising(tmp_path: Path) -> None:
-    coordinator = make_coordinator(tmp_path, rng=SequenceRng([44]))
+    coordinator = make_coordinator(tmp_path, rng=SequenceRng([41]))
     pending, sent, _ = await start(coordinator, bot=FakeBot(fail_users={TRIGGER}))
     await operate(coordinator, pending)
 
@@ -1134,6 +1145,21 @@ async def test_wheel_panel_quota_counts(tmp_path: Path) -> None:
     assert "/角色名面板" in body
 
 
+async def test_wheel_panel_rank_quota_counts(tmp_path: Path) -> None:
+    quota = PanelRankQuotaStore(tmp_path / "panel_rank_quota.json")
+    coordinator = make_coordinator(
+        tmp_path, rng=SequenceRng([47]), panel_rank_quota=quota
+    )
+    pending, sent, _ = await start(coordinator)
+    await operate(coordinator, pending)
+
+    assert await quota.get(GROUP, TRIGGER) == 1
+    body = "\n".join(message.extract_plain_text() for message in sent)
+    assert "抽到群面板排名次数 ×1" in body
+    assert "当前共 1 次" in body
+    assert "/面板排名" in body
+
+
 async def test_panel_quota_store_add_and_consume(tmp_path: Path) -> None:
     quota = PanelQuotaStore(tmp_path / "panel_quota.json")
     assert await quota.get(GROUP, TRIGGER) == 0
@@ -1141,3 +1167,12 @@ async def test_panel_quota_store_add_and_consume(tmp_path: Path) -> None:
     assert await quota.consume(GROUP, TRIGGER, 1) == 1
     assert await quota.consume(GROUP, TRIGGER, 5) is None
     assert await quota.get(GROUP, TRIGGER) == 1
+
+
+async def test_panel_rank_quota_store_is_independent(tmp_path: Path) -> None:
+    panel = PanelQuotaStore(tmp_path / "panel_quota.json")
+    rank = PanelRankQuotaStore(tmp_path / "panel_rank_quota.json")
+    assert await rank.add(GROUP, TRIGGER, 1) == 1
+    assert await panel.get(GROUP, TRIGGER) == 0
+    assert await rank.consume(GROUP, TRIGGER, 1) == 0
+    assert await rank.consume(GROUP, TRIGGER, 1) is None

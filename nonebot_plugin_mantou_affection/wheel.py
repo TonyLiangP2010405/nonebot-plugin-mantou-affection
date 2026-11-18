@@ -28,12 +28,13 @@ WHEEL_OUTCOMES: tuple[tuple[WheelOutcome, int], ...] = (
     (WheelOutcome("taozi"), 1),
     (WheelOutcome("image", 1), 2),
     (WheelOutcome("image", 2), 1),
-    (WheelOutcome("poke", 1), 9),
-    (WheelOutcome("poke", 3), 6),
+    (WheelOutcome("poke", 1), 8),
+    (WheelOutcome("poke", 3), 5),
     (WheelOutcome("poke", 5), 3),
-    (WheelOutcome("poke", 10), 3),
+    (WheelOutcome("poke", 10), 2),
     (WheelOutcome("poke", 20), 1),
     (WheelOutcome("panel", 1), 5),
+    (WheelOutcome("panel_rank", 1), 3),
     (WheelOutcome("affection", 1), 7),
     (WheelOutcome("affection", 2), 6),
     (WheelOutcome("affection", 3), 5),
@@ -75,6 +76,7 @@ def format_wheel_rules(timeout: int, newbie_below: int = 50) -> str:
     images = [(o.value, w) for o, w in WHEEL_OUTCOMES if o.kind == "image"]
     pokes = [(o.value, w) for o, w in WHEEL_OUTCOMES if o.kind == "poke"]
     panels = sum(weight for outcome, weight in WHEEL_OUTCOMES if outcome.kind == "panel")
+    panel_ranks = sum(weight for outcome, weight in WHEEL_OUTCOMES if outcome.kind == "panel_rank")
     gains = [(o.value, w) for o, w in WHEEL_OUTCOMES if o.kind == "affection" and o.value > 0]
     losses = [(-o.value, w) for o, w in WHEEL_OUTCOMES if o.kind == "affection" and o.value < 0]
 
@@ -89,6 +91,7 @@ def format_wheel_rules(timeout: int, newbie_below: int = 50) -> str:
         f"· 桃子表情包 {taozi_weight}%（换一张需 {WHEEL_TAOZI_COST} 点好感）\n"
         f"· 馒头主动戳一戳：{_join_weights(pokes, '×')}\n"
         f"· 角色面板次数 {panels}%（在喵喵插件里免费查看一次角色面板）\n"
+        f"· 群面板排名次数 {panel_ranks}%（在喵喵插件里免费查看一次群面板排名）\n"
         f"· 图像处理次数：{_join_weights(images, '×')}（每张图消耗 1 次）\n"
         f"· 好感增加：{_join_weights(gains, '+')}\n"
         f"· 好感减少：{_join_weights(losses, '-')}"
@@ -232,6 +235,7 @@ class WheelCoordinator:
         stickers=None,
         image_quota=None,
         panel_quota=None,
+        panel_rank_quota=None,
         poke_delay: float = 0.2,
     ):
         self.service = service
@@ -243,6 +247,7 @@ class WheelCoordinator:
         self.stickers = stickers
         self.image_quota = image_quota
         self.panel_quota = panel_quota
+        self.panel_rank_quota = panel_rank_quota
         self.poke_delay = max(float(poke_delay), 0.0)
         self.choice_timeout = float(config.mantou_affection_wheel_timeout)
         self.meme_confirm_timeout = float(
@@ -416,6 +421,8 @@ class WheelCoordinator:
                         await self._run_poke(pending, participant, outcome.value)
                     elif outcome.kind == "panel":
                         await self._run_panel_quota(pending, participant, outcome.value)
+                    elif outcome.kind == "panel_rank":
+                        await self._run_panel_rank_quota(pending, participant, outcome.value)
                     elif outcome.kind == "taozi":
                         await self._run_sticker_outcome(pending, participant)
                     else:
@@ -477,6 +484,32 @@ class WheelCoordinator:
             + MessageSegment.text(
                 f" 🖼️ 抽到角色面板次数 ×{count}，当前共 {total} 次"
                 "（在喵喵插件里发送 /角色名面板 使用）"
+            )
+        )
+
+    async def _run_panel_rank_quota(
+        self, pending: PendingWheel, participant: WheelParticipant, count: int
+    ) -> None:
+        """转盘抽到群面板排名次数：记到独立账本，由喵喵插件按次消耗。"""
+
+        try:
+            if self.panel_rank_quota is None:
+                raise RuntimeError("群面板排名次数账本未接线")
+            total = await self.panel_rank_quota.add(
+                pending.group_id, participant.user_id, count
+            )
+        except Exception:
+            logger.exception("[mantou-affection] 转盘发放群面板排名次数失败")
+            await pending.send(
+                MessageSegment.at(participant.user_id)
+                + MessageSegment.text(" 馒头想给你记群面板排名次数，但账本没打开，这次先欠着")
+            )
+            return
+        await pending.send(
+            MessageSegment.at(participant.user_id)
+            + MessageSegment.text(
+                f" 🏆 抽到群面板排名次数 ×{count}，当前共 {total} 次"
+                "（在喵喵插件里发送 /面板排名 使用）"
             )
         )
 

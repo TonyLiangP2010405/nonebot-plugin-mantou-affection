@@ -48,7 +48,7 @@ from .hsr_quiz import BUNDLED_HSR_QUIZ_PATH, HsrQuizCoordinator
 from .image_processing import ImageProcessingCoordinator, ImageQuotaStore
 from .integration import register_plugin_linkage
 from .models import AffectionResponse, AffectionSnapshot, PokeResult
-from .panel_quota import PanelQuotaStore
+from .panel_quota import PanelQuotaStore, PanelRankQuotaStore
 from .petit_planet_quiz import (
     BUNDLED_PETIT_PLANET_QUIZ_PATH,
     PetitPlanetQuizCoordinator,
@@ -72,6 +72,9 @@ data_file = Path(get_plugin_data_dir()) / "affection.json"
 store = AffectionStore(data_file)
 image_quota = ImageQuotaStore(Path(get_plugin_data_dir()) / "image_quota.json")
 panel_quota = PanelQuotaStore(Path(get_plugin_data_dir()) / "panel_quota.json")
+panel_rank_quota = PanelRankQuotaStore(
+    Path(get_plugin_data_dir()) / "panel_rank_quota.json"
+)
 text_library = AffectionTextLibrary(
     Path(__file__).parent / "resources" / "affection_texts.json",
     plugin_config.mantou_affection_text_path,
@@ -150,6 +153,7 @@ wheel_coordinator = WheelCoordinator(
     stickers=taozi_stickers,
     image_quota=image_quota,
     panel_quota=panel_quota,
+    panel_rank_quota=panel_rank_quota,
 )
 event_coordinator.attach_wheel(wheel_coordinator)
 matchers = register_commands(
@@ -273,6 +277,28 @@ async def consume_panel_draw(
     """扣除角色面板次数；次数不足返回 None 且不改动余额。"""
 
     return await panel_quota.consume(str(group_id), str(user_id), amount)
+
+
+async def get_panel_rank_draws(group_id: str | int, user_id: str | int) -> int:
+    """读取指定群友剩余的群面板排名次数。"""
+
+    return await panel_rank_quota.get(str(group_id), str(user_id))
+
+
+async def add_panel_rank_draws(
+    group_id: str | int, user_id: str | int, amount: int = 1
+) -> int:
+    """给指定群友增加群面板排名次数，返回新的余额。"""
+
+    return await panel_rank_quota.add(str(group_id), str(user_id), amount)
+
+
+async def consume_panel_rank_draw(
+    group_id: str | int, user_id: str | int, amount: int = 1
+) -> int | None:
+    """扣除群面板排名次数；次数不足返回 None 且不改动余额。"""
+
+    return await panel_rank_quota.consume(str(group_id), str(user_id), amount)
 
 
 async def spend_affection(
