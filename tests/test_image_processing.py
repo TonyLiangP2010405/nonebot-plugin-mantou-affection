@@ -183,7 +183,9 @@ def test_parse_rotate_defaults_and_angles() -> None:
     assert request is not None and request.angle == -45.0
 
 
-@pytest.mark.parametrize("raw", ["旋转 拉满", "旋转 361", "翻转", "水平翻转 多余"])
+@pytest.mark.parametrize(
+    "raw", ["旋转 拉满", "旋转 361", "翻转 多余", "水平翻转 多余"]
+)
 def test_parse_rejects_bad_operations(raw: str) -> None:
     with pytest.raises(ImageOpError):
         parse_image_request(raw)
@@ -621,13 +623,19 @@ async def test_image_command_requires_quota(tmp_path: Path, monkeypatch) -> None
     monkeypatch.setattr(image_cmd, "finish", fake_finish)
 
     await image_cmd.handlers[0].call(
-        make_event(images=(images["inline0"],)), FakeBot(), Message("灰度图")
+        make_event(images=(images["inline0"],)),
+        FakeBot(),
+        ("馒头图像处理",),
+        Message("灰度图"),
     )
     assert "次数不够" in sent[-1].extract_plain_text()
 
     await quota.add(GROUP, USER, 1)
     await image_cmd.handlers[0].call(
-        make_event(images=(images["inline0"],)), FakeBot(), Message("灰度图")
+        make_event(images=(images["inline0"],)),
+        FakeBot(),
+        ("馒头图像处理",),
+        Message("灰度图"),
     )
     assert any(segment.type == "image" for segment in sent[-1])
     assert "消耗 1 次" in sent[-1].extract_plain_text()
@@ -775,7 +783,10 @@ async def test_image_command_superuser_skips_quota(tmp_path: Path, monkeypatch) 
     monkeypatch.setattr(get_driver().config, "superusers", {USER})
 
     await image_cmd.handlers[0].call(
-        make_event(images=(images["inline0"],)), FakeBot(), Message("灰度图")
+        make_event(images=(images["inline0"],)),
+        FakeBot(),
+        ("馒头图像处理",),
+        Message("灰度图"),
     )
 
     assert any(segment.type == "image" for segment in sent[-1])
@@ -795,8 +806,35 @@ async def test_image_command_without_coordinator_reports_unavailable(
 
     monkeypatch.setattr(image_cmd, "finish", fake_finish)
 
-    await image_cmd.handlers[0].call(make_event(), FakeBot(), Message(""))
+    await image_cmd.handlers[0].call(
+        make_event(), FakeBot(), ("馒头图像处理",), Message("")
+    )
     assert "还没把图像处理摆出来" in sent[-1]
+
+
+async def test_image_shortcut_alias_uses_operation(tmp_path: Path, monkeypatch) -> None:
+    service = AffectionService(AffectionStore(tmp_path / "affection.json"), Config())
+    quota = ImageQuotaStore(tmp_path / "image_quota.json")
+    images = {"inline0": make_image()}
+    coordinator = make_coordinator(quota, images)
+    image_cmd = register_commands(service, Config(), None, coordinator)[-1]
+    sent: list[Message] = []
+
+    async def fake_finish(message=Message(), **kwargs) -> None:
+        sent.append(message if isinstance(message, Message) else Message(str(message)))
+
+    monkeypatch.setattr(image_cmd, "finish", fake_finish)
+    await quota.add(GROUP, USER, 1)
+
+    await image_cmd.handlers[0].call(
+        make_event(images=(images["inline0"],)),
+        FakeBot(),
+        ("翻转",),
+        Message(""),
+    )
+
+    assert any(segment.type == "image" for segment in sent[-1])
+    assert "水平翻转完成" in sent[-1].extract_plain_text()
 
 
 async def test_too_many_images_rejected(quota: ImageQuotaStore, images) -> None:

@@ -5,7 +5,7 @@ import re
 from nonebot import get_driver, logger, on_command
 from nonebot.adapters import Event
 from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent, Message, MessageSegment
-from nonebot.params import CommandArg
+from nonebot.params import Command, CommandArg
 from nonebot.permission import SUPERUSER
 from nonebot.rule import Rule
 
@@ -66,6 +66,7 @@ MEMBER_HELP_LINES: tuple[str, ...] = (
     "/馒头好感榜 —— 查看本群排行榜",
     "/馒头表情免确认 —— 加入或退出表情免确认白名单",
     "/馒头图像处理 —— 处理图片并保持动图，支持 GIF 变速（回复图片后使用）",
+    "/翻转 /旋转 90 /gif变速 0.5x —— 回复图片后直接用的图像处理快捷键",
     "/馒头帮助 —— 打开这份菜单",
 )
 ADMIN_HELP_LINES: tuple[str, ...] = (
@@ -367,7 +368,31 @@ def register_commands(
     )
     image_cmd = on_command(
         "馒头图像处理",
-        aliases={"馒头图片处理", "馒头修图", "馒头图片操作"},
+        aliases={
+            "馒头图片处理",
+            "馒头修图",
+            "馒头图片操作",
+            "翻转",
+            "水平翻转",
+            "左翻",
+            "右翻",
+            "竖直翻转",
+            "上翻",
+            "下翻",
+            "旋转",
+            "缩放",
+            "裁剪",
+            "灰度",
+            "灰度图",
+            "黑白",
+            "反相",
+            "反色",
+            "横向拼接",
+            "纵向拼接",
+            "gif变速",
+            "GIF变速",
+            "变速",
+        },
         rule=GROUP_ONLY,
         priority=10,
         block=True,
@@ -1114,15 +1139,25 @@ def register_commands(
 
     @image_cmd.handle()
     async def handle_image(
-        event: GroupMessageEvent, bot: Bot, args: Message = CommandArg()
+        event: GroupMessageEvent,
+        bot: Bot,
+        command: tuple[str, ...] = Command(),
+        args: Message = CommandArg(),
     ) -> None:
         if image_processing is None:
             await image_cmd.finish("馒头还没把图像处理摆出来，请稍后再试。")
             return
+        name = command[0] if command else "馒头图像处理"
+        argument = args.extract_plain_text()
+        raw = (
+            argument
+            if name in {"馒头图像处理", "馒头图片处理", "馒头修图", "馒头图片操作"}
+            else f"{name} {argument}".strip()
+        )
         result = await image_processing.handle(
             group_id=str(event.group_id),
             user_id=str(event.user_id),
-            raw=args.extract_plain_text(),
+            raw=raw,
             event=event,
             bot=bot,
             unlimited=event.get_user_id() in get_driver().config.superusers,
