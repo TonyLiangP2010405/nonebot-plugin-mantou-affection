@@ -95,6 +95,7 @@ def make_event(
     *,
     images: tuple[bytes, ...] = (),
     reply_id: int | None = None,
+    reply: dict | None = None,
 ) -> GroupMessageEvent:
     message = Message()
     if reply_id is not None:
@@ -120,6 +121,7 @@ def make_event(
         sender=Sender(user_id=int(USER), nickname="桃友", role="member"),
         to_me=False,
         group_id=int(GROUP),
+        reply=reply,
     )
 
 
@@ -429,6 +431,70 @@ async def test_reply_sticker_image_is_collected(
     assert result.image is not None
     assert Image.open(BytesIO(result.image)).is_animated
     assert await quota.get(GROUP, USER) == 0
+
+
+def make_quoted_reply(text: str = "", image_url: str | None = None) -> dict:
+    message: list[dict] = []
+    if image_url is not None:
+        message.append(
+            {
+                "type": "image",
+                "data": {
+                    "file": "sticker.gif",
+                    "url": image_url,
+                    "sub_type": 1,
+                    "summary": "[动画表情]",
+                },
+            }
+        )
+    if text:
+        message.append({"type": "text", "data": {"text": text}})
+    return {
+        "time": int(time()),
+        "message_type": "group",
+        "message_id": 88,
+        "real_id": 88,
+        "sender": {"user_id": 123, "nickname": "被引用的人"},
+        "message": message,
+    }
+
+
+async def test_reply_payload_with_sticker_is_collected(
+    quota: ImageQuotaStore, images
+) -> None:
+    sticker = make_gif()
+    coordinator = make_coordinator(quota, {**images, "sticker": sticker})
+    await quota.add(GROUP, USER, 1)
+
+    result = await coordinator.handle(
+        group_id=GROUP,
+        user_id=USER,
+        raw="水平翻转",
+        event=make_event(reply=make_quoted_reply(image_url="sticker")),
+        bot=FakeBot(),
+    )
+
+    assert result.image is not None
+    assert Image.open(BytesIO(result.image)).is_animated
+    assert await quota.get(GROUP, USER) == 0
+
+
+async def test_reply_payload_without_image_is_reported(
+    quota: ImageQuotaStore, images
+) -> None:
+    coordinator = make_coordinator(quota, images)
+    await quota.add(GROUP, USER, 1)
+
+    result = await coordinator.handle(
+        group_id=GROUP,
+        user_id=USER,
+        raw="灰度图",
+        event=make_event(reply=make_quoted_reply(text="纯文字")),
+        bot=FakeBot(),
+    )
+
+    assert result.text == NO_REPLY_IMAGE_REPLY
+    assert await quota.get(GROUP, USER) == 1
 
 
 async def test_reply_mface_with_url_is_collected(

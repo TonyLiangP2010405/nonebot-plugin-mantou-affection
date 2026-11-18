@@ -756,10 +756,13 @@ class ImageProcessingCoordinator:
             logger.exception("[mantou-affection] 退回图像处理次数失败")
 
     async def _collect_images(self, event: GroupMessageEvent, bot: Bot) -> list[bytes]:
-        reply_segments: list[MessageSegment] = []
-        reply_id = _reply_id(event.message)
+        quoted = getattr(event, "reply", None)
+        reply_segments = (
+            _image_segments(getattr(quoted, "message", None)) if quoted is not None else []
+        )
+        reply_id = _event_reply_id(event) or _reply_id_from_model(quoted)
         info: Any = None
-        if reply_id is not None:
+        if not reply_segments and reply_id is not None:
             try:
                 info = await bot.get_msg(message_id=int(reply_id))
             except Exception:
@@ -768,10 +771,11 @@ class ImageProcessingCoordinator:
             if isinstance(info, dict):
                 reply_segments = _image_segments(info.get("message"))
         segments = reply_segments + _image_segments(event.message)
-        if not segments and reply_id is not None:
+        has_reply = quoted is not None or reply_id is not None
+        if not segments and has_reply:
             raise ImageOpError(
                 REPLY_READ_FAILED
-                if not isinstance(info, dict)
+                if quoted is None and not isinstance(info, dict)
                 else NO_REPLY_IMAGE_REPLY
             )
 
@@ -814,17 +818,38 @@ class ImageProcessingCoordinator:
             raise ImageOpError("图片下载失败了，换一张再试试。") from error
 
 
+_REPLY_CQ_RE = re.compile(r"\[CQ:reply,id=([^,\]]+)")
+
+
 def _reply_id(message: Message) -> int | None:
     for segment in message:
         if segment.type == "reply":
-            raw = segment.data.get("id")
-            if raw is None:
-                continue
-            try:
-                return int(raw)
-            except (TypeError, ValueError):
-                return None
+            return _as_int(segment.data.get("id"))
     return None
+
+
+def _event_reply_id(event: GroupMessageEvent) -> int | None:
+    for message in (event.message, getattr(event, "original_message", None)):
+        if isinstance(message, Message):
+            reply_id = _reply_id(message)
+            if reply_id is not None:
+                return reply_id
+    raw = str(getattr(event, "raw_message", "") or "")
+    match = _REPLY_CQ_RE.search(raw)
+    return _as_int(match.group(1)) if match else None
+
+
+def _reply_id_from_model(reply: Any) -> int | None:
+    if reply is None:
+        return None
+    return _as_int(getattr(reply, "message_id", None))
+
+
+def _as_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _image_segments(value: Any) -> list[MessageSegment]:
