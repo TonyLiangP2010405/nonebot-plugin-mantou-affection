@@ -174,6 +174,35 @@ class AffectionStore:
         async with self._lock:
             await asyncio.to_thread(self._set_settings_sync, dict(values))
 
+    def _update_setting_sync(
+        self,
+        key: str,
+        default: Any,
+        mutator: Callable[[Any], tuple[T, Any]],
+    ) -> T:
+        settings = self._load_sync()["settings"]
+        result, value = mutator(settings.get(str(key), default))
+        settings[str(key)] = value
+        self._save_sync()
+        return result
+
+    async def update_setting(
+        self,
+        key: str,
+        default: Any,
+        mutator: Callable[[Any], tuple[T, Any]],
+    ) -> T:
+        """原子地读取-修改-写回一项设置，返回 mutator 的结果。
+
+        限流计数需要在同一把锁里完成「读窗口 → 追加 → 写回」，
+        否则并发触发时后写的会覆盖先写的记录。
+        """
+
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._update_setting_sync, str(key), default, mutator
+            )
+
     def _delete_settings_sync(self, keys: Iterable[str]) -> int:
         settings = self._load_sync()["settings"]
         missing = object()

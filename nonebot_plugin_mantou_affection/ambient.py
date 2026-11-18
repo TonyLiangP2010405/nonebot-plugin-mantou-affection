@@ -371,9 +371,17 @@ class EventCoordinator:
 
         戳出来的事件按 penalty_scale=2 结算：负向选项与超时扣 2 倍，正向奖励不变。
         事件消息由调用方发送（作为 poke 返回的 text），send 只用于结算消息。
+        事件限制开启且本群额度用完时直接返回 None（好感 +1 仍然生效）。
         """
 
         if send is None or self.rng.random() >= chance:
+            return None
+        try:
+            allowed = await self.service.event_limit_allows(str(group_id))
+        except Exception:
+            logger.exception("[mantou-affection] 判定事件限制失败")
+            allowed = True
+        if not allowed:
             return None
         pending = self.start(
             str(group_id), str(user_id), nickname, penalty_scale=2
@@ -387,6 +395,10 @@ class EventCoordinator:
             send=send,
             timeout=self.config.mantou_affection_event_timeout,
         )
+        try:
+            await self.service.record_event_trigger(str(group_id))
+        except Exception:
+            logger.exception("[mantou-affection] 记录事件限制失败")
         return message
 
     def schedule(
@@ -574,6 +586,24 @@ def register_ambient(
         nickname = _sender_name(event)
         bet_coordinator.note_message(group_id, user_id, nickname)
 
+        async def note_activity() -> None:
+            """活动真的开起来后才消耗一次限流额度；记录失败只记日志。"""
+
+            try:
+                await service.record_event_trigger(group_id)
+            except Exception:
+                logger.exception("[mantou-affection] 记录事件限制失败")
+
+        try:
+            limits_ok = await service.event_limit_allows(group_id)
+        except Exception:
+            logger.exception("[mantou-affection] 判定事件限制失败")
+            limits_ok = True
+        if not limits_ok:
+            # 限流开启且本群这一小时的额度用完了, 连小动作一起安静下来,
+            # 只保留答题和主动命令。额度按真实开起来的活动计数。
+            return
+
         try:
             find_char_ready = await service.find_char_triggered(group_id, user_id)
         except Exception:
@@ -597,7 +627,7 @@ def register_ambient(
                         send=ambient.send,
                         timeout=config.mantou_affection_find_char_timeout,
                     )
-                    return
+                    return await note_activity()
 
         try:
             bet_ready = await service.bet_triggered(group_id, user_id)
@@ -620,7 +650,7 @@ def register_ambient(
                 logger.exception("[mantou-affection] 抽取馒头博弈失败")
                 started = False
             if started:
-                return
+                return await note_activity()
 
         try:
             pk_ready = await service.pk_triggered()
@@ -639,7 +669,7 @@ def register_ambient(
                 logger.exception("[mantou-affection] 发起随机问答失败")
                 started = False
             if started:
-                return
+                return await note_activity()
 
         try:
             group_quiz_ready = await service.group_quiz_triggered()
@@ -658,7 +688,7 @@ def register_ambient(
                 logger.exception("[mantou-affection] 发起群友问答失败")
                 started = False
             if started:
-                return
+                return await note_activity()
 
         try:
             teyvat_quiz_ready = await service.teyvat_quiz_triggered()
@@ -677,7 +707,7 @@ def register_ambient(
                 logger.exception("[mantou-affection] 发起提瓦特问答失败")
                 started = False
             if started:
-                return
+                return await note_activity()
 
         try:
             hsr_quiz_ready = await service.hsr_quiz_triggered()
@@ -696,7 +726,7 @@ def register_ambient(
                 logger.exception("[mantou-affection] 发起星穹铁道问答失败")
                 started = False
             if started:
-                return
+                return await note_activity()
 
         try:
             zzz_quiz_ready = await service.zzz_quiz_triggered()
@@ -715,7 +745,7 @@ def register_ambient(
                 logger.exception("[mantou-affection] 发起绝区零问答失败")
                 started = False
             if started:
-                return
+                return await note_activity()
 
         try:
             petit_planet_ready = await service.petit_planet_quiz_triggered()
@@ -734,7 +764,7 @@ def register_ambient(
                 logger.exception("[mantou-affection] 发起星布谷地问答失败")
                 started = False
             if started:
-                return
+                return await note_activity()
 
         try:
             fill_blank_ready = await service.fill_blank_triggered()
@@ -753,7 +783,7 @@ def register_ambient(
                 logger.exception("[mantou-affection] 发起补句问答失败")
                 started = False
             if started:
-                return
+                return await note_activity()
 
         try:
             wheel_ready = await service.wheel_triggered(group_id, user_id)
@@ -773,7 +803,7 @@ def register_ambient(
                 logger.exception("[mantou-affection] 发起命运齿轮转盘失败")
                 started = False
             if started:
-                return
+                return await note_activity()
 
         try:
             text = await service.ambient_reaction(group_id, user_id)
@@ -802,7 +832,7 @@ def register_ambient(
                     send=ambient.send,
                     timeout=config.mantou_affection_event_timeout,
                 )
-                return
+                return await note_activity()
 
         try:
             await ambient.send(MessageSegment.at(event.user_id) + MessageSegment.text(f" {text}"))

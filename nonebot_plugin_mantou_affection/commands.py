@@ -17,12 +17,19 @@ from .parsing import (
     PROBABILITY_BATCH_RESET,
     PROBABILITY_BATCH_SCALE,
     parse_adjustment,
+    parse_event_limit_count,
+    parse_event_limit_toggle,
     parse_find_char_chances,
     parse_probability,
     parse_probability_batch,
 )
 from .pk import BUNDLED_PK_PATH, PkCoordinator, PkQuestionLibrary
-from .service import AffectionService, normalize_nickname
+from .service import (
+    EVENT_LIMIT_MAX_PER_HOUR,
+    EVENT_LIMIT_MIN_PER_HOUR,
+    AffectionService,
+    normalize_nickname,
+)
 
 BET_CHANCE_USAGE = (
     "请输入 0~1 的小数（如 0.0005）或百分数（如 0.05%），0 即关闭馒头博弈"
@@ -53,6 +60,61 @@ PROBABILITY_BATCH_USAGE = (
     "/馒头概率总调 ×2 —— 全部按当前值缩放（支持 ×50%）\n"
     "/馒头概率总调 重置 —— 清除覆盖，恢复配置默认"
 )
+MEMBER_HELP_LINES: tuple[str, ...] = (
+    "/馒头互动 —— 陪馒头玩，攒好感",
+    "/馒头好感 —— 查看自己的好感档案",
+    "/馒头好感榜 —— 查看本群排行榜",
+    "/馒头表情免确认 —— 加入或退出表情免确认白名单",
+    "/馒头图像处理 —— 用转盘抽到的次数处理图片（回复图片后使用）",
+    "/馒头帮助 —— 打开这份菜单",
+)
+ADMIN_HELP_LINES: tuple[str, ...] = (
+    "/馒头好感调整 @群友 +10 —— 手动增减好感",
+    "/馒头好感重置 确认 —— 清空所有群的好感数据",
+    "/馒头反应概率 5% —— 查看或调整馒头小动作概率",
+    "/馒头找字概率 5% —— 查看或调整找字概率"
+    "（可写「群消息 5% 戳一戳 2%」）",
+    "/馒头博弈概率 0.05% —— 查看或调整博弈开局概率",
+    "/馒头问答概率 1% —— 查看或调整桃子问答概率",
+    "/馒头问答题库 —— 查看题库余量",
+    "/馒头群友问答概率 0.05% —— 查看或调整群友问答概率",
+    "/馒头提瓦特概率 0.05% —— 查看或调整提瓦特问答概率",
+    "/馒头星铁概率 0.05% —— 查看或调整星穹铁道问答概率",
+    "/馒头绝区零概率 0.05% —— 查看或调整绝区零问答概率",
+    "/馒头星布谷地概率 0.05% —— 查看或调整星布谷地问答概率",
+    "/馒头补句概率 0.05% —— 查看或调整补句问答概率",
+    "/馒头转盘概率 0.1% —— 查看或调整命运齿轮概率",
+    "/馒头概率总调 —— 总览全部概率；带数值统一设置，"
+    "×倍率缩放，重置恢复默认",
+    "/馒头限制开关 [开/关] —— 查看或切换每小时事件限制（默认关闭）",
+    "/馒头限制次数 5 —— 查看或调整每群每小时最多触发几次活动（1~100）",
+    "/馒头管理帮助 —— 查看这份完整命令帮助",
+    "/馒头强制事件 @群友 —— 回复 1~12 强制开一场活动",
+)
+HELP_FOOTER = (
+    "提示：概率命令不带参数就查看当前值，0 即关闭对应活动；"
+    "事件限制开启后每群每小时最多触发限定次数的活动，达到上限后自动活动"
+    "（含小动作）会暂停到额度恢复，答题、主动命令和 /馒头强制事件 不受影响；"
+    "旧命令 /馒头好感帮助 仍然可用。"
+)
+
+
+def _render_help(title: str) -> str:
+    """按群友/管理员两段渲染命令菜单，群友和管理员帮助共用一份文案。"""
+
+    return "\n".join(
+        [
+            f"🥟 馒头好感度 · {title}",
+            "",
+            "【群友可用】",
+            *MEMBER_HELP_LINES,
+            "",
+            "【管理员 · SUPERUSER】",
+            *ADMIN_HELP_LINES,
+            "",
+            HELP_FOOTER,
+        ]
+    )
 
 
 async def _group_only(event: Event) -> bool:
@@ -276,6 +338,27 @@ def register_commands(
         priority=10,
         block=True,
     )
+    event_limit_toggle_cmd = on_command(
+        "馒头限制开关",
+        aliases={"馒头事件限制", "馒头限流开关", "馒头限制状态"},
+        permission=SUPERUSER,
+        priority=10,
+        block=True,
+    )
+    event_limit_count_cmd = on_command(
+        "馒头限制次数",
+        aliases={"馒头每小时次数", "馒头限制上限", "馒头事件上限"},
+        permission=SUPERUSER,
+        priority=10,
+        block=True,
+    )
+    admin_help_cmd = on_command(
+        "馒头管理帮助",
+        aliases={"馒头完整帮助", "馒头管理员帮助", "馒头全部命令"},
+        permission=SUPERUSER,
+        priority=10,
+        block=True,
+    )
     meme_whitelist_cmd = on_command(
         "馒头表情免确认",
         rule=GROUP_ONLY,
@@ -360,40 +443,11 @@ def register_commands(
 
     @help_cmd.handle()
     async def handle_help() -> None:
-        await help_cmd.finish(
-            "🥟 馒头好感度 · 全部命令\n"
-            "\n"
-            "【群友可用】\n"
-            "/馒头互动 —— 陪馒头玩，攒好感\n"
-            "/馒头好感 —— 查看自己的好感档案\n"
-            "/馒头好感榜 —— 查看本群排行榜\n"
-            "/馒头表情免确认 —— 加入或退出表情免确认白名单\n"
-            "/馒头图像处理 —— 用转盘抽到的次数处理图片（回复图片后使用）\n"
-            "/馒头帮助 —— 打开这份菜单\n"
-            "\n"
-            "【管理员 · SUPERUSER】\n"
-            "/馒头好感调整 @群友 +10 —— 手动增减好感\n"
-            "/馒头好感重置 确认 —— 清空所有群的好感数据\n"
-            "/馒头反应概率 5% —— 查看或调整馒头小动作概率\n"
-            "/馒头找字概率 5% —— 查看或调整找字概率"
-            "（可写「群消息 5% 戳一戳 2%」）\n"
-            "/馒头博弈概率 0.05% —— 查看或调整博弈开局概率\n"
-            "/馒头问答概率 1% —— 查看或调整桃子问答概率\n"
-            "/馒头问答题库 —— 查看题库余量\n"
-            "/馒头群友问答概率 0.05% —— 查看或调整群友问答概率\n"
-            "/馒头提瓦特概率 0.05% —— 查看或调整提瓦特问答概率\n"
-            "/馒头星铁概率 0.05% —— 查看或调整星穹铁道问答概率\n"
-            "/馒头绝区零概率 0.05% —— 查看或调整绝区零问答概率\n"
-            "/馒头星布谷地概率 0.05% —— 查看或调整星布谷地问答概率\n"
-            "/馒头补句概率 0.05% —— 查看或调整补句问答概率\n"
-            "/馒头转盘概率 0.1% —— 查看或调整命运齿轮概率\n"
-            "/馒头概率总调 —— 总览全部概率；带数值统一设置，"
-            "×倍率缩放，重置恢复默认\n"
-            "/馒头强制事件 @群友 —— 回复 1~12 强制开一场活动\n"
-            "\n"
-            "提示：概率命令不带参数就查看当前值，0 即关闭对应活动；"
-            "旧命令 /馒头好感帮助 仍然可用。"
-        )
+        await help_cmd.finish(_render_help("全部命令"))
+
+    @admin_help_cmd.handle()
+    async def handle_admin_help() -> None:
+        await admin_help_cmd.finish(_render_help("完整命令帮助"))
 
     @adjust_cmd.handle()
     async def handle_adjust(event: GroupMessageEvent, args: Message = CommandArg()) -> None:
@@ -911,6 +965,105 @@ def register_commands(
             "（发送 /馒头概率总调 重置 可恢复默认）。"
         )
 
+    @event_limit_toggle_cmd.handle()
+    async def handle_event_limit_toggle(
+        event: Event, args: Message = CommandArg()
+    ) -> None:
+        raw = args.extract_plain_text().strip()
+        group_id = str(event.group_id) if isinstance(event, GroupMessageEvent) else ""
+        if not raw:
+            try:
+                state = await service.event_limit_state(group_id)
+            except Exception:
+                logger.exception("[mantou-affection] 读取事件限制失败")
+                await event_limit_toggle_cmd.finish(
+                    "读取失败，请检查数据目录权限后重试。"
+                )
+                return
+            lines = [
+                f"🕒 事件限制：{'已开启' if state.enabled else '已关闭'}",
+                f"每群每小时上限：{state.per_hour} 次",
+            ]
+            if group_id and state.enabled:
+                lines.append(
+                    f"本群最近一小时已触发 {state.used} 次，"
+                    f"剩余 {state.remaining} 次"
+                )
+            if state.enabled:
+                lines.append(
+                    "发送 /馒头限制开关 关 可关闭，"
+                    "/馒头限制次数 N 可调整上限"
+                )
+            else:
+                lines.append("发送 /馒头限制开关 开 即可生效")
+            await event_limit_toggle_cmd.finish("\n".join(lines))
+            return
+
+        try:
+            enabled = parse_event_limit_toggle(raw)
+        except ValueError as error:
+            await event_limit_toggle_cmd.finish(str(error))
+            return
+        try:
+            await service.set_event_limit_enabled(enabled)
+            per_hour = await service.event_limit_per_hour()
+        except Exception:
+            logger.exception("[mantou-affection] 保存事件限制开关失败")
+            await event_limit_toggle_cmd.finish("保存失败，请检查数据目录权限后重试。")
+            return
+        if not enabled:
+            await event_limit_toggle_cmd.finish(
+                "已关闭事件限制：每小时触发次数不再受限制。"
+            )
+            return
+        await event_limit_toggle_cmd.finish(
+            f"已开启事件限制：每群每小时最多触发 {per_hour} 次活动。\n"
+            "可用 /馒头限制次数 N 调整上限"
+            f"（{EVENT_LIMIT_MIN_PER_HOUR}~{EVENT_LIMIT_MAX_PER_HOUR}）。"
+        )
+
+    @event_limit_count_cmd.handle()
+    async def handle_event_limit_count(args: Message = CommandArg()) -> None:
+        raw = args.extract_plain_text().strip()
+        if not raw:
+            try:
+                current = await service.event_limit_per_hour()
+                enabled = await service.event_limit_enabled()
+            except Exception:
+                logger.exception("[mantou-affection] 读取事件限制次数失败")
+                await event_limit_count_cmd.finish(
+                    "读取失败，请检查数据目录权限后重试。"
+                )
+                return
+            await event_limit_count_cmd.finish(
+                f"当前事件限制：每群每小时最多 {current} 次"
+                f"（限制{'已开启' if enabled else '已关闭'}）\n"
+                f"发送 /馒头限制次数 N 调整，范围 "
+                f"{EVENT_LIMIT_MIN_PER_HOUR}~{EVENT_LIMIT_MAX_PER_HOUR}。"
+            )
+            return
+
+        try:
+            value = parse_event_limit_count(
+                raw,
+                minimum=EVENT_LIMIT_MIN_PER_HOUR,
+                maximum=EVENT_LIMIT_MAX_PER_HOUR,
+            )
+        except ValueError as error:
+            await event_limit_count_cmd.finish(str(error))
+            return
+        try:
+            await service.set_event_limit_per_hour(value)
+            enabled = await service.event_limit_enabled()
+        except Exception:
+            logger.exception("[mantou-affection] 保存事件限制次数失败")
+            await event_limit_count_cmd.finish("保存失败，请检查数据目录权限后重试。")
+            return
+        note = "" if enabled else "（限制当前已关闭，发送 /馒头限制开关 开 后生效）"
+        await event_limit_count_cmd.finish(
+            f"事件限制已调整为每群每小时 {value} 次{note}"
+        )
+
     @meme_whitelist_cmd.handle()
     async def handle_meme_whitelist(
         event: GroupMessageEvent, args: Message = CommandArg()
@@ -1002,5 +1155,8 @@ def register_commands(
         hsr_quiz_cmd,
         zzz_quiz_cmd,
         petit_planet_quiz_cmd,
+        event_limit_toggle_cmd,
+        event_limit_count_cmd,
+        admin_help_cmd,
         image_cmd,
     )

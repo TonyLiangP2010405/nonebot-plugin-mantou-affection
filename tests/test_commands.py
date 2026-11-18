@@ -106,7 +106,7 @@ def test_format_probability(value: float, expected: str) -> None:
 def test_registered_matchers_include_probability_command() -> None:
     from nonebot_plugin_mantou_affection import matchers
 
-    assert len(matchers) == 21
+    assert len(matchers) == 24
     (
         _profile_cmd,
         _interact_cmd,
@@ -128,6 +128,9 @@ def test_registered_matchers_include_probability_command() -> None:
         _hsr_quiz_cmd,
         _zzz_quiz_cmd,
         _petit_planet_quiz_cmd,
+        event_limit_toggle_cmd,
+        event_limit_count_cmd,
+        admin_help_cmd,
         _image_cmd,
     ) = matchers
     assert probability_cmd.priority == 10
@@ -166,6 +169,16 @@ def test_registered_matchers_include_probability_command() -> None:
     assert [handler.call.__name__ for handler in batch_probability_cmd.handlers] == [
         "handle_probability_batch"
     ]
+
+    expected_limit_handlers = {
+        event_limit_toggle_cmd: "handle_event_limit_toggle",
+        event_limit_count_cmd: "handle_event_limit_count",
+        admin_help_cmd: "handle_admin_help",
+    }
+    for matcher, handler_name in expected_limit_handlers.items():
+        assert matcher.priority == 10
+        assert matcher.block is True
+        assert [handler.call.__name__ for handler in matcher.handlers] == [handler_name]
 
 
 def _event(group_id: int = 90001, user_id: int = 90002) -> GroupMessageEvent:
@@ -488,6 +501,9 @@ async def test_help_lists_every_command(tmp_path: Path, monkeypatch) -> None:
         "/馒头星布谷地概率",
         "/馒头转盘概率",
         "/馒头概率总调",
+        "/馒头限制开关",
+        "/馒头限制次数",
+        "/馒头管理帮助",
         "/馒头强制事件",
         "/馒头图像处理",
     }

@@ -51,6 +51,8 @@ class Config(BaseModel):
     mantou_affection_petit_planet_timeout: int = Field(default=60, ge=5, le=600)
     mantou_affection_fill_blank_chance: float = Field(default=0.0005, ge=0.0, le=1.0)
     mantou_affection_fill_blank_timeout: int = Field(default=60, ge=5, le=600)
+    mantou_affection_event_limit_enabled: bool = False
+    mantou_affection_event_limit_per_hour: int = Field(default=5, ge=1, le=100)
     mantou_affection_link_rewards: dict[str, int] = Field(
         default_factory=lambda: {
             "nonebot_plugin_taozi": 2,

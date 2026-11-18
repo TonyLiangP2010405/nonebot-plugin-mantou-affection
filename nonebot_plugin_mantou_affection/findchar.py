@@ -589,9 +589,17 @@ class FindCharCoordinator:
 
         和戳一戳随机事件保持同一套契约：事件消息由调用方发送（poke 返回的 text），
         send 只用于窗口结束后的结算消息，没人传 send 时退化成普通戳一戳。
+        事件限制开启且本群额度用完时直接返回 None。
         """
 
         if send is None or self.rng.random() >= chance:
+            return None
+        try:
+            allowed = await self.service.event_limit_allows(str(group_id))
+        except Exception:
+            logger.exception("[mantou-affection] 判定事件限制失败")
+            allowed = True
+        if not allowed:
             return None
         pending = self.start(str(group_id), str(user_id), nickname)
         if pending is None:
@@ -603,4 +611,8 @@ class FindCharCoordinator:
             send=send,
             timeout=self.config.mantou_affection_find_char_timeout,
         )
+        try:
+            await self.service.record_event_trigger(str(group_id))
+        except Exception:
+            logger.exception("[mantou-affection] 记录事件限制失败")
         return message

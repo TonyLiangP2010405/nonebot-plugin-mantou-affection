@@ -43,6 +43,13 @@ ZZZ_QUIZ_PROBABILITY_SETTING = "zzz_quiz_probability"
 PETIT_PLANET_QUIZ_PROBABILITY_SETTING = "petit_planet_quiz_probability"
 FILL_BLANK_PROBABILITY_SETTING = "fill_blank_probability"
 WHEEL_PROBABILITY_SETTING = "wheel_probability"
+EVENT_LIMIT_ENABLED_SETTING = "event_limit_enabled"
+EVENT_LIMIT_PER_HOUR_SETTING = "event_limit_per_hour"
+EVENT_LIMIT_HISTORY_SETTING = "event_limit_history"
+EVENT_LIMIT_WINDOW_SECONDS = 3600
+EVENT_LIMIT_MIN_PER_HOUR = 1
+EVENT_LIMIT_MAX_PER_HOUR = 100
+EVENT_LIMIT_HISTORY_KEEP = 128
 MEME_CONFIRM_WHITELIST_SETTING = "meme_confirm_whitelist"
 NEWBIE_GIFT_REPLY = " 扣分安慰：送你一张桃子表情包「{caption}」"
 AMBIENT_SCENE = "mantou.ambient"
@@ -75,6 +82,38 @@ class ProbabilityChange:
     label: str
     before: float
     after: float
+
+
+@dataclass(frozen=True)
+class EventLimitState:
+    """事件限流的当前状态：开关、每群每小时上限、本群已用与剩余次数。"""
+
+    enabled: bool
+    per_hour: int
+    used: int
+    remaining: int
+
+
+def _clean_event_history(raw: Any, now: float) -> dict[str, list[float]]:
+    """清洗事件触发记录：丢掉过期、非数值和未来时间戳，只留最近一小时内的。"""
+
+    if not isinstance(raw, dict):
+        return {}
+    cutoff = now - EVENT_LIMIT_WINDOW_SECONDS
+    history: dict[str, list[float]] = {}
+    for group_id, stamps in raw.items():
+        if not isinstance(stamps, list):
+            continue
+        fresh = [
+            float(stamp)
+            for stamp in stamps
+            if isinstance(stamp, (int, float))
+            and not isinstance(stamp, bool)
+            and cutoff < float(stamp) <= now
+        ]
+        if fresh:
+            history[str(group_id)] = fresh[-EVENT_LIMIT_HISTORY_KEEP:]
+    return history
 
 
 PROBABILITY_FIELDS: tuple[ProbabilityField, ...] = (
@@ -500,6 +539,79 @@ class AffectionService:
 
     async def set_wheel_probability(self, value: float) -> None:
         await self.store.set_setting(WHEEL_PROBABILITY_SETTING, float(value))
+
+    async def event_limit_enabled(self) -> bool:
+        """事件限流开关：运行时用 /馒头限制开关 覆盖过就优先用它。"""
+
+        stored: Any = await self.store.get_setting(EVENT_LIMIT_ENABLED_SETTING, None)
+        if isinstance(stored, bool):
+            return stored
+        return bool(self.config.mantou_affection_event_limit_enabled)
+
+    async def set_event_limit_enabled(self, enabled: bool) -> None:
+        await self.store.set_setting(EVENT_LIMIT_ENABLED_SETTING, bool(enabled))
+
+    async def event_limit_per_hour(self) -> int:
+        """每群每小时最多触发几次活动，运行时覆盖过就优先用它。"""
+
+        stored = await self._stored_int(
+            EVENT_LIMIT_PER_HOUR_SETTING,
+            self.config.mantou_affection_event_limit_per_hour,
+        )
+        return min(EVENT_LIMIT_MAX_PER_HOUR, max(EVENT_LIMIT_MIN_PER_HOUR, stored))
+
+    async def set_event_limit_per_hour(self, value: int) -> None:
+        await self.store.set_setting(EVENT_LIMIT_PER_HOUR_SETTING, int(value))
+
+    async def event_limit_used(self, group_id: str, *, now: float | None = None) -> int:
+        """本群最近一小时已经触发的活动次数。"""
+
+        moment = time.time() if now is None else now
+        raw: Any = await self.store.get_setting(EVENT_LIMIT_HISTORY_SETTING, {})
+        return len(_clean_event_history(raw, moment).get(str(group_id), ()))
+
+    async def event_limit_state(
+        self, group_id: str, *, now: float | None = None
+    ) -> EventLimitState:
+        """读取本群的事件限流状态，供状态命令展示。"""
+
+        enabled = await self.event_limit_enabled()
+        per_hour = await self.event_limit_per_hour()
+        used = await self.event_limit_used(group_id, now=now)
+        return EventLimitState(
+            enabled=enabled,
+            per_hour=per_hour,
+            used=used,
+            remaining=max(0, per_hour - used),
+        )
+
+    async def event_limit_allows(self, group_id: str) -> bool:
+        """限流关闭时永远放行；开启时本群这一小时还有额度才放行。"""
+
+        if not await self.event_limit_enabled():
+            return True
+        return await self.event_limit_used(group_id) < await self.event_limit_per_hour()
+
+    async def record_event_trigger(
+        self, group_id: str, *, now: float | None = None
+    ) -> int:
+        """记录一次真实触发的活动，返回本群最近一小时已用次数。
+
+        限流关闭时不记账，这样刚打开开关时本群从零开始计算额度。
+        """
+
+        if not await self.event_limit_enabled():
+            return 0
+        moment = time.time() if now is None else now
+
+        def mutate(raw: Any) -> tuple[int, dict[str, list[float]]]:
+            history = _clean_event_history(raw, moment)
+            stamps = history.setdefault(str(group_id), [])
+            stamps.append(moment)
+            del stamps[:-EVENT_LIMIT_HISTORY_KEEP]
+            return len(stamps), history
+
+        return await self.store.update_setting(EVENT_LIMIT_HISTORY_SETTING, {}, mutate)
 
     def _config_probability(self, attr: str) -> float:
         return clamp_probability(getattr(self.config, attr))

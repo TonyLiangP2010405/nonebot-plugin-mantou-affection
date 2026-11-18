@@ -219,3 +219,32 @@ def parse_probability_batch(text: str) -> ProbabilityBatch:
             PROBABILITY_BATCH_SCALE, _parse_scale_factor(raw[1:])
         )
     return ProbabilityBatch(PROBABILITY_BATCH_SET, parse_probability(raw))
+
+
+EVENT_LIMIT_TOGGLE_HINT = "请回复「开」或「关」，例如：/馒头限制开关 开"
+EVENT_LIMIT_ON_WORDS = frozenset({"开", "开启", "打开", "启用", "on", "true", "1", "是"})
+EVENT_LIMIT_OFF_WORDS = frozenset({"关", "关闭", "关掉", "禁用", "off", "false", "0", "否"})
+
+
+def parse_event_limit_toggle(text: str) -> bool:
+    """解析限流开关参数：开/关，也接受开启、关闭、on/off、1/0。"""
+
+    raw = text.strip().lower()
+    if raw in EVENT_LIMIT_ON_WORDS:
+        return True
+    if raw in EVENT_LIMIT_OFF_WORDS:
+        return False
+    raise ValueError(EVENT_LIMIT_TOGGLE_HINT)
+
+
+def parse_event_limit_count(text: str, *, minimum: int, maximum: int) -> int:
+    """解析每小时次数，超出范围时回复带范围的提示。"""
+
+    hint = f"请输入 {minimum}~{maximum} 之间的整数，例如：/馒头限制次数 5"
+    try:
+        value = int(text.strip())
+    except ValueError as error:
+        raise ValueError(hint) from error
+    if not minimum <= value <= maximum:
+        raise ValueError(hint)
+    return value
