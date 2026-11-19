@@ -43,11 +43,13 @@ DOWNLOAD_ATTEMPTS = 3
 
 __all__ = [
     "COLLECTIONS",
+    "WALLPAPER_GAME_ALIASES",
     "Wallpaper",
     "WallpaperCollection",
     "WallpaperError",
     "WallpaperLibrary",
     "WallpaperUnavailable",
+    "match_wallpaper_game",
 ]
 
 
@@ -112,6 +114,28 @@ COLLECTIONS: tuple[WallpaperCollection, ...] = (
     WallpaperCollection("绝区零", "wiki", 1989, "zzz"),
     WallpaperCollection("绝区零", "wiki", 1990, "zzz"),
 )
+
+# 用户输入的游戏名 -> 合集里的标准名, 统一小写后匹配。
+WALLPAPER_GAME_ALIASES: dict[str, str] = {
+    "原神": "原神",
+    "genshin": "原神",
+    "ys": "原神",
+    "崩坏：星穹铁道": "崩坏：星穹铁道",
+    "崩坏星穹铁道": "崩坏：星穹铁道",
+    "星穹铁道": "崩坏：星穹铁道",
+    "星铁": "崩坏：星穹铁道",
+    "崩铁": "崩坏：星穹铁道",
+    "hsr": "崩坏：星穹铁道",
+    "绝区零": "绝区零",
+    "绝区": "绝区零",
+    "zzz": "绝区零",
+}
+
+
+def match_wallpaper_game(query: str) -> str | None:
+    """把用户输入的游戏名换成合集里的标准名，认不出来返回 None。"""
+
+    return WALLPAPER_GAME_ALIASES.get(query.strip().lower())
 
 
 def _wiki_image_urls(node: Any) -> list[str]:
@@ -350,14 +374,24 @@ class WallpaperLibrary:
             raise WallpaperUnavailable(f"壁纸文件为空: {url}")
         return data
 
-    async def draw(self) -> tuple[Wallpaper, bytes]:
-        """随机取一个合集的随机一张图，返回壁纸描述和图片内容。"""
+    async def draw(self, game: str | None = None) -> tuple[Wallpaper, bytes]:
+        """随机取一个合集的随机一张图，返回壁纸描述和图片内容。
+
+        ``game`` 非空时只在指定游戏的合集里抽，传标准名（``原神`` /
+        ``崩坏：星穹铁道`` / ``绝区零``）。
+        """
 
         if not self.enabled:
             raise WallpaperUnavailable("壁纸功能未启用")
         if not self.collections:
             raise WallpaperUnavailable("没有配置壁纸合集")
-        order = list(self.collections)
+        order = [
+            collection
+            for collection in self.collections
+            if game is None or collection.game == game
+        ]
+        if not order:
+            raise WallpaperUnavailable(f"没有 {game} 的壁纸合集")
         self.rng.shuffle(order)
         last_error: Exception | None = None
         for collection in order:

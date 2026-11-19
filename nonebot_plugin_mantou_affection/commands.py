@@ -31,6 +31,11 @@ from .service import (
     AffectionService,
     normalize_nickname,
 )
+from .wheel_wallpapers import (
+    WallpaperLibrary,
+    WallpaperUnavailable,
+    match_wallpaper_game,
+)
 
 BET_CHANCE_USAGE = (
     "请输入 0~1 的小数（如 0.0005）或百分数（如 0.05%），0 即关闭馒头博弈"
@@ -55,6 +60,12 @@ FILL_BLANK_CHANCE_USAGE = (
     "请输入 0~1 的小数（如 0.0005）或百分数（如 0.05%），0 即关闭补句问答"
 )
 WHEEL_CHANCE_USAGE = "请输入 0~1 的小数或百分数（如 0.1%），0 即关闭馒头转盘"
+WALLPAPER_USAGE = (
+    "用法：/馒头壁纸 [原神/星铁/绝区零]\n"
+    "不带参数全库随机；指定游戏只抽这个游戏的官方壁纸"
+)
+WALLPAPER_FAILED_REPLY = "这次没取到壁纸：米游社或 Wiki 暂时连不上，稍后再试。"
+WALLPAPER_DISABLED_REPLY = "壁纸库没有接线，暂时抽不了。"
 PROBABILITY_BATCH_USAGE = (
     "用法：\n"
     "/馒头概率总调 0.05% —— 全部统一设为该值\n"
@@ -88,6 +99,7 @@ ADMIN_HELP_LINES: tuple[str, ...] = (
     "/馒头转盘概率 0.1% —— 查看或调整命运齿轮概率",
     "/馒头概率总调 —— 总览全部概率；带数值统一设置，"
     "×倍率缩放，重置恢复默认",
+    "/馒头壁纸 [原神/星铁/绝区零] —— 手动抽一张官方壁纸",
     "/馒头限制开关 [开/关] —— 查看或切换事件限制（默认关闭）",
     f"/馒头限制次数 5 —— 查看或调整每群每 {EVENT_LIMIT_WINDOW_HOURS} 小时"
     "最多触发几次活动（1~100）",
@@ -222,6 +234,7 @@ def register_commands(
     config: Config,
     pk: PkCoordinator | None = None,
     image_processing: ImageProcessingCoordinator | None = None,
+    wallpapers: WallpaperLibrary | None = None,
 ) -> tuple:
     profile_cmd = on_command(
         "馒头好感",
@@ -364,6 +377,13 @@ def register_commands(
     event_limit_count_cmd = on_command(
         "馒头限制次数",
         aliases={"馒头每两小时次数", "馒头限制上限", "馒头事件上限"},
+        permission=SUPERUSER,
+        priority=10,
+        block=True,
+    )
+    wallpaper_cmd = on_command(
+        "馒头壁纸",
+        aliases={"馒头随机壁纸", "馒头抽壁纸"},
         permission=SUPERUSER,
         priority=10,
         block=True,
@@ -1107,6 +1127,49 @@ def register_commands(
             f"事件限制已调整为每群每 {EVENT_LIMIT_WINDOW_HOURS} 小时 {value} 次{note}"
         )
 
+    @wallpaper_cmd.handle()
+    async def handle_wallpaper(args: Message = CommandArg()) -> None:
+        raw = args.extract_plain_text().strip()
+        game = None
+        if raw:
+            game = match_wallpaper_game(raw)
+            if game is None:
+                await wallpaper_cmd.finish(WALLPAPER_USAGE)
+                return
+        if wallpapers is None:
+            await wallpaper_cmd.finish(WALLPAPER_DISABLED_REPLY)
+            return
+        try:
+            wallpaper, data = await wallpapers.draw(game)
+        except WallpaperUnavailable as error:
+            logger.warning(f"[mantou-affection] 手动抽取壁纸失败: {error}")
+            await wallpaper_cmd.finish(WALLPAPER_FAILED_REPLY)
+            return
+        except Exception:
+            logger.exception("[mantou-affection] 抽取壁纸出错")
+            await wallpaper_cmd.finish(WALLPAPER_FAILED_REPLY)
+            return
+
+        label = (
+            f"{wallpaper.game} · {wallpaper.collection}"
+            if wallpaper.collection
+            else wallpaper.game
+        )
+        caption = MessageSegment.text(f"🖼️ 随机壁纸（{label}）：")
+        try:
+            await wallpaper_cmd.send(caption + MessageSegment.image(data))
+            return
+        except Exception:
+            logger.exception("[mantou-affection] 壁纸图片发送失败，改用原图直链")
+        try:
+            await wallpaper_cmd.send(caption + MessageSegment.image(wallpaper.url))
+            return
+        except Exception:
+            logger.exception("[mantou-affection] 壁纸直链发送失败")
+        await wallpaper_cmd.finish(
+            caption + MessageSegment.text(f"\n下载地址：{wallpaper.url}")
+        )
+
     @meme_whitelist_cmd.handle()
     async def handle_meme_whitelist(
         event: GroupMessageEvent, args: Message = CommandArg()
@@ -1212,5 +1275,6 @@ def register_commands(
         event_limit_toggle_cmd,
         event_limit_count_cmd,
         admin_help_cmd,
+        wallpaper_cmd,
         image_cmd,
     )

@@ -12,6 +12,7 @@ from nonebot_plugin_mantou_affection.wheel_wallpapers import (
     WallpaperCollection,
     WallpaperLibrary,
     WallpaperUnavailable,
+    match_wallpaper_game,
 )
 
 WIKI_URL = (
@@ -268,3 +269,46 @@ def test_unknown_collection_kind_is_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(WallpaperUnavailable, match="未知"):
         library._resolve(library.collections[0])
+
+
+async def test_draw_can_be_limited_to_one_game(tmp_path: Path) -> None:
+    opener = FakeOpener(
+        {
+            **wiki_routes(),
+            IMG_A: b"png-a",
+            IMG_B: b"png-b",
+            POST_URL: json.dumps(POST_PAYLOAD).encode("utf-8"),
+            BBS_A: b"bbs-a",
+        }
+    )
+    library = make_library(
+        tmp_path,
+        opener,
+        collections=(
+            WallpaperCollection("绝区零", "wiki", 689, "zzz"),
+            WallpaperCollection("原神", "post", 70866259),
+        ),
+        rng=random.Random(0),
+    )
+
+    wallpaper, data = await library.draw("原神")
+
+    assert wallpaper.game == "原神"
+    assert data == b"bbs-a"
+    assert all(WIKI_URL not in call for call in opener.calls)
+
+
+async def test_draw_rejects_unknown_game(tmp_path: Path) -> None:
+    library = make_library(tmp_path, FakeOpener(wiki_routes()))
+
+    with pytest.raises(WallpaperUnavailable, match="没有"):
+        await library.draw("原神")
+
+
+def test_match_wallpaper_game_aliases() -> None:
+    assert match_wallpaper_game("原神") == "原神"
+    assert match_wallpaper_game(" GENSHIN ") == "原神"
+    assert match_wallpaper_game("星铁") == "崩坏：星穹铁道"
+    assert match_wallpaper_game("绝区") == "绝区零"
+    assert match_wallpaper_game("崩坏3") is None
+    assert match_wallpaper_game("") is None

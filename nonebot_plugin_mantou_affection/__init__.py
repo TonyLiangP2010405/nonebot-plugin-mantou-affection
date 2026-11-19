@@ -164,7 +164,7 @@ wheel_coordinator = WheelCoordinator(
 )
 event_coordinator.attach_wheel(wheel_coordinator)
 matchers = register_commands(
-    service, plugin_config, pk_coordinator, image_processing
+    service, plugin_config, pk_coordinator, image_processing, wallpapers
 )
 ambient_matcher, answer_matcher = register_ambient(
     service,
