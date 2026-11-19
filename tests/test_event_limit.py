@@ -92,7 +92,13 @@ def _find_command(commands, handler_name: str):
 def test_event_limit_defaults() -> None:
     config = Config()
     assert config.mantou_affection_event_limit_enabled is False
-    assert config.mantou_affection_event_limit_per_hour == 5
+    assert config.mantou_affection_event_limit_per_window == 5
+    assert EVENT_LIMIT_WINDOW_SECONDS == 2 * 3600
+
+
+def test_event_limit_accepts_legacy_config_name() -> None:
+    config = Config(mantou_affection_event_limit_per_hour=8)
+    assert config.mantou_affection_event_limit_per_window == 8
 
 
 async def test_disabled_limit_allows_everything_and_records_nothing(
@@ -110,7 +116,7 @@ async def test_enabled_limit_blocks_after_quota(tmp_path: Path) -> None:
         tmp_path,
         Config(
             mantou_affection_event_limit_enabled=True,
-            mantou_affection_event_limit_per_hour=2,
+            mantou_affection_event_limit_per_window=2,
         ),
     )
     now = time()
@@ -121,7 +127,7 @@ async def test_enabled_limit_blocks_after_quota(tmp_path: Path) -> None:
 
     state = await service.event_limit_state(GROUP_ID, now=now)
     assert state.enabled is True
-    assert state.per_hour == 2
+    assert state.per_window == 2
     assert state.used == 2
     assert state.remaining == 0
 
@@ -131,7 +137,7 @@ async def test_concurrent_records_are_not_lost(tmp_path: Path) -> None:
         tmp_path,
         Config(
             mantou_affection_event_limit_enabled=True,
-            mantou_affection_event_limit_per_hour=100,
+            mantou_affection_event_limit_per_window=100,
         ),
     )
     await asyncio.gather(
@@ -140,17 +146,20 @@ async def test_concurrent_records_are_not_lost(tmp_path: Path) -> None:
     assert await service.event_limit_used(GROUP_ID) == 10
 
 
-async def test_limit_window_rolls_after_an_hour(tmp_path: Path) -> None:
+async def test_limit_window_rolls_after_two_hours(tmp_path: Path) -> None:
     service = _service(
         tmp_path,
         Config(
             mantou_affection_event_limit_enabled=True,
-            mantou_affection_event_limit_per_hour=1,
+            mantou_affection_event_limit_per_window=1,
         ),
     )
     now = time()
     await service.record_event_trigger(GROUP_ID, now=now)
     assert await service.event_limit_used(GROUP_ID, now=now) == 1
+    assert await service.event_limit_used(
+        GROUP_ID, now=now + EVENT_LIMIT_WINDOW_SECONDS - 1
+    ) == 1
     assert await service.event_limit_used(
         GROUP_ID, now=now + EVENT_LIMIT_WINDOW_SECONDS + 1
     ) == 0
@@ -159,7 +168,7 @@ async def test_limit_window_rolls_after_an_hour(tmp_path: Path) -> None:
 async def test_runtime_override_takes_precedence(tmp_path: Path) -> None:
     service = _service(tmp_path)  # 配置默认关闭
     await service.set_event_limit_enabled(True)
-    await service.set_event_limit_per_hour(1)
+    await service.set_event_limit_per_window(1)
     await service.record_event_trigger(GROUP_ID)
     assert await service.event_limit_allows(GROUP_ID) is False
 
@@ -169,7 +178,7 @@ async def test_limit_is_tracked_per_group(tmp_path: Path) -> None:
         tmp_path,
         Config(
             mantou_affection_event_limit_enabled=True,
-            mantou_affection_event_limit_per_hour=1,
+            mantou_affection_event_limit_per_window=1,
         ),
     )
     now = time()
@@ -182,7 +191,7 @@ async def test_limit_survives_restart(tmp_path: Path) -> None:
     path = tmp_path / "affection.json"
     config = Config(
         mantou_affection_event_limit_enabled=True,
-        mantou_affection_event_limit_per_hour=1,
+        mantou_affection_event_limit_per_window=1,
     )
     service = AffectionService(AffectionStore(path), config)
     await service.set_event_limit_enabled(True)
@@ -199,7 +208,7 @@ async def test_limit_ignores_broken_history(tmp_path: Path) -> None:
         tmp_path,
         Config(
             mantou_affection_event_limit_enabled=True,
-            mantou_affection_event_limit_per_hour=1,
+            mantou_affection_event_limit_per_window=1,
         ),
     )
     await service.store.set_setting("event_limit_history", "not a dict")
@@ -207,14 +216,23 @@ async def test_limit_ignores_broken_history(tmp_path: Path) -> None:
     assert await service.event_limit_allows(GROUP_ID) is True
 
 
-async def test_limit_per_hour_override_is_clamped(tmp_path: Path) -> None:
+async def test_limit_per_window_override_is_clamped(tmp_path: Path) -> None:
     service = _service(tmp_path)
-    await service.store.set_setting("event_limit_per_hour", 9999)
-    assert await service.event_limit_per_hour() == 100
-    await service.store.set_setting("event_limit_per_hour", 0)
-    assert await service.event_limit_per_hour() == 1
-    await service.store.set_setting("event_limit_per_hour", "oops")
-    assert await service.event_limit_per_hour() == 5
+    await service.store.set_setting("event_limit_per_window", 9999)
+    assert await service.event_limit_per_window() == 100
+    await service.store.set_setting("event_limit_per_window", 0)
+    assert await service.event_limit_per_window() == 1
+    await service.store.set_setting("event_limit_per_window", "oops")
+    assert await service.event_limit_per_window() == 5
+
+
+async def test_legacy_stored_limit_is_still_read(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    await service.store.set_setting("event_limit_per_hour", 7)
+    assert await service.event_limit_per_window() == 7
+
+    await service.set_event_limit_per_window(9)
+    assert await service.event_limit_per_window() == 9
 
 
 async def test_ambient_handler_stays_quiet_when_quota_is_spent(
@@ -225,7 +243,7 @@ async def test_ambient_handler_stays_quiet_when_quota_is_spent(
         mantou_affection_ambient_event_ratio=0.0,
         mantou_affection_newbie_protection_below=0,
         mantou_affection_event_limit_enabled=True,
-        mantou_affection_event_limit_per_hour=5,
+        mantou_affection_event_limit_per_window=5,
         mantou_affection_wheel_chance=0.0,
     )
     service = _service(tmp_path, config, text_library=AffectionTextLibrary(bundled_texts_path))
@@ -250,7 +268,7 @@ async def test_ambient_handler_records_real_activity(
         mantou_affection_ambient_enabled=False,
         mantou_affection_newbie_protection_below=0,
         mantou_affection_event_limit_enabled=True,
-        mantou_affection_event_limit_per_hour=5,
+        mantou_affection_event_limit_per_window=5,
         mantou_affection_wheel_chance=0.0,
     )
     service = _service(tmp_path, config)
@@ -285,7 +303,7 @@ async def test_plain_ambient_reaction_does_not_consume_quota(
         mantou_affection_wheel_chance=0.0,
         mantou_affection_newbie_protection_below=0,
         mantou_affection_event_limit_enabled=True,
-        mantou_affection_event_limit_per_hour=5,
+        mantou_affection_event_limit_per_window=5,
     )
     service = _service(tmp_path, config, text_library=AffectionTextLibrary(bundled_texts_path))
     coordinator = EventCoordinator(service, config)
@@ -304,7 +322,7 @@ async def test_poke_event_respects_limit(
 ) -> None:
     config = Config(
         mantou_affection_event_limit_enabled=True,
-        mantou_affection_event_limit_per_hour=1,
+        mantou_affection_event_limit_per_window=1,
         mantou_affection_newbie_protection_below=0,
     )
     service = _service(tmp_path, config)
@@ -380,21 +398,22 @@ async def test_limit_toggle_command_reports_and_switches(
 
     await command.handlers[0].call(_event(), Message(""))
     assert "事件限制：已关闭" in sent[0]
-    assert "每群每小时上限：5 次" in sent[0]
+    assert "每群每 2 小时上限：5 次" in sent[0]
+    assert "活动开启时段：每天 09:00~16:00（转盘不受时段限制）" in sent[0]
 
     await command.handlers[0].call(_event(), Message("开"))
     assert sent[1] == (
-        "已开启事件限制：每群每小时最多触发 5 次活动。\n"
+        "已开启事件限制：每群每 2 小时最多触发 5 次活动。\n"
         "可用 /馒头限制次数 N 调整上限（1~100）。"
     )
     assert await service.event_limit_enabled() is True
 
     await service.record_event_trigger(GROUP_ID)
     await command.handlers[0].call(_event(), Message(""))
-    assert "本群最近一小时已触发 1 次，剩余 4 次" in sent[-1]
+    assert "本群最近 2 小时内已触发 1 次，剩余 4 次" in sent[-1]
 
     await command.handlers[0].call(_event(), Message("关"))
-    assert sent[-1] == "已关闭事件限制：每小时触发次数不再受限制。"
+    assert sent[-1] == "已关闭事件限制：活动触发次数不再受限制。"
     assert await service.event_limit_enabled() is False
 
 
@@ -410,21 +429,21 @@ async def test_limit_count_command_reports_and_sets(tmp_path: Path, monkeypatch)
     assert "Superuser" in repr(command.permission)
 
     await command.handlers[0].call(Message(""))
-    assert "当前事件限制：每群每小时最多 5 次（限制已关闭）" in sent[0]
+    assert "当前事件限制：每群每 2 小时最多 5 次（限制已关闭）" in sent[0]
 
     await command.handlers[0].call(Message("8"))
     assert sent[1] == (
-        "事件限制已调整为每群每小时 8 次"
+        "事件限制已调整为每群每 2 小时 8 次"
         "（限制当前已关闭，发送 /馒头限制开关 开 后生效）"
     )
-    assert await service.event_limit_per_hour() == 8
+    assert await service.event_limit_per_window() == 8
 
     await command.handlers[0].call(Message("0"))
     assert "请输入 1~100 之间的整数" in sent[2]
 
     await service.set_event_limit_enabled(True)
     await command.handlers[0].call(Message(""))
-    assert "当前事件限制：每群每小时最多 8 次（限制已开启）" in sent[-1]
+    assert "当前事件限制：每群每 2 小时最多 8 次（限制已开启）" in sent[-1]
 
 
 async def test_admin_help_command_lists_every_command(

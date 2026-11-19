@@ -6,7 +6,11 @@ import pytest
 from nonebot.adapters.onebot.v11 import Adapter
 
 
-def pytest_configure() -> None:
+def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line(
+        "markers",
+        "real_active_hours: 用真实的开启时段判定，不套用测试默认的「全天开放」",
+    )
     localstore_root = Path(tempfile.mkdtemp(prefix="mantou-affection-test-"))
     nonebot.init(
         driver="~none",
@@ -23,6 +27,24 @@ def pytest_configure() -> None:
     import nonebot_plugin_mantou_affection as mantou_affection
 
     mantou_affection.taozi_stickers.enabled = False
+
+
+@pytest.fixture(autouse=True)
+def _always_open_active_hours(request: pytest.FixtureRequest, monkeypatch) -> None:
+    """默认把随机活动的开启时段当成全天，免得用例结果随跑测试的实际时间变化。
+
+    验证时段限制本身的用例用 @pytest.mark.real_active_hours 关掉这个兜底。
+    """
+
+    if request.node.get_closest_marker("real_active_hours") is not None:
+        return
+    from nonebot_plugin_mantou_affection.service import AffectionService
+
+    monkeypatch.setattr(
+        AffectionService,
+        "activity_hours_open",
+        lambda self, *, now=None: True,
+    )
 
 
 @pytest.fixture()

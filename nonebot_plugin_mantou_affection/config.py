@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 
 class Config(BaseModel):
@@ -52,7 +52,19 @@ class Config(BaseModel):
     mantou_affection_fill_blank_chance: float = Field(default=0.0005, ge=0.0, le=1.0)
     mantou_affection_fill_blank_timeout: int = Field(default=60, ge=5, le=600)
     mantou_affection_event_limit_enabled: bool = False
-    mantou_affection_event_limit_per_hour: int = Field(default=5, ge=1, le=100)
+    mantou_affection_event_limit_per_window: int = Field(
+        default=5,
+        ge=1,
+        le=100,
+        # 旧版本的配置名: 升级后继续认。
+        validation_alias=AliasChoices(
+            "mantou_affection_event_limit_per_window",
+            "mantou_affection_event_limit_per_hour",
+        ),
+    )
+    mantou_affection_active_hours_enabled: bool = True
+    mantou_affection_active_hours_start: int = Field(default=9, ge=0, le=23)
+    mantou_affection_active_hours_end: int = Field(default=16, ge=0, le=23)
     mantou_affection_link_rewards: dict[str, int] = Field(
         default_factory=lambda: {
             "nonebot_plugin_taozi": 2,

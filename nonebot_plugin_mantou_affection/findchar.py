@@ -589,10 +589,12 @@ class FindCharCoordinator:
 
         和戳一戳随机事件保持同一套契约：事件消息由调用方发送（poke 返回的 text），
         send 只用于窗口结束后的结算消息，没人传 send 时退化成普通戳一戳。
-        事件限制开启且本群额度用完时直接返回 None。
+        开启时段之外或事件限制用完时直接返回 None。
         """
 
-        if send is None or self.rng.random() >= chance:
+        if send is None or not self.service.activity_hours_open():
+            return None
+        if self.rng.random() >= chance:
             return None
         try:
             allowed = await self.service.event_limit_allows(str(group_id))

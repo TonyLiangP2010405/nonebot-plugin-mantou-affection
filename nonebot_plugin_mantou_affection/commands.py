@@ -25,8 +25,9 @@ from .parsing import (
 )
 from .pk import BUNDLED_PK_PATH, PkCoordinator, PkQuestionLibrary
 from .service import (
-    EVENT_LIMIT_MAX_PER_HOUR,
-    EVENT_LIMIT_MIN_PER_HOUR,
+    EVENT_LIMIT_MAX_PER_WINDOW,
+    EVENT_LIMIT_MIN_PER_WINDOW,
+    EVENT_LIMIT_WINDOW_HOURS,
     AffectionService,
     normalize_nickname,
 )
@@ -87,14 +88,16 @@ ADMIN_HELP_LINES: tuple[str, ...] = (
     "/馒头转盘概率 0.1% —— 查看或调整命运齿轮概率",
     "/馒头概率总调 —— 总览全部概率；带数值统一设置，"
     "×倍率缩放，重置恢复默认",
-    "/馒头限制开关 [开/关] —— 查看或切换每小时事件限制（默认关闭）",
-    "/馒头限制次数 5 —— 查看或调整每群每小时最多触发几次活动（1~100）",
+    "/馒头限制开关 [开/关] —— 查看或切换事件限制（默认关闭）",
+    f"/馒头限制次数 5 —— 查看或调整每群每 {EVENT_LIMIT_WINDOW_HOURS} 小时"
+    "最多触发几次活动（1~100）",
     "/馒头管理帮助 —— 查看这份完整命令帮助",
     "/馒头强制事件 @群友 —— 回复 1~12 强制开一场活动",
 )
 HELP_FOOTER = (
     "提示：概率命令不带参数就查看当前值，0 即关闭对应活动；"
-    "事件限制开启后每群每小时最多触发限定次数的活动，达到上限后自动活动"
+    f"事件限制开启后每群每 {EVENT_LIMIT_WINDOW_HOURS} 小时最多触发限定次数的活动，"
+    "达到上限后自动活动"
     "（含小动作）会暂停到额度恢复，答题、主动命令和 /馒头强制事件 不受影响；"
     "旧命令 /馒头好感帮助 仍然可用。"
 )
@@ -147,6 +150,18 @@ def _format_wait(seconds: int) -> str:
 def _format_probability(value: float) -> str:
     percent = f"{value * 100:.6f}".rstrip("0").rstrip(".")
     return f"{percent or '0'}%"
+
+
+def _activity_hours_text(config: Config) -> str:
+    """把随机活动的开启时段渲染成状态命令里的一行。"""
+
+    if not config.mantou_affection_active_hours_enabled:
+        return "全天（时段限制已关闭）"
+    start = config.mantou_affection_active_hours_start
+    end = config.mantou_affection_active_hours_end
+    if start == end:
+        return "全天"
+    return f"每天 {start:02d}:00~{end:02d}:00（转盘不受时段限制）"
 
 
 def _format_factor(value: float) -> str:
@@ -348,7 +363,7 @@ def register_commands(
     )
     event_limit_count_cmd = on_command(
         "馒头限制次数",
-        aliases={"馒头每小时次数", "馒头限制上限", "馒头事件上限"},
+        aliases={"馒头每两小时次数", "馒头限制上限", "馒头事件上限"},
         permission=SUPERUSER,
         priority=10,
         block=True,
@@ -1007,11 +1022,12 @@ def register_commands(
                 return
             lines = [
                 f"🕒 事件限制：{'已开启' if state.enabled else '已关闭'}",
-                f"每群每小时上限：{state.per_hour} 次",
+                f"每群每 {EVENT_LIMIT_WINDOW_HOURS} 小时上限：{state.per_window} 次",
+                f"活动开启时段：{_activity_hours_text(config)}",
             ]
             if group_id and state.enabled:
                 lines.append(
-                    f"本群最近一小时已触发 {state.used} 次，"
+                    f"本群最近 {EVENT_LIMIT_WINDOW_HOURS} 小时内已触发 {state.used} 次，"
                     f"剩余 {state.remaining} 次"
                 )
             if state.enabled:
@@ -1031,20 +1047,21 @@ def register_commands(
             return
         try:
             await service.set_event_limit_enabled(enabled)
-            per_hour = await service.event_limit_per_hour()
+            per_window = await service.event_limit_per_window()
         except Exception:
             logger.exception("[mantou-affection] 保存事件限制开关失败")
             await event_limit_toggle_cmd.finish("保存失败，请检查数据目录权限后重试。")
             return
         if not enabled:
             await event_limit_toggle_cmd.finish(
-                "已关闭事件限制：每小时触发次数不再受限制。"
+                "已关闭事件限制：活动触发次数不再受限制。"
             )
             return
         await event_limit_toggle_cmd.finish(
-            f"已开启事件限制：每群每小时最多触发 {per_hour} 次活动。\n"
+            f"已开启事件限制：每群每 {EVENT_LIMIT_WINDOW_HOURS} 小时"
+            f"最多触发 {per_window} 次活动。\n"
             "可用 /馒头限制次数 N 调整上限"
-            f"（{EVENT_LIMIT_MIN_PER_HOUR}~{EVENT_LIMIT_MAX_PER_HOUR}）。"
+            f"（{EVENT_LIMIT_MIN_PER_WINDOW}~{EVENT_LIMIT_MAX_PER_WINDOW}）。"
         )
 
     @event_limit_count_cmd.handle()
@@ -1052,7 +1069,7 @@ def register_commands(
         raw = args.extract_plain_text().strip()
         if not raw:
             try:
-                current = await service.event_limit_per_hour()
+                current = await service.event_limit_per_window()
                 enabled = await service.event_limit_enabled()
             except Exception:
                 logger.exception("[mantou-affection] 读取事件限制次数失败")
@@ -1061,24 +1078,25 @@ def register_commands(
                 )
                 return
             await event_limit_count_cmd.finish(
-                f"当前事件限制：每群每小时最多 {current} 次"
+                f"当前事件限制：每群每 {EVENT_LIMIT_WINDOW_HOURS} 小时"
+                f"最多 {current} 次"
                 f"（限制{'已开启' if enabled else '已关闭'}）\n"
                 f"发送 /馒头限制次数 N 调整，范围 "
-                f"{EVENT_LIMIT_MIN_PER_HOUR}~{EVENT_LIMIT_MAX_PER_HOUR}。"
+                f"{EVENT_LIMIT_MIN_PER_WINDOW}~{EVENT_LIMIT_MAX_PER_WINDOW}。"
             )
             return
 
         try:
             value = parse_event_limit_count(
                 raw,
-                minimum=EVENT_LIMIT_MIN_PER_HOUR,
-                maximum=EVENT_LIMIT_MAX_PER_HOUR,
+                minimum=EVENT_LIMIT_MIN_PER_WINDOW,
+                maximum=EVENT_LIMIT_MAX_PER_WINDOW,
             )
         except ValueError as error:
             await event_limit_count_cmd.finish(str(error))
             return
         try:
-            await service.set_event_limit_per_hour(value)
+            await service.set_event_limit_per_window(value)
             enabled = await service.event_limit_enabled()
         except Exception:
             logger.exception("[mantou-affection] 保存事件限制次数失败")
@@ -1086,7 +1104,7 @@ def register_commands(
             return
         note = "" if enabled else "（限制当前已关闭，发送 /馒头限制开关 开 后生效）"
         await event_limit_count_cmd.finish(
-            f"事件限制已调整为每群每小时 {value} 次{note}"
+            f"事件限制已调整为每群每 {EVENT_LIMIT_WINDOW_HOURS} 小时 {value} 次{note}"
         )
 
     @meme_whitelist_cmd.handle()

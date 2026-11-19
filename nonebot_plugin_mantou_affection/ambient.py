@@ -371,10 +371,12 @@ class EventCoordinator:
 
         戳出来的事件按 penalty_scale=2 结算：负向选项与超时扣 2 倍，正向奖励不变。
         事件消息由调用方发送（作为 poke 返回的 text），send 只用于结算消息。
-        事件限制开启且本群额度用完时直接返回 None（好感 +1 仍然生效）。
+        开启时段之外或事件限制用完时直接返回 None（好感 +1 仍然生效）。
         """
 
-        if send is None or self.rng.random() >= chance:
+        if send is None or not self.service.activity_hours_open():
+            return None
+        if self.rng.random() >= chance:
             return None
         try:
             allowed = await self.service.event_limit_allows(str(group_id))
@@ -594,14 +596,45 @@ def register_ambient(
             except Exception:
                 logger.exception("[mantou-affection] 记录事件限制失败")
 
+        async def try_wheel() -> bool:
+            """命运齿轮转盘是唯一不受开启时段限制的活动，开起来就返回 True。"""
+
+            try:
+                wheel_ready = await service.wheel_triggered(group_id, user_id)
+            except Exception:
+                logger.exception("[mantou-affection] 判定命运齿轮转盘失败")
+                wheel_ready = False
+            if not wheel_ready:
+                return False
+            try:
+                started = await wheel_coordinator.start(
+                    group_id=group_id,
+                    user_id=user_id,
+                    nickname=nickname,
+                    bot=get_bot(),
+                    send=ambient.send,
+                )
+            except Exception:
+                logger.exception("[mantou-affection] 发起命运齿轮转盘失败")
+                started = False
+            return started
+
+        hours_open = service.activity_hours_open()
+
         try:
             limits_ok = await service.event_limit_allows(group_id)
         except Exception:
             logger.exception("[mantou-affection] 判定事件限制失败")
             limits_ok = True
         if not limits_ok:
-            # 限流开启且本群这一小时的额度用完了, 连小动作一起安静下来,
+            # 限流开启且本群这一窗口的额度用完了, 连小动作一起安静下来,
             # 只保留答题和主动命令。额度按真实开起来的活动计数。
+            return
+
+        if not hours_open:
+            # 开启时段之外只保留转盘, 其它随机活动和小动作一律安静下来。
+            if await try_wheel():
+                await note_activity()
             return
 
         try:
@@ -785,25 +818,8 @@ def register_ambient(
             if started:
                 return await note_activity()
 
-        try:
-            wheel_ready = await service.wheel_triggered(group_id, user_id)
-        except Exception:
-            logger.exception("[mantou-affection] 判定命运齿轮转盘失败")
-            wheel_ready = False
-        if wheel_ready:
-            try:
-                started = await wheel_coordinator.start(
-                    group_id=group_id,
-                    user_id=user_id,
-                    nickname=nickname,
-                    bot=get_bot(),
-                    send=ambient.send,
-                )
-            except Exception:
-                logger.exception("[mantou-affection] 发起命运齿轮转盘失败")
-                started = False
-            if started:
-                return await note_activity()
+        if await try_wheel():
+            return await note_activity()
 
         try:
             text = await service.ambient_reaction(group_id, user_id)

@@ -238,7 +238,7 @@ def parse_event_limit_toggle(text: str) -> bool:
 
 
 def parse_event_limit_count(text: str, *, minimum: int, maximum: int) -> int:
-    """解析每小时次数，超出范围时回复带范围的提示。"""
+    """解析每群每 2 小时的次数上限，超出范围时回复带范围的提示。"""
 
     hint = f"请输入 {minimum}~{maximum} 之间的整数，例如：/馒头限制次数 5"
     try:

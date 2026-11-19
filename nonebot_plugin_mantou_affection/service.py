@@ -44,11 +44,14 @@ PETIT_PLANET_QUIZ_PROBABILITY_SETTING = "petit_planet_quiz_probability"
 FILL_BLANK_PROBABILITY_SETTING = "fill_blank_probability"
 WHEEL_PROBABILITY_SETTING = "wheel_probability"
 EVENT_LIMIT_ENABLED_SETTING = "event_limit_enabled"
-EVENT_LIMIT_PER_HOUR_SETTING = "event_limit_per_hour"
+EVENT_LIMIT_PER_WINDOW_SETTING = "event_limit_per_window"
+# 旧版本把次数存在 event_limit_per_hour 下, 升级后继续沿用这份值。
+LEGACY_EVENT_LIMIT_PER_HOUR_SETTING = "event_limit_per_hour"
 EVENT_LIMIT_HISTORY_SETTING = "event_limit_history"
-EVENT_LIMIT_WINDOW_SECONDS = 3600
-EVENT_LIMIT_MIN_PER_HOUR = 1
-EVENT_LIMIT_MAX_PER_HOUR = 100
+EVENT_LIMIT_WINDOW_HOURS = 2
+EVENT_LIMIT_WINDOW_SECONDS = EVENT_LIMIT_WINDOW_HOURS * 3600
+EVENT_LIMIT_MIN_PER_WINDOW = 1
+EVENT_LIMIT_MAX_PER_WINDOW = 100
 EVENT_LIMIT_HISTORY_KEEP = 128
 MEME_CONFIRM_WHITELIST_SETTING = "meme_confirm_whitelist"
 NEWBIE_GIFT_REPLY = " 扣分安慰：送你一张桃子表情包「{caption}」"
@@ -86,16 +89,26 @@ class ProbabilityChange:
 
 @dataclass(frozen=True)
 class EventLimitState:
-    """事件限流的当前状态：开关、每群每小时上限、本群已用与剩余次数。"""
+    """事件限流的当前状态：开关、每群每 2 小时上限、本群已用与剩余次数。"""
 
     enabled: bool
-    per_hour: int
+    per_window: int
     used: int
     remaining: int
 
 
+def hour_in_active_window(hour: int, start: int, end: int) -> bool:
+    """判断整点 hour 是否落在 [start, end) 里；start 大于 end 时跨零点，相等视为全天开放。"""
+
+    if start == end:
+        return True
+    if start < end:
+        return start <= hour < end
+    return hour >= start or hour < end
+
+
 def _clean_event_history(raw: Any, now: float) -> dict[str, list[float]]:
-    """清洗事件触发记录：丢掉过期、非数值和未来时间戳，只留最近一小时内的。"""
+    """清洗事件触发记录：丢掉过期、非数值和未来时间戳，只留统计窗口内的。"""
 
     if not isinstance(raw, dict):
         return {}
@@ -540,6 +553,18 @@ class AffectionService:
     async def set_wheel_probability(self, value: float) -> None:
         await self.store.set_setting(WHEEL_PROBABILITY_SETTING, float(value))
 
+    def activity_hours_open(self, *, now: datetime | None = None) -> bool:
+        """当前是否处于随机活动的开启时段；转盘和主动命令不受这个时段限制。"""
+
+        if not self.config.mantou_affection_active_hours_enabled:
+            return True
+        moment = self._now() if now is None else now
+        return hour_in_active_window(
+            moment.hour,
+            self.config.mantou_affection_active_hours_start,
+            self.config.mantou_affection_active_hours_end,
+        )
+
     async def event_limit_enabled(self) -> bool:
         """事件限流开关：运行时用 /馒头限制开关 覆盖过就优先用它。"""
 
@@ -551,20 +576,23 @@ class AffectionService:
     async def set_event_limit_enabled(self, enabled: bool) -> None:
         await self.store.set_setting(EVENT_LIMIT_ENABLED_SETTING, bool(enabled))
 
-    async def event_limit_per_hour(self) -> int:
-        """每群每小时最多触发几次活动，运行时覆盖过就优先用它。"""
+    async def event_limit_per_window(self) -> int:
+        """每群每 2 小时最多触发几次活动，运行时覆盖过就优先用它。"""
 
-        stored = await self._stored_int(
-            EVENT_LIMIT_PER_HOUR_SETTING,
-            self.config.mantou_affection_event_limit_per_hour,
+        fallback = await self._stored_int(
+            LEGACY_EVENT_LIMIT_PER_HOUR_SETTING,
+            self.config.mantou_affection_event_limit_per_window,
         )
-        return min(EVENT_LIMIT_MAX_PER_HOUR, max(EVENT_LIMIT_MIN_PER_HOUR, stored))
+        stored = await self._stored_int(EVENT_LIMIT_PER_WINDOW_SETTING, fallback)
+        return min(
+            EVENT_LIMIT_MAX_PER_WINDOW, max(EVENT_LIMIT_MIN_PER_WINDOW, stored)
+        )
 
-    async def set_event_limit_per_hour(self, value: int) -> None:
-        await self.store.set_setting(EVENT_LIMIT_PER_HOUR_SETTING, int(value))
+    async def set_event_limit_per_window(self, value: int) -> None:
+        await self.store.set_setting(EVENT_LIMIT_PER_WINDOW_SETTING, int(value))
 
     async def event_limit_used(self, group_id: str, *, now: float | None = None) -> int:
-        """本群最近一小时已经触发的活动次数。"""
+        """本群当前统计窗口（2 小时）内已经触发的活动次数。"""
 
         moment = time.time() if now is None else now
         raw: Any = await self.store.get_setting(EVENT_LIMIT_HISTORY_SETTING, {})
@@ -576,26 +604,26 @@ class AffectionService:
         """读取本群的事件限流状态，供状态命令展示。"""
 
         enabled = await self.event_limit_enabled()
-        per_hour = await self.event_limit_per_hour()
+        per_window = await self.event_limit_per_window()
         used = await self.event_limit_used(group_id, now=now)
         return EventLimitState(
             enabled=enabled,
-            per_hour=per_hour,
+            per_window=per_window,
             used=used,
-            remaining=max(0, per_hour - used),
+            remaining=max(0, per_window - used),
         )
 
     async def event_limit_allows(self, group_id: str) -> bool:
-        """限流关闭时永远放行；开启时本群这一小时还有额度才放行。"""
+        """限流关闭时永远放行；开启时本群这个窗口还有额度才放行。"""
 
         if not await self.event_limit_enabled():
             return True
-        return await self.event_limit_used(group_id) < await self.event_limit_per_hour()
+        return await self.event_limit_used(group_id) < await self.event_limit_per_window()
 
     async def record_event_trigger(
         self, group_id: str, *, now: float | None = None
     ) -> int:
-        """记录一次真实触发的活动，返回本群最近一小时已用次数。
+        """记录一次真实触发的活动，返回本群当前窗口已用次数。
 
         限流关闭时不记账，这样刚打开开关时本群从零开始计算额度。
         """

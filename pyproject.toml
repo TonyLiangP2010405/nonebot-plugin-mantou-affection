@@ -1,6 +1,6 @@
 [project]
 name = "nonebot-plugin-mantou-affection"
-version = "0.47.1"
+version = "0.48.0"
 description = "为群聊机器人馒头提供互动、等级称号和跨插件共享状态的好感度系统"
 authors = [{ name = "TonyLiangP2010405" }]
 license = "MIT"
@@ -43,6 +43,9 @@ plugins = ["nonebot_plugin_mantou_affection"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "real_active_hours: 用真实的开启时段判定，不套用测试默认的「全天开放」",
+]
 
 [tool.ruff]
 line-length = 100
