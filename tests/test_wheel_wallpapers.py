@@ -213,7 +213,7 @@ async def test_empty_image_download_is_rejected(tmp_path: Path) -> None:
     opener = FakeOpener({**wiki_routes(), IMG_A: b"", IMG_B: b"png-b"})
     library = make_library(tmp_path, opener, rng=random.Random(0))
 
-    wallpaper, data = await library.draw()
+    _wallpaper, data = await library.draw()
 
     assert data == b"png-b"
 
