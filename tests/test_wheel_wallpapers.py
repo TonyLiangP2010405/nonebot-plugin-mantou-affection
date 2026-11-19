@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import random
+import urllib.parse
 from pathlib import Path
 
 import pytest
@@ -312,3 +313,148 @@ def test_match_wallpaper_game_aliases() -> None:
     assert match_wallpaper_game("绝区") == "绝区零"
     assert match_wallpaper_game("崩坏3") is None
     assert match_wallpaper_game("") is None
+
+
+SEARCH_API = "https://bbs-api.miyoushe.com/post/wapi/searchPosts"
+INFO_SUFFIX = "?x-oss-process=image/info"
+BBS_FAN_A = "https://upload-bbs.miyoushe.com/upload/2026/01/01/fan-a.jpg"
+BBS_FAN_B = "https://upload-bbs.miyoushe.com/upload/2026/01/01/fan-b.jpg"
+
+
+def search_url(keyword: str) -> str:
+    params = urllib.parse.urlencode(
+        {"keyword": keyword, "size": 20, "offset": 0}
+    )
+    return f"{SEARCH_API}?{params}"
+
+
+def search_payload(images: list[str]) -> dict:
+    return {
+        "retcode": 0,
+        "data": {
+            "posts": [
+                {"post": {"post_id": 1, "images": images}},
+            ]
+        },
+    }
+
+
+def info_payload(width: int, height: int, size: int = 4096) -> bytes:
+    return json.dumps(
+        {
+            "ImageWidth": {"value": str(width)},
+            "ImageHeight": {"value": str(height)},
+            "FileSize": {"value": str(size)},
+        }
+    ).encode("utf-8")
+
+
+def test_search_images_are_filtered() -> None:
+    posts = [
+        {
+            "post": {
+                "images": [
+                    BBS_FAN_A,
+                    BBS_FAN_A,
+                    "https://img.example.com/a.jpg",
+                    BBS_FAN_B,
+                ]
+            }
+        },
+        {"post": {}},
+        {"msg": "没有图片"},
+        "oops",
+    ]
+
+    urls = wheel_wallpapers._search_image_urls(posts)
+
+    assert urls == [BBS_FAN_A, BBS_FAN_B]
+
+
+async def test_draw_fanart_uses_search_and_skips_small_images(
+    tmp_path: Path,
+) -> None:
+    keyword = "原神壁纸"
+    opener = FakeOpener(
+        {
+            search_url(keyword): json.dumps(
+                search_payload([BBS_FAN_A, BBS_FAN_B])
+            ).encode("utf-8"),
+            BBS_FAN_A + INFO_SUFFIX: info_payload(828, 1792),
+            BBS_FAN_B + INFO_SUFFIX: info_payload(3024, 4032),
+            BBS_FAN_B: b"fan-art",
+        }
+    )
+    library = make_library(
+        tmp_path,
+        opener,
+        collections=(),
+        fanart_collections=(
+            WallpaperCollection("原神", "search", 0, query=keyword),
+        ),
+        rng=random.Random(0),
+    )
+
+    wallpaper, data = await library.draw(fanart=True)
+
+    assert wallpaper.source == "fanart"
+    assert wallpaper.game == "原神"
+    assert wallpaper.collection == "米游社「原神壁纸」"
+    assert data == b"fan-art"
+    assert BBS_FAN_A not in opener.calls
+
+
+async def test_draw_fanart_keeps_images_when_info_is_missing(
+    tmp_path: Path,
+) -> None:
+    keyword = "绝区零壁纸"
+    opener = FakeOpener(
+        {
+            search_url(keyword): json.dumps(
+                search_payload([BBS_FAN_A])
+            ).encode("utf-8"),
+            BBS_FAN_A: b"fan-art",
+        }
+    )
+    library = make_library(
+        tmp_path,
+        opener,
+        collections=(),
+        fanart_collections=(
+            WallpaperCollection("绝区零", "search", 0, query=keyword),
+        ),
+        rng=random.Random(0),
+    )
+
+    wallpaper, data = await library.draw(fanart=True)
+
+    assert wallpaper.source == "fanart"
+    assert data == b"fan-art"
+
+
+async def test_draw_fanart_rejects_unknown_game(tmp_path: Path) -> None:
+    library = make_library(
+        tmp_path,
+        FakeOpener({}),
+        collections=(),
+        fanart_collections=(
+            WallpaperCollection("原神", "search", 0, query="原神壁纸"),
+        ),
+    )
+
+    with pytest.raises(WallpaperUnavailable, match="二创"):
+        await library.draw("绝区零", fanart=True)
+
+
+def test_search_cache_path_depends_on_keyword(tmp_path: Path) -> None:
+    library = make_library(tmp_path, FakeOpener({}), collections=())
+
+    first = library._cache_path(
+        WallpaperCollection("原神", "search", 0, query="原神壁纸")
+    )
+    second = library._cache_path(
+        WallpaperCollection("原神", "search", 0, query="绝区零壁纸")
+    )
+
+    assert first != second
+    assert first.parent == tmp_path / "wallpapers"

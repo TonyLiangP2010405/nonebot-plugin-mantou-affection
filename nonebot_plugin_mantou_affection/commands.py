@@ -61,10 +61,12 @@ FILL_BLANK_CHANCE_USAGE = (
 )
 WHEEL_CHANCE_USAGE = "请输入 0~1 的小数或百分数（如 0.1%），0 即关闭馒头转盘"
 WALLPAPER_USAGE = (
-    "用法：/馒头壁纸 [原神/星铁/绝区零]\n"
-    "不带参数全库随机；指定游戏只抽这个游戏的官方壁纸"
+    "用法：/馒头壁纸 [官方/二创] [原神/星铁/绝区零]\n"
+    "不带参数抽官方壁纸；加「二创」改成抽二创图，可再跟一个游戏名"
 )
-WALLPAPER_FAILED_REPLY = "这次没取到壁纸：米游社或 Wiki 暂时连不上，稍后再试。"
+WALLPAPER_FANART_WORDS = frozenset({"二创", "同人", "fanart", "fan"})
+WALLPAPER_OFFICIAL_WORDS = frozenset({"官方", "official"})
+WALLPAPER_FAILED_REPLY = "这次没取到壁纸：图源暂时连不上，稍后再试。"
 WALLPAPER_DISABLED_REPLY = "壁纸库没有接线，暂时抽不了。"
 PROBABILITY_BATCH_USAGE = (
     "用法：\n"
@@ -99,7 +101,7 @@ ADMIN_HELP_LINES: tuple[str, ...] = (
     "/馒头转盘概率 0.1% —— 查看或调整命运齿轮概率",
     "/馒头概率总调 —— 总览全部概率；带数值统一设置，"
     "×倍率缩放，重置恢复默认",
-    "/馒头壁纸 [原神/星铁/绝区零] —— 手动抽一张官方壁纸",
+    "/馒头壁纸 [官方/二创] [原神/星铁/绝区零] —— 手动抽一张壁纸",
     "/馒头限制开关 [开/关] —— 查看或切换事件限制（默认关闭）",
     f"/馒头限制次数 5 —— 查看或调整每群每 {EVENT_LIMIT_WINDOW_HOURS} 小时"
     "最多触发几次活动（1~100）",
@@ -1130,17 +1132,26 @@ def register_commands(
     @wallpaper_cmd.handle()
     async def handle_wallpaper(args: Message = CommandArg()) -> None:
         raw = args.extract_plain_text().strip()
+        fanart = False
         game = None
-        if raw:
-            game = match_wallpaper_game(raw)
-            if game is None:
+        for token in raw.split():
+            lowered = token.lower()
+            if lowered in WALLPAPER_FANART_WORDS:
+                fanart = True
+                continue
+            if lowered in WALLPAPER_OFFICIAL_WORDS:
+                fanart = False
+                continue
+            matched = match_wallpaper_game(token)
+            if matched is None or game is not None:
                 await wallpaper_cmd.finish(WALLPAPER_USAGE)
                 return
+            game = matched
         if wallpapers is None:
             await wallpaper_cmd.finish(WALLPAPER_DISABLED_REPLY)
             return
         try:
-            wallpaper, data = await wallpapers.draw(game)
+            wallpaper, data = await wallpapers.draw(game, fanart=fanart)
         except WallpaperUnavailable as error:
             logger.warning(f"[mantou-affection] 手动抽取壁纸失败: {error}")
             await wallpaper_cmd.finish(WALLPAPER_FAILED_REPLY)
@@ -1155,7 +1166,8 @@ def register_commands(
             if wallpaper.collection
             else wallpaper.game
         )
-        caption = MessageSegment.text(f"🖼️ 随机壁纸（{label}）：")
+        title = "随机二创壁纸" if wallpaper.source == "fanart" else "随机壁纸"
+        caption = MessageSegment.text(f"🖼️ {title}（{label}）：")
         try:
             await wallpaper_cmd.send(caption + MessageSegment.image(data))
             return

@@ -32,9 +32,13 @@ class FakeWallpapers:
         self.result = result or (WALLPAPER, b"fake-image")
         self.error = error
         self.games: list[str | None] = []
+        self.fanart_flags: list[bool] = []
 
-    async def draw(self, game: str | None = None) -> tuple[Wallpaper, bytes]:
+    async def draw(
+        self, game: str | None = None, *, fanart: bool = False
+    ) -> tuple[Wallpaper, bytes]:
         self.games.append(game)
+        self.fanart_flags.append(fanart)
         if self.error is not None:
             raise self.error
         return self.result
@@ -95,6 +99,7 @@ async def test_wallpaper_command_sends_random_image(
     await command.handlers[0].call(Message(""))
 
     assert fake.games == [None]
+    assert fake.fanart_flags == [False]
     assert [segment.type for segment in sent[0]] == ["text", "image"]
     assert "随机壁纸（原神 · 原神电脑官方壁纸第三弹）" in _text(sent[0])
 
@@ -107,6 +112,53 @@ async def test_wallpaper_command_filters_by_game(tmp_path: Path, monkeypatch) ->
     await command.handlers[0].call(Message("星铁"))
 
     assert fake.games == ["崩坏：星穹铁道"]
+    assert fake.fanart_flags == [False]
+
+
+async def test_wallpaper_command_can_switch_to_fanart(
+    tmp_path: Path, monkeypatch
+) -> None:
+    fanart = Wallpaper(
+        "绝区零",
+        "米游社「绝区零同人图」",
+        "https://upload-bbs.miyoushe.com/upload/b.png",
+        "fanart",
+    )
+    fake = FakeWallpapers(result=(fanart, b"fan-art"))
+    command = _wallpaper_command(tmp_path, fake)
+    sent = _capture_send(command, monkeypatch)
+
+    await command.handlers[0].call(Message("二创"))
+
+    assert fake.games == [None]
+    assert fake.fanart_flags == [True]
+    assert "随机二创壁纸（绝区零 · 米游社「绝区零同人图」）" in _text(sent[0])
+
+
+async def test_wallpaper_command_combines_fanart_and_game(
+    tmp_path: Path, monkeypatch
+) -> None:
+    fake = FakeWallpapers()
+    command = _wallpaper_command(tmp_path, fake)
+    _capture_send(command, monkeypatch)
+
+    await command.handlers[0].call(Message("同人 原神"))
+
+    assert fake.games == ["原神"]
+    assert fake.fanart_flags == [True]
+
+
+async def test_wallpaper_command_rejects_duplicate_games(
+    tmp_path: Path, monkeypatch
+) -> None:
+    fake = FakeWallpapers()
+    command = _wallpaper_command(tmp_path, fake)
+    finished = _capture_finish(command, monkeypatch)
+
+    await command.handlers[0].call(Message("原神 星铁"))
+
+    assert "用法：/馒头壁纸" in finished[0]
+    assert fake.games == []
 
 
 async def test_wallpaper_command_rejects_unknown_game(
