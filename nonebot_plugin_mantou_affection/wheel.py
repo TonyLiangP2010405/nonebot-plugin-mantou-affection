@@ -25,9 +25,9 @@ class WheelOutcome:
 
 
 WHEEL_OUTCOMES: tuple[tuple[WheelOutcome, int], ...] = (
-    (WheelOutcome("meme"), 17),
+    (WheelOutcome("meme"), 10),
     (WheelOutcome("taozi"), 1),
-    (WheelOutcome("wallpaper"), 3),
+    (WheelOutcome("wallpaper"), 10),
     (WheelOutcome("image", 1), 2),
     (WheelOutcome("image", 2), 1),
     (WheelOutcome("poke", 1), 7),

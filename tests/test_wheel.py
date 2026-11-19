@@ -279,9 +279,9 @@ async def cancel_meme_confirm(coordinator: WheelCoordinator, user_id: str = TRIG
 def test_wheel_weights_match_approved_table() -> None:
     weighted = [((outcome.kind, outcome.value), weight) for outcome, weight in WHEEL_OUTCOMES]
     assert weighted == [
-        (("meme", 0), 17),
+        (("meme", 0), 10),
         (("taozi", 0), 1),
-        (("wallpaper", 0), 3),
+        (("wallpaper", 0), 10),
         (("image", 1), 2),
         (("image", 2), 1),
         (("poke", 1), 7),
@@ -314,7 +314,7 @@ def test_wheel_image_quota_is_rare_and_capped_at_two() -> None:
     pokes = [w for o, w in WHEEL_OUTCOMES if o.kind == "poke"]
     assert sum(pokes) == 18
     wallpapers = [w for o, w in WHEEL_OUTCOMES if o.kind == "wallpaper"]
-    assert wallpapers == [3]
+    assert wallpapers == [10]
     panels = [w for o, w in WHEEL_OUTCOMES if o.kind == "panel"]
     assert panels == [5]
     panel_ranks = [w for o, w in WHEEL_OUTCOMES if o.kind == "panel_rank"]
@@ -323,9 +323,9 @@ def test_wheel_image_quota_is_rare_and_capped_at_two() -> None:
 
 
 def test_wheel_draw_uses_independent_integer_ranges() -> None:
-    assert draw_wheel_outcome(FixedRollRng(16)).kind == "meme"
-    assert draw_wheel_outcome(FixedRollRng(17)).kind == "taozi"
-    assert draw_wheel_outcome(FixedRollRng(18)).kind == "wallpaper"
+    assert draw_wheel_outcome(FixedRollRng(9)).kind == "meme"
+    assert draw_wheel_outcome(FixedRollRng(10)).kind == "taozi"
+    assert draw_wheel_outcome(FixedRollRng(11)).kind == "wallpaper"
     assert draw_wheel_outcome(FixedRollRng(20)).kind == "wallpaper"
     assert draw_wheel_outcome(FixedRollRng(21)) == WheelOutcome("image", 1)
     assert draw_wheel_outcome(FixedRollRng(22)) == WheelOutcome("image", 1)
@@ -357,9 +357,9 @@ def test_rules_message_lists_every_probability() -> None:
     assert "倒计时结束前都可以参与" in rules
     assert "不运作" not in rules
     assert "确认" not in rules
-    assert "馒头制作随机表情 17%" in rules
+    assert "馒头制作随机表情 10%" in rules
     assert "桃子表情包 1%（换一张需 10 点好感）" in rules
-    assert "随机壁纸 3%" in rules
+    assert "随机壁纸 10%" in rules
     assert "馒头主动戳一戳：×1 7%、×3 5%、×5 3%、×10 2%、×20 1%" in rules
     assert "角色面板次数 5%" in rules
     assert "群面板排名次数 3%" in rules
@@ -374,7 +374,7 @@ async def test_start_message_shows_probability_table(tmp_path: Path) -> None:
     _, sent, _ = await start(coordinator)
     body = sent[0].extract_plain_text()
     assert "转盘各项概率" in body
-    assert "馒头制作随机表情 17%" in body
+    assert "馒头制作随机表情 10%" in body
     assert "参与需要扣除 2 点好感度" in body
     coordinator.pending[GROUP].task.cancel()
 
@@ -972,7 +972,7 @@ async def test_wheel_meme_confirmed_generation_failure_reports(tmp_path: Path) -
 
 async def test_wheel_taozi_asks_before_charging(tmp_path: Path) -> None:
     stickers = FakeStickers()
-    coordinator = make_coordinator(tmp_path, rng=SequenceRng([17]), stickers=stickers)
+    coordinator = make_coordinator(tmp_path, rng=SequenceRng([10]), stickers=stickers)
     await give(coordinator.service, TRIGGER, 20)
     pending, sent, _ = await start(coordinator)
 
@@ -993,7 +993,7 @@ async def test_wheel_taozi_asks_before_charging(tmp_path: Path) -> None:
 
 async def test_wheel_taozi_confirm_charges_and_sends_image(tmp_path: Path) -> None:
     stickers = FakeStickers()
-    coordinator = make_coordinator(tmp_path, rng=SequenceRng([17]), stickers=stickers)
+    coordinator = make_coordinator(tmp_path, rng=SequenceRng([10]), stickers=stickers)
     await give(coordinator.service, TRIGGER, 20)
     pending, sent, _ = await start(coordinator)
     await operate(coordinator, pending)
@@ -1013,7 +1013,7 @@ async def test_wheel_taozi_confirm_at_exactly_ten_points_reaches_zero(
     tmp_path: Path,
 ) -> None:
     coordinator = make_coordinator(
-        tmp_path, rng=SequenceRng([17]), stickers=FakeStickers()
+        tmp_path, rng=SequenceRng([10]), stickers=FakeStickers()
     )
     await give(coordinator.service, TRIGGER, 10)
     pending, sent, _ = await start(coordinator)
@@ -1027,7 +1027,7 @@ async def test_wheel_taozi_confirm_at_exactly_ten_points_reaches_zero(
 
 async def test_wheel_taozi_decline_keeps_affection(tmp_path: Path) -> None:
     coordinator = make_coordinator(
-        tmp_path, rng=SequenceRng([17]), stickers=FakeStickers()
+        tmp_path, rng=SequenceRng([10]), stickers=FakeStickers()
     )
     await give(coordinator.service, TRIGGER, 20)
     pending, sent, _ = await start(coordinator)
@@ -1043,7 +1043,7 @@ async def test_wheel_taozi_decline_keeps_affection(tmp_path: Path) -> None:
 
 async def test_wheel_taozi_timeout_keeps_affection(tmp_path: Path) -> None:
     coordinator = make_coordinator(
-        tmp_path, rng=SequenceRng([17]), stickers=FakeStickers()
+        tmp_path, rng=SequenceRng([10]), stickers=FakeStickers()
     )
     coordinator.sticker_confirm_timeout = 0.02
     await give(coordinator.service, TRIGGER, 20)
@@ -1061,7 +1061,7 @@ async def test_wheel_taozi_timeout_keeps_affection(tmp_path: Path) -> None:
 
 async def test_wheel_taozi_insufficient_at_prompt_does_not_ask(tmp_path: Path) -> None:
     coordinator = make_coordinator(
-        tmp_path, rng=SequenceRng([17]), stickers=FakeStickers()
+        tmp_path, rng=SequenceRng([10]), stickers=FakeStickers()
     )
     await give(coordinator.service, TRIGGER, 5)
     pending, sent, _ = await start(coordinator)
@@ -1077,7 +1077,7 @@ async def test_wheel_taozi_insufficient_after_prompt_does_not_charge(
     tmp_path: Path,
 ) -> None:
     stickers = FakeStickers()
-    coordinator = make_coordinator(tmp_path, rng=SequenceRng([17]), stickers=stickers)
+    coordinator = make_coordinator(tmp_path, rng=SequenceRng([10]), stickers=stickers)
     await give(coordinator.service, TRIGGER, 20)
     pending, sent, _ = await start(coordinator)
     await operate(coordinator, pending)
@@ -1093,7 +1093,7 @@ async def test_wheel_taozi_insufficient_after_prompt_does_not_charge(
 
 async def test_wheel_taozi_missing_assets_does_not_charge(tmp_path: Path) -> None:
     stickers = FakeStickers(error=StickerAssetMissing("catalog.json"))
-    coordinator = make_coordinator(tmp_path, rng=SequenceRng([17]), stickers=stickers)
+    coordinator = make_coordinator(tmp_path, rng=SequenceRng([10]), stickers=stickers)
     await give(coordinator.service, TRIGGER, 20)
     pending, sent, _ = await start(coordinator)
     await operate(coordinator, pending)
@@ -1108,7 +1108,7 @@ async def test_wheel_taozi_missing_assets_does_not_charge(tmp_path: Path) -> Non
 
 async def test_wheel_taozi_pick_failure_does_not_charge(tmp_path: Path) -> None:
     stickers = FakeStickers(error=StickerError("boom"))
-    coordinator = make_coordinator(tmp_path, rng=SequenceRng([17]), stickers=stickers)
+    coordinator = make_coordinator(tmp_path, rng=SequenceRng([10]), stickers=stickers)
     await give(coordinator.service, TRIGGER, 20)
     pending, sent, _ = await start(coordinator)
     await operate(coordinator, pending)
@@ -1122,7 +1122,7 @@ async def test_wheel_taozi_pick_failure_does_not_charge(tmp_path: Path) -> None:
 
 async def test_wheel_taozi_confirm_replaced_by_new_draw(tmp_path: Path) -> None:
     coordinator = make_coordinator(
-        tmp_path, rng=SequenceRng([17, 17, 17]), stickers=FakeStickers()
+        tmp_path, rng=SequenceRng([10, 10, 10]), stickers=FakeStickers()
     )
     coordinator.sticker_confirm_timeout = 5
     await give(coordinator.service, TRIGGER, 100)
@@ -1149,7 +1149,7 @@ async def test_wheel_taozi_and_meme_confirms_coexist(tmp_path: Path) -> None:
     memes = FakeMemes()
     stickers = FakeStickers()
     coordinator = make_coordinator(
-        tmp_path, rng=SequenceRng([0, 50, 17]), memes=memes, stickers=stickers
+        tmp_path, rng=SequenceRng([0, 50, 10]), memes=memes, stickers=stickers
     )
     await give(coordinator.service, TRIGGER, 20)
     await give(coordinator.service, OTHER, 20)
