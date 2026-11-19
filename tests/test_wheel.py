@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import random
 from contextlib import suppress
 from pathlib import Path
@@ -25,6 +26,10 @@ from nonebot_plugin_mantou_affection.wheel import (
 )
 from nonebot_plugin_mantou_affection.wheel_memes import MemeAssetMissing, MemeGenerationError
 from nonebot_plugin_mantou_affection.wheel_stickers import StickerAssetMissing, StickerError
+from nonebot_plugin_mantou_affection.wheel_wallpapers import (
+    Wallpaper,
+    WallpaperUnavailable,
+)
 
 GROUP = "94001"
 TRIGGER = "94002"
@@ -164,6 +169,30 @@ class FakeStickers:
         return True
 
 
+class FakeWallpapers:
+    def __init__(
+        self,
+        image: bytes = b"wallpaper:001",
+        game: str = "原神",
+        collection: str = "官方电脑壁纸第三弹",
+        error: Exception | None = None,
+    ):
+        self.image = image
+        self.game = game
+        self.collection = collection
+        self.error = error
+        self.draws = 0
+
+    async def draw(self):
+        self.draws += 1
+        if self.error is not None:
+            raise self.error
+        return (
+            Wallpaper(self.game, self.collection, "https://example.com/a.png"),
+            self.image,
+        )
+
+
 def make_coordinator(
     tmp_path: Path,
     rng=None,
@@ -173,6 +202,7 @@ def make_coordinator(
     image_quota=None,
     panel_quota=None,
     panel_rank_quota=None,
+    wallpapers=None,
 ):
     config = Config(mantou_affection_newbie_protection_below=0)
     service = AffectionService(AffectionStore(tmp_path / "affection.json"), config)
@@ -183,6 +213,7 @@ def make_coordinator(
         memes=memes,
         resources=resources,
         stickers=stickers,
+        wallpapers=wallpapers,
         image_quota=image_quota or ImageQuotaStore(tmp_path / "image_quota.json"),
         panel_quota=panel_quota or PanelQuotaStore(tmp_path / "panel_quota.json"),
         panel_rank_quota=panel_rank_quota
@@ -248,11 +279,12 @@ async def cancel_meme_confirm(coordinator: WheelCoordinator, user_id: str = TRIG
 def test_wheel_weights_match_approved_table() -> None:
     weighted = [((outcome.kind, outcome.value), weight) for outcome, weight in WHEEL_OUTCOMES]
     assert weighted == [
-        (("meme", 0), 19),
+        (("meme", 0), 17),
         (("taozi", 0), 1),
+        (("wallpaper", 0), 3),
         (("image", 1), 2),
         (("image", 2), 1),
-        (("poke", 1), 8),
+        (("poke", 1), 7),
         (("poke", 3), 5),
         (("poke", 5), 3),
         (("poke", 10), 2),
@@ -280,7 +312,9 @@ def test_wheel_image_quota_is_rare_and_capped_at_two() -> None:
     assert [value for value, _ in images] == [1, 2]
     assert sum(weight for _, weight in images) == 3
     pokes = [w for o, w in WHEEL_OUTCOMES if o.kind == "poke"]
-    assert sum(pokes) == 19
+    assert sum(pokes) == 18
+    wallpapers = [w for o, w in WHEEL_OUTCOMES if o.kind == "wallpaper"]
+    assert wallpapers == [3]
     panels = [w for o, w in WHEEL_OUTCOMES if o.kind == "panel"]
     assert panels == [5]
     panel_ranks = [w for o, w in WHEEL_OUTCOMES if o.kind == "panel_rank"]
@@ -289,11 +323,14 @@ def test_wheel_image_quota_is_rare_and_capped_at_two() -> None:
 
 
 def test_wheel_draw_uses_independent_integer_ranges() -> None:
-    assert draw_wheel_outcome(FixedRollRng(18)).kind == "meme"
-    assert draw_wheel_outcome(FixedRollRng(19)).kind == "taozi"
-    assert draw_wheel_outcome(FixedRollRng(20)) == WheelOutcome("image", 1)
-    assert draw_wheel_outcome(FixedRollRng(22)) == WheelOutcome("image", 2)
-    assert draw_wheel_outcome(FixedRollRng(23)) == WheelOutcome("poke", 1)
+    assert draw_wheel_outcome(FixedRollRng(16)).kind == "meme"
+    assert draw_wheel_outcome(FixedRollRng(17)).kind == "taozi"
+    assert draw_wheel_outcome(FixedRollRng(18)).kind == "wallpaper"
+    assert draw_wheel_outcome(FixedRollRng(20)).kind == "wallpaper"
+    assert draw_wheel_outcome(FixedRollRng(21)) == WheelOutcome("image", 1)
+    assert draw_wheel_outcome(FixedRollRng(22)) == WheelOutcome("image", 1)
+    assert draw_wheel_outcome(FixedRollRng(23)) == WheelOutcome("image", 2)
+    assert draw_wheel_outcome(FixedRollRng(24)) == WheelOutcome("poke", 1)
     assert draw_wheel_outcome(FixedRollRng(30)) == WheelOutcome("poke", 1)
     assert draw_wheel_outcome(FixedRollRng(31)) == WheelOutcome("poke", 3)
     assert draw_wheel_outcome(FixedRollRng(35)) == WheelOutcome("poke", 3)
@@ -320,9 +357,10 @@ def test_rules_message_lists_every_probability() -> None:
     assert "倒计时结束前都可以参与" in rules
     assert "不运作" not in rules
     assert "确认" not in rules
-    assert "馒头制作随机表情 19%" in rules
+    assert "馒头制作随机表情 17%" in rules
     assert "桃子表情包 1%（换一张需 10 点好感）" in rules
-    assert "馒头主动戳一戳：×1 8%、×3 5%、×5 3%、×10 2%、×20 1%" in rules
+    assert "随机壁纸 3%" in rules
+    assert "馒头主动戳一戳：×1 7%、×3 5%、×5 3%、×10 2%、×20 1%" in rules
     assert "角色面板次数 5%" in rules
     assert "群面板排名次数 3%" in rules
     assert "图像处理次数：×1 2%、×2 1%" in rules
@@ -336,7 +374,7 @@ async def test_start_message_shows_probability_table(tmp_path: Path) -> None:
     _, sent, _ = await start(coordinator)
     body = sent[0].extract_plain_text()
     assert "转盘各项概率" in body
-    assert "馒头制作随机表情 19%" in body
+    assert "馒头制作随机表情 17%" in body
     assert "参与需要扣除 2 点好感度" in body
     coordinator.pending[GROUP].task.cancel()
 
@@ -491,7 +529,7 @@ async def test_wheel_operation_draws_each_person_independently(tmp_path: Path) -
 async def test_wheel_image_quota_does_not_call_poke_api(
     tmp_path: Path, monkeypatch
 ) -> None:
-    coordinator = make_coordinator(tmp_path, rng=SequenceRng([50, 20]))
+    coordinator = make_coordinator(tmp_path, rng=SequenceRng([50, 21]))
 
     async def forbidden_poke(*args, **kwargs):
         raise AssertionError("不得调用 poke")
@@ -554,7 +592,7 @@ async def test_wheel_affection_outcomes(tmp_path: Path, roll: int, delta: int) -
     assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 100 + delta
 
 
-@pytest.mark.parametrize(("roll", "count"), [(20, 1), (22, 2)])
+@pytest.mark.parametrize(("roll", "count"), [(21, 1), (23, 2)])
 async def test_wheel_image_quota_counts(tmp_path: Path, roll: int, count: int) -> None:
     coordinator = make_coordinator(tmp_path, rng=SequenceRng([roll]))
     pending, _, _ = await start(coordinator)
@@ -563,7 +601,7 @@ async def test_wheel_image_quota_counts(tmp_path: Path, roll: int, count: int) -
 
 
 async def test_wheel_image_quota_message_explains_usage(tmp_path: Path) -> None:
-    coordinator = make_coordinator(tmp_path, rng=SequenceRng([20]))
+    coordinator = make_coordinator(tmp_path, rng=SequenceRng([21]))
     pending, sent, _ = await start(coordinator)
     await operate(coordinator, pending)
 
@@ -574,7 +612,7 @@ async def test_wheel_image_quota_message_explains_usage(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("roll", "count"), [(23, 1), (31, 3), (36, 5), (39, 10), (41, 20)]
+    ("roll", "count"), [(24, 1), (31, 3), (36, 5), (39, 10), (41, 20)]
 )
 async def test_wheel_poke_counts(tmp_path: Path, roll: int, count: int) -> None:
     coordinator = make_coordinator(tmp_path, rng=SequenceRng([roll]))
@@ -585,7 +623,7 @@ async def test_wheel_poke_counts(tmp_path: Path, roll: int, count: int) -> None:
 
 
 async def test_wheel_poke_message_clearly_says_mantou_pokes_you(tmp_path: Path) -> None:
-    coordinator = make_coordinator(tmp_path, rng=SequenceRng([23]))
+    coordinator = make_coordinator(tmp_path, rng=SequenceRng([24]))
     pending, sent, _ = await start(coordinator)
     await operate(coordinator, pending)
 
@@ -934,7 +972,7 @@ async def test_wheel_meme_confirmed_generation_failure_reports(tmp_path: Path) -
 
 async def test_wheel_taozi_asks_before_charging(tmp_path: Path) -> None:
     stickers = FakeStickers()
-    coordinator = make_coordinator(tmp_path, rng=SequenceRng([19]), stickers=stickers)
+    coordinator = make_coordinator(tmp_path, rng=SequenceRng([17]), stickers=stickers)
     await give(coordinator.service, TRIGGER, 20)
     pending, sent, _ = await start(coordinator)
 
@@ -955,7 +993,7 @@ async def test_wheel_taozi_asks_before_charging(tmp_path: Path) -> None:
 
 async def test_wheel_taozi_confirm_charges_and_sends_image(tmp_path: Path) -> None:
     stickers = FakeStickers()
-    coordinator = make_coordinator(tmp_path, rng=SequenceRng([19]), stickers=stickers)
+    coordinator = make_coordinator(tmp_path, rng=SequenceRng([17]), stickers=stickers)
     await give(coordinator.service, TRIGGER, 20)
     pending, sent, _ = await start(coordinator)
     await operate(coordinator, pending)
@@ -975,7 +1013,7 @@ async def test_wheel_taozi_confirm_at_exactly_ten_points_reaches_zero(
     tmp_path: Path,
 ) -> None:
     coordinator = make_coordinator(
-        tmp_path, rng=SequenceRng([19]), stickers=FakeStickers()
+        tmp_path, rng=SequenceRng([17]), stickers=FakeStickers()
     )
     await give(coordinator.service, TRIGGER, 10)
     pending, sent, _ = await start(coordinator)
@@ -989,7 +1027,7 @@ async def test_wheel_taozi_confirm_at_exactly_ten_points_reaches_zero(
 
 async def test_wheel_taozi_decline_keeps_affection(tmp_path: Path) -> None:
     coordinator = make_coordinator(
-        tmp_path, rng=SequenceRng([19]), stickers=FakeStickers()
+        tmp_path, rng=SequenceRng([17]), stickers=FakeStickers()
     )
     await give(coordinator.service, TRIGGER, 20)
     pending, sent, _ = await start(coordinator)
@@ -1005,7 +1043,7 @@ async def test_wheel_taozi_decline_keeps_affection(tmp_path: Path) -> None:
 
 async def test_wheel_taozi_timeout_keeps_affection(tmp_path: Path) -> None:
     coordinator = make_coordinator(
-        tmp_path, rng=SequenceRng([19]), stickers=FakeStickers()
+        tmp_path, rng=SequenceRng([17]), stickers=FakeStickers()
     )
     coordinator.sticker_confirm_timeout = 0.02
     await give(coordinator.service, TRIGGER, 20)
@@ -1023,7 +1061,7 @@ async def test_wheel_taozi_timeout_keeps_affection(tmp_path: Path) -> None:
 
 async def test_wheel_taozi_insufficient_at_prompt_does_not_ask(tmp_path: Path) -> None:
     coordinator = make_coordinator(
-        tmp_path, rng=SequenceRng([19]), stickers=FakeStickers()
+        tmp_path, rng=SequenceRng([17]), stickers=FakeStickers()
     )
     await give(coordinator.service, TRIGGER, 5)
     pending, sent, _ = await start(coordinator)
@@ -1039,7 +1077,7 @@ async def test_wheel_taozi_insufficient_after_prompt_does_not_charge(
     tmp_path: Path,
 ) -> None:
     stickers = FakeStickers()
-    coordinator = make_coordinator(tmp_path, rng=SequenceRng([19]), stickers=stickers)
+    coordinator = make_coordinator(tmp_path, rng=SequenceRng([17]), stickers=stickers)
     await give(coordinator.service, TRIGGER, 20)
     pending, sent, _ = await start(coordinator)
     await operate(coordinator, pending)
@@ -1055,7 +1093,7 @@ async def test_wheel_taozi_insufficient_after_prompt_does_not_charge(
 
 async def test_wheel_taozi_missing_assets_does_not_charge(tmp_path: Path) -> None:
     stickers = FakeStickers(error=StickerAssetMissing("catalog.json"))
-    coordinator = make_coordinator(tmp_path, rng=SequenceRng([19]), stickers=stickers)
+    coordinator = make_coordinator(tmp_path, rng=SequenceRng([17]), stickers=stickers)
     await give(coordinator.service, TRIGGER, 20)
     pending, sent, _ = await start(coordinator)
     await operate(coordinator, pending)
@@ -1070,7 +1108,7 @@ async def test_wheel_taozi_missing_assets_does_not_charge(tmp_path: Path) -> Non
 
 async def test_wheel_taozi_pick_failure_does_not_charge(tmp_path: Path) -> None:
     stickers = FakeStickers(error=StickerError("boom"))
-    coordinator = make_coordinator(tmp_path, rng=SequenceRng([19]), stickers=stickers)
+    coordinator = make_coordinator(tmp_path, rng=SequenceRng([17]), stickers=stickers)
     await give(coordinator.service, TRIGGER, 20)
     pending, sent, _ = await start(coordinator)
     await operate(coordinator, pending)
@@ -1084,7 +1122,7 @@ async def test_wheel_taozi_pick_failure_does_not_charge(tmp_path: Path) -> None:
 
 async def test_wheel_taozi_confirm_replaced_by_new_draw(tmp_path: Path) -> None:
     coordinator = make_coordinator(
-        tmp_path, rng=SequenceRng([19, 19, 19]), stickers=FakeStickers()
+        tmp_path, rng=SequenceRng([17, 17, 17]), stickers=FakeStickers()
     )
     coordinator.sticker_confirm_timeout = 5
     await give(coordinator.service, TRIGGER, 100)
@@ -1111,7 +1149,7 @@ async def test_wheel_taozi_and_meme_confirms_coexist(tmp_path: Path) -> None:
     memes = FakeMemes()
     stickers = FakeStickers()
     coordinator = make_coordinator(
-        tmp_path, rng=SequenceRng([0, 50, 19]), memes=memes, stickers=stickers
+        tmp_path, rng=SequenceRng([0, 50, 17]), memes=memes, stickers=stickers
     )
     await give(coordinator.service, TRIGGER, 20)
     await give(coordinator.service, OTHER, 20)
@@ -1176,3 +1214,85 @@ async def test_panel_rank_quota_store_is_independent(tmp_path: Path) -> None:
     assert await panel.get(GROUP, TRIGGER) == 0
     assert await rank.consume(GROUP, TRIGGER, 1) == 0
     assert await rank.consume(GROUP, TRIGGER, 1) is None
+
+
+async def test_wheel_wallpaper_sends_image_with_source_caption(tmp_path: Path) -> None:
+    wallpapers = FakeWallpapers()
+    coordinator = make_coordinator(
+        tmp_path, rng=SequenceRng([18]), wallpapers=wallpapers
+    )
+    pending, sent, _ = await start(coordinator)
+
+    await operate(coordinator, pending)
+
+    body = sent_text(sent)
+    assert "抽到随机壁纸" in body
+    assert "原神 · 官方电脑壁纸第三弹" in body
+    assert wallpapers.draws == 1
+    images = [
+        segment
+        for message in sent
+        for segment in message
+        if segment.type == "image"
+    ]
+    assert images
+    encoded = images[0].data["file"].removeprefix("base64://")
+    assert base64.b64decode(encoded) == b"wallpaper:001"
+
+
+async def test_wheel_wallpaper_failure_reports_without_redraw(tmp_path: Path) -> None:
+    wallpapers = FakeWallpapers(error=WallpaperUnavailable("源站挂了"))
+    coordinator = make_coordinator(
+        tmp_path, rng=SequenceRng([18]), wallpapers=wallpapers
+    )
+    pending, sent, _ = await start(coordinator)
+
+    await operate(coordinator, pending)
+
+    assert "这次没取到壁纸，本次不重抽" in sent_text(sent)
+    assert not any(segment.type == "image" for message in sent for segment in message)
+    assert wallpapers.draws == 1
+
+
+async def test_wheel_wallpaper_without_library_still_reports(tmp_path: Path) -> None:
+    coordinator = make_coordinator(tmp_path, rng=SequenceRng([18]), wallpapers=None)
+    pending, sent, _ = await start(coordinator)
+
+    await operate(coordinator, pending)
+
+    assert "这次没取到壁纸，本次不重抽" in sent_text(sent)
+
+
+async def test_wheel_wallpaper_falls_back_to_url_when_image_fails(
+    tmp_path: Path,
+) -> None:
+    wallpapers = FakeWallpapers()
+    coordinator = make_coordinator(
+        tmp_path, rng=SequenceRng([18]), wallpapers=wallpapers
+    )
+    pending, sent, _ = await start(coordinator)
+    original = pending.send
+    state = {"failed": False}
+
+    async def flaky(message) -> None:
+        if not state["failed"] and any(
+            segment.type == "image"
+            and segment.data["file"].startswith("base64://")
+            for segment in message
+        ):
+            state["failed"] = True
+            raise RuntimeError("payload too large")
+        await original(message)
+
+    pending.send = flaky
+
+    await operate(coordinator, pending)
+
+    assert state["failed"] is True
+    sent_images = [
+        segment.data["file"]
+        for message in sent
+        for segment in message
+        if segment.type == "image"
+    ]
+    assert sent_images == ["https://example.com/a.png"]

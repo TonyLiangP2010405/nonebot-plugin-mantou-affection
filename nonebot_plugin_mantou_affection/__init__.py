@@ -67,6 +67,7 @@ from .wheel_memes import (
     parse_blocked_terms,
 )
 from .wheel_stickers import TaoziStickerLibrary
+from .wheel_wallpapers import WallpaperLibrary
 from .zzz_quiz import BUNDLED_ZZZ_QUIZ_PATH, ZzzQuizCoordinator
 
 plugin_config = get_plugin_config(Config)
@@ -146,6 +147,9 @@ taozi_stickers = TaoziStickerLibrary(
     base_dir=Path(get_plugin_data_dir()) / "taozi_stickers"
 )
 service.stickers = taozi_stickers
+wallpapers = WallpaperLibrary(
+    cache_dir=Path(get_plugin_data_dir()) / "wallpapers"
+)
 wheel_coordinator = WheelCoordinator(
     service,
     plugin_config,
@@ -153,6 +157,7 @@ wheel_coordinator = WheelCoordinator(
     memes=meme_generator_adapter,
     resources=meme_resources,
     stickers=taozi_stickers,
+    wallpapers=wallpapers,
     image_quota=image_quota,
     panel_quota=panel_quota,
     panel_rank_quota=panel_rank_quota,

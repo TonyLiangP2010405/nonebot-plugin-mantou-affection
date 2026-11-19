@@ -12,6 +12,7 @@ from .logic import NEWBIE_PROTECTION_NOTE, protect_deduction
 from .service import normalize_nickname
 from .wheel_memes import MemeAssetMissing, MemeGenerationError
 from .wheel_stickers import StickerAssetMissing, StickerError
+from .wheel_wallpapers import WallpaperUnavailable
 
 if TYPE_CHECKING:
     from .ambient import EventCoordinator
@@ -24,11 +25,12 @@ class WheelOutcome:
 
 
 WHEEL_OUTCOMES: tuple[tuple[WheelOutcome, int], ...] = (
-    (WheelOutcome("meme"), 19),
+    (WheelOutcome("meme"), 17),
     (WheelOutcome("taozi"), 1),
+    (WheelOutcome("wallpaper"), 3),
     (WheelOutcome("image", 1), 2),
     (WheelOutcome("image", 2), 1),
-    (WheelOutcome("poke", 1), 8),
+    (WheelOutcome("poke", 1), 7),
     (WheelOutcome("poke", 3), 5),
     (WheelOutcome("poke", 5), 3),
     (WheelOutcome("poke", 10), 2),
@@ -73,6 +75,9 @@ def _join_weights(items: list[tuple[int, int]], prefix: str) -> str:
 def format_wheel_rules(timeout: int, newbie_below: int = 50) -> str:
     meme_weight = sum(weight for outcome, weight in WHEEL_OUTCOMES if outcome.kind == "meme")
     taozi_weight = sum(weight for outcome, weight in WHEEL_OUTCOMES if outcome.kind == "taozi")
+    wallpaper_weight = sum(
+        weight for outcome, weight in WHEEL_OUTCOMES if outcome.kind == "wallpaper"
+    )
     images = [(o.value, w) for o, w in WHEEL_OUTCOMES if o.kind == "image"]
     pokes = [(o.value, w) for o, w in WHEEL_OUTCOMES if o.kind == "poke"]
     panels = sum(weight for outcome, weight in WHEEL_OUTCOMES if outcome.kind == "panel")
@@ -89,6 +94,7 @@ def format_wheel_rules(timeout: int, newbie_below: int = 50) -> str:
         "转盘各项概率：\n"
         f"· 馒头制作随机表情 {meme_weight}%\n"
         f"· 桃子表情包 {taozi_weight}%（换一张需 {WHEEL_TAOZI_COST} 点好感）\n"
+        f"· 随机壁纸 {wallpaper_weight}%（米哈游官方壁纸，原神 / 星铁 / 绝区零随机）\n"
         f"· 馒头主动戳一戳：{_join_weights(pokes, '×')}\n"
         f"· 角色面板次数 {panels}%（在喵喵插件里免费查看一次角色面板）\n"
         f"· 群面板排名次数 {panel_ranks}%（在喵喵插件里免费查看一次群面板排名）\n"
@@ -126,6 +132,9 @@ WHEEL_TAOZI_TIMEOUT_REPLY = " 桃子表情包确认超时，本次没有兑换�
 WHEEL_TAOZI_POOR_REPLY = " 好感不足 {cost} 点，本次没有兑换，当前 {affection}"
 WHEEL_TAOZI_MISSING_REPLY = " 桃子表情包素材还没准备好，本次不重抽"
 WHEEL_TAOZI_FAILED_REPLY = " 本次桃子表情包发送失败，不重抽"
+
+WHEEL_WALLPAPER_REPLY = " 🖼️ 抽到随机壁纸（{label}）："
+WHEEL_WALLPAPER_FAILED_REPLY = " 这次没取到壁纸，本次不重抽"
 
 
 def format_sticker_prompt(
@@ -233,6 +242,7 @@ class WheelCoordinator:
         memes=None,
         resources=None,
         stickers=None,
+        wallpapers=None,
         image_quota=None,
         panel_quota=None,
         panel_rank_quota=None,
@@ -245,6 +255,7 @@ class WheelCoordinator:
         self.memes = memes
         self.resources = resources
         self.stickers = stickers
+        self.wallpapers = wallpapers
         self.image_quota = image_quota
         self.panel_quota = panel_quota
         self.panel_rank_quota = panel_rank_quota
@@ -425,6 +436,8 @@ class WheelCoordinator:
                         await self._run_panel_rank_quota(pending, participant, outcome.value)
                     elif outcome.kind == "taozi":
                         await self._run_sticker_outcome(pending, participant)
+                    elif outcome.kind == "wallpaper":
+                        await self._run_wallpaper_outcome(pending, participant)
                     else:
                         await self._run_meme_outcome(pending, participant)
                 except Exception:
@@ -535,6 +548,58 @@ class WheelCoordinator:
         await pending.send(
             MessageSegment.at(participant.user_id)
             + MessageSegment.text(f" 馒头主动戳了你 {count} 次（是馒头戳你，不用你回戳）")
+        )
+
+    async def _run_wallpaper_outcome(
+        self, pending: PendingWheel, participant: WheelParticipant
+    ) -> None:
+        """转盘抽到随机壁纸：从米哈游官方壁纸库里取一张直接发出去。"""
+
+        try:
+            if self.wallpapers is None:
+                raise WallpaperUnavailable("壁纸库未接线")
+            wallpaper, data = await self.wallpapers.draw()
+        except WallpaperUnavailable as error:
+            logger.warning(f"[mantou-affection] 转盘壁纸不可用: {error}")
+            await pending.send(
+                MessageSegment.at(participant.user_id)
+                + MessageSegment.text(WHEEL_WALLPAPER_FAILED_REPLY)
+            )
+            return
+        except Exception:
+            logger.exception("[mantou-affection] 转盘壁纸取图失败")
+            await pending.send(
+                MessageSegment.at(participant.user_id)
+                + MessageSegment.text(WHEEL_WALLPAPER_FAILED_REPLY)
+            )
+            return
+        label = (
+            f"{wallpaper.game} · {wallpaper.collection}"
+            if wallpaper.collection
+            else wallpaper.game
+        )
+        caption = MessageSegment.at(participant.user_id) + MessageSegment.text(
+            WHEEL_WALLPAPER_REPLY.format(label=label)
+        )
+        try:
+            await pending.send(caption + MessageSegment.image(data))
+            return
+        except Exception:
+            logger.exception(
+                f"[mantou-affection] 转盘壁纸图片发送失败，改用原图直链 "
+                f"group={pending.group_id} user={participant.user_id}"
+            )
+        try:
+            await pending.send(caption + MessageSegment.image(wallpaper.url))
+            return
+        except Exception:
+            logger.exception(
+                f"[mantou-affection] 转盘壁纸直链发送失败 group={pending.group_id} "
+                f"user={participant.user_id}"
+            )
+        await pending.send(
+            MessageSegment.at(participant.user_id)
+            + MessageSegment.text(f" 壁纸「{label}」没发出去，原图：{wallpaper.url}")
         )
 
     async def _run_meme_outcome(
