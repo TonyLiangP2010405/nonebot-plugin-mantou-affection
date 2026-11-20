@@ -174,21 +174,30 @@ class FakeWallpapers:
         self,
         image: bytes = b"wallpaper:001",
         game: str = "原神",
-        collection: str = "官方电脑壁纸第三弹",
+        collection: str = "米游社「原神同人图」",
         error: Exception | None = None,
+        fanart_error: Exception | None = None,
     ):
         self.image = image
         self.game = game
         self.collection = collection
         self.error = error
+        self.fanart_error = fanart_error
         self.draws = 0
+        self.calls: list[tuple[str | None, bool]] = []
 
-    async def draw(self):
+    async def draw(self, game=None, *, fanart: bool = False):
         self.draws += 1
+        self.calls.append((game, fanart))
         if self.error is not None:
             raise self.error
+        if fanart and self.fanart_error is not None:
+            raise self.fanart_error
+        source = "fanart" if fanart else "official"
         return (
-            Wallpaper(self.game, self.collection, "https://example.com/a.png"),
+            Wallpaper(
+                self.game, self.collection, "https://example.com/a.png", source
+            ),
             self.image,
         )
 
@@ -1216,7 +1225,7 @@ async def test_panel_rank_quota_store_is_independent(tmp_path: Path) -> None:
     assert await rank.consume(GROUP, TRIGGER, 1) is None
 
 
-async def test_wheel_wallpaper_sends_image_with_source_caption(tmp_path: Path) -> None:
+async def test_wheel_wallpaper_sends_fanart_by_default(tmp_path: Path) -> None:
     wallpapers = FakeWallpapers()
     coordinator = make_coordinator(
         tmp_path, rng=SequenceRng([18]), wallpapers=wallpapers
@@ -1226,9 +1235,9 @@ async def test_wheel_wallpaper_sends_image_with_source_caption(tmp_path: Path) -
     await operate(coordinator, pending)
 
     body = sent_text(sent)
-    assert "抽到随机壁纸" in body
-    assert "原神 · 官方电脑壁纸第三弹" in body
-    assert wallpapers.draws == 1
+    assert "抽到随机二创图" in body
+    assert "原神 · 米游社「原神同人图」" in body
+    assert wallpapers.calls == [(None, True)]
     images = [
         segment
         for message in sent
@@ -1251,7 +1260,25 @@ async def test_wheel_wallpaper_failure_reports_without_redraw(tmp_path: Path) ->
 
     assert "这次没取到壁纸，本次不重抽" in sent_text(sent)
     assert not any(segment.type == "image" for message in sent for segment in message)
-    assert wallpapers.draws == 1
+    assert wallpapers.calls == [(None, True), (None, False)]
+
+
+async def test_wheel_wallpaper_falls_back_to_official(tmp_path: Path) -> None:
+    wallpapers = FakeWallpapers(
+        collection="原神电脑官方壁纸第三弹",
+        fanart_error=WallpaperUnavailable("二创源挂了"),
+    )
+    coordinator = make_coordinator(
+        tmp_path, rng=SequenceRng([18]), wallpapers=wallpapers
+    )
+    pending, sent, _ = await start(coordinator)
+
+    await operate(coordinator, pending)
+
+    body = sent_text(sent)
+    assert "二创图源没取到，改发官方壁纸" in body
+    assert "原神 · 原神电脑官方壁纸第三弹" in body
+    assert wallpapers.calls == [(None, True), (None, False)]
 
 
 async def test_wheel_wallpaper_without_library_still_reports(tmp_path: Path) -> None:

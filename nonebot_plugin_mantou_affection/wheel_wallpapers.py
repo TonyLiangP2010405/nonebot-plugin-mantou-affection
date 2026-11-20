@@ -8,7 +8,8 @@
   原图在 ``upload-bbs.miyoushe.com``；
 * 二创：米游社的搜索接口（``bbs-api.miyoushe.com``），取玩家发在「同人图 / 壁纸」
   版区的帖子，原图同样在 ``upload-bbs.miyoushe.com``；尺寸用图床的
-  ``x-oss-process=image/info`` 接口先确认，避免下完才发现是小图。
+  ``x-oss-process=image/info`` 接口先确认，避免下完才发现是小图。二创只要求
+  分辨率够看，不强求壁纸比例，竖一点的插画也照发。
 
 合集索引按 TTL 缓存在本地，网络抖动或站点临时不可用时优先用过期缓存兜底。
 """
@@ -45,7 +46,8 @@ BBS_SEARCH_API = "https://bbs-api.miyoushe.com/post/wapi/searchPosts"
 BBS_IMAGE_INFO = "?x-oss-process=image/info"
 SEARCH_POSTS = 20
 MIN_WIDTH = 1920
-FANART_MIN_SIDE = 1080
+FANART_MIN_SIDE = 900
+FANART_MIN_PIXELS = 1_200_000
 FANART_MAX_BYTES = 10 * 1024 * 1024
 FANART_INFO_CHECKS = 5
 CACHE_TTL_SECONDS = 12 * 3600
@@ -508,6 +510,9 @@ class WallpaperLibrary:
     def _fanart_is_large(self, url: str) -> bool:
         """用图床的 image/info 接口确认二创原图够大，省得下完才发现是小图。
 
+        二创不要求横屏：短边够 900 且总像素够 120 万就收，竖版插画、方图都行；
+        米游社搜索里混着手机截图（828x1792、1280x645 之类），靠这两条挡掉。
+
         元数据读不到时按「够大」处理：接口抽风不该把整组图都丢掉。
         """
 
@@ -523,7 +528,10 @@ class WallpaperLibrary:
             return False
         if not width or not height:
             return True
-        return min(width, height) >= FANART_MIN_SIDE and max(width, height) >= MIN_WIDTH
+        return (
+            min(width, height) >= FANART_MIN_SIDE
+            and width * height >= FANART_MIN_PIXELS
+        )
 
     async def _filter_fanart(self, candidates: list[str]) -> list[str]:
         """二创图先探测前几张的尺寸，留下够大的；探测数量设上限，避免请求爆炸。

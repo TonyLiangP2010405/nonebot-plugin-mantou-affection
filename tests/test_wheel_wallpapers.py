@@ -404,6 +404,39 @@ async def test_draw_fanart_uses_search_and_skips_small_images(
     assert BBS_FAN_A not in opener.calls
 
 
+async def test_draw_fanart_keeps_portrait_art_but_drops_screenshots(
+    tmp_path: Path,
+) -> None:
+    keyword = "绝区零同人图"
+    art = "https://upload-bbs.miyoushe.com/upload/2026/01/01/art.jpg"
+    shot = "https://upload-bbs.miyoushe.com/upload/2026/01/01/shot.jpg"
+    opener = FakeOpener(
+        {
+            search_url(keyword): json.dumps(
+                search_payload([shot, art])
+            ).encode("utf-8"),
+            shot + INFO_SUFFIX: info_payload(1280, 645),
+            art + INFO_SUFFIX: info_payload(1200, 1600),
+            art: b"portrait-art",
+        }
+    )
+    library = make_library(
+        tmp_path,
+        opener,
+        collections=(),
+        fanart_collections=(
+            WallpaperCollection("绝区零", "search", 0, query=keyword),
+        ),
+        rng=random.Random(0),
+    )
+
+    wallpaper, data = await library.draw(fanart=True)
+
+    assert wallpaper.source == "fanart"
+    assert data == b"portrait-art"
+    assert shot not in opener.calls
+
+
 async def test_draw_fanart_keeps_images_when_info_is_missing(
     tmp_path: Path,
 ) -> None:

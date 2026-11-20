@@ -12,7 +12,7 @@ from .logic import NEWBIE_PROTECTION_NOTE, protect_deduction
 from .service import normalize_nickname
 from .wheel_memes import MemeAssetMissing, MemeGenerationError
 from .wheel_stickers import StickerAssetMissing, StickerError
-from .wheel_wallpapers import WallpaperUnavailable
+from .wheel_wallpapers import Wallpaper, WallpaperUnavailable
 
 if TYPE_CHECKING:
     from .ambient import EventCoordinator
@@ -94,7 +94,7 @@ def format_wheel_rules(timeout: int, newbie_below: int = 50) -> str:
         "转盘各项概率：\n"
         f"· 馒头制作随机表情 {meme_weight}%\n"
         f"· 桃子表情包 {taozi_weight}%（换一张需 {WHEEL_TAOZI_COST} 点好感）\n"
-        f"· 随机壁纸 {wallpaper_weight}%（米哈游官方壁纸，原神 / 星铁 / 绝区零随机）\n"
+        f"· 随机壁纸 {wallpaper_weight}%（米游社二创图，原神 / 星铁 / 绝区零随机）\n"
         f"· 馒头主动戳一戳：{_join_weights(pokes, '×')}\n"
         f"· 角色面板次数 {panels}%（在喵喵插件里免费查看一次角色面板）\n"
         f"· 群面板排名次数 {panel_ranks}%（在喵喵插件里免费查看一次群面板排名）\n"
@@ -133,7 +133,8 @@ WHEEL_TAOZI_POOR_REPLY = " 好感不足 {cost} 点，本次没有兑换，当前
 WHEEL_TAOZI_MISSING_REPLY = " 桃子表情包素材还没准备好，本次不重抽"
 WHEEL_TAOZI_FAILED_REPLY = " 本次桃子表情包发送失败，不重抽"
 
-WHEEL_WALLPAPER_REPLY = " 🖼️ 抽到随机壁纸（{label}）："
+WHEEL_FANART_REPLY = " 🎨 抽到随机二创图（{label}）："
+WHEEL_FANART_FALLBACK_REPLY = " 🖼️ 二创图源没取到，改发官方壁纸（{label}）："
 WHEEL_WALLPAPER_FAILED_REPLY = " 这次没取到壁纸，本次不重抽"
 
 
@@ -550,15 +551,27 @@ class WheelCoordinator:
             + MessageSegment.text(f" 馒头主动戳了你 {count} 次（是馒头戳你，不用你回戳）")
         )
 
+    async def _draw_wallpaper(self) -> tuple[Wallpaper, bytes]:
+        """先抽二创图；二创源取不到时退回官方壁纸，别让这次转盘白抽。"""
+
+        assert self.wallpapers is not None
+        try:
+            return await self.wallpapers.draw(fanart=True)
+        except WallpaperUnavailable as error:
+            logger.warning(
+                f"[mantou-affection] 转盘二创图不可用，改用官方壁纸: {error}"
+            )
+            return await self.wallpapers.draw()
+
     async def _run_wallpaper_outcome(
         self, pending: PendingWheel, participant: WheelParticipant
     ) -> None:
-        """转盘抽到随机壁纸：从米哈游官方壁纸库里取一张直接发出去。"""
+        """转盘抽到随机壁纸：优先发米游社二创图，二创源挂了再退回官方壁纸。"""
 
         try:
             if self.wallpapers is None:
                 raise WallpaperUnavailable("壁纸库未接线")
-            wallpaper, data = await self.wallpapers.draw()
+            wallpaper, data = await self._draw_wallpaper()
         except WallpaperUnavailable as error:
             logger.warning(f"[mantou-affection] 转盘壁纸不可用: {error}")
             await pending.send(
@@ -578,8 +591,13 @@ class WheelCoordinator:
             if wallpaper.collection
             else wallpaper.game
         )
+        template = (
+            WHEEL_FANART_REPLY
+            if wallpaper.source == "fanart"
+            else WHEEL_FANART_FALLBACK_REPLY
+        )
         caption = MessageSegment.at(participant.user_id) + MessageSegment.text(
-            WHEEL_WALLPAPER_REPLY.format(label=label)
+            template.format(label=label)
         )
         try:
             await pending.send(caption + MessageSegment.image(data))
