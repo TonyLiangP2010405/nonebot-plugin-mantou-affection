@@ -4,7 +4,7 @@ from pathlib import Path
 from time import time
 
 import pytest
-from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message, MessageSegment
+from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message
 from nonebot.adapters.onebot.v11.event import Sender
 from nonebot.exception import FinishedException
 
@@ -106,7 +106,7 @@ def test_format_probability(value: float, expected: str) -> None:
 def test_registered_matchers_include_probability_command() -> None:
     from nonebot_plugin_mantou_affection import matchers
 
-    assert len(matchers) == 25
+    assert len(matchers) == 24
     (
         _profile_cmd,
         _interact_cmd,
@@ -121,7 +121,6 @@ def test_registered_matchers_include_probability_command() -> None:
         pk_bank_cmd,
         wheel_cmd,
         group_quiz_cmd,
-        meme_whitelist_cmd,
         batch_probability_cmd,
         fill_blank_cmd,
         _teyvat_quiz_cmd,
@@ -154,7 +153,6 @@ def test_registered_matchers_include_probability_command() -> None:
         pk_bank_cmd: "handle_pk_bank",
         wheel_cmd: "handle_wheel_probability",
         group_quiz_cmd: "handle_group_quiz_probability",
-        meme_whitelist_cmd: "handle_meme_whitelist",
         fill_blank_cmd: "handle_fill_blank_probability",
         _hsr_quiz_cmd: "handle_hsr_quiz_probability",
         _zzz_quiz_cmd: "handle_zzz_quiz_probability",
@@ -202,15 +200,6 @@ def _event(group_id: int = 90001, user_id: int = 90002) -> GroupMessageEvent:
         to_me=False,
         group_id=group_id,
     )
-
-
-def _at_message(*targets: str) -> Message:
-    message = Message()
-    for index, target in enumerate(targets):
-        if index:
-            message.append(MessageSegment.text(" "))
-        message.append(MessageSegment.at(target))
-    return message
 
 
 async def test_profile_command_reports_daily_gain(tmp_path: Path, monkeypatch) -> None:
@@ -285,127 +274,11 @@ async def test_wheel_probability_command_query_and_set(tmp_path: Path, monkeypat
     assert await service.wheel_probability() == 0.002
 
 
-def _meme_whitelist_handler(tmp_path: Path, monkeypatch) -> tuple:
-    service = AffectionService(AffectionStore(tmp_path / "affection.json"), Config())
-    meme_whitelist_cmd = register_commands(service, Config())[13]
-    sent: list[str] = []
-
-    async def fake_finish(message: Message | str = "", **kwargs) -> None:
-        sent.append(str(message))
-
-    monkeypatch.setattr(meme_whitelist_cmd, "finish", fake_finish)
-    return service, meme_whitelist_cmd.handlers[0], sent
-
-
-async def test_meme_whitelist_command_toggles_only_self(
-    tmp_path: Path, monkeypatch
-) -> None:
-    service, handler, sent = _meme_whitelist_handler(tmp_path, monkeypatch)
-
-    await handler.call(_event(group_id=90001, user_id=90002), Message(""))
-    assert "已加入表情免确认白名单" in sent[-1]
-    assert await service.meme_confirm_whitelist() == {"90002"}
-
-    reopened = AffectionService(AffectionStore(tmp_path / "affection.json"), Config())
-    assert await reopened.meme_confirm_whitelist() == {"90002"}
-
-    # 白名单全局生效: 换个群再发一次仍然切换的是同一个人
-    await handler.call(_event(group_id=90002, user_id=90002), Message(""))
-    assert "已退出表情免确认白名单" in sent[-1]
-    assert await service.meme_confirm_whitelist() == set()
-
-    # 普通群友带参数(哪怕 @ 别人)只提示管理自己, 不会改动任何人的状态
-    await handler.call(_event(), Message(MessageSegment.at("90099")))
-    assert "只能管理自己" in sent[-1]
-    assert await service.meme_confirm_whitelist() == set()
-
-    await handler.call(_event(), Message("90099"))
-    assert "只能管理自己" in sent[-1]
-    assert await service.meme_confirm_whitelist() == set()
-
-    multiple = _at_message("90098", "90099")
-    await handler.call(_event(), multiple)
-    assert "只能管理自己" in sent[-1]
-    assert await service.meme_confirm_whitelist() == set()
-
-
-async def test_meme_whitelist_superuser_toggles_target_by_at(
-    tmp_path: Path, monkeypatch
-) -> None:
-    service, handler, sent = _meme_whitelist_handler(tmp_path, monkeypatch)
-    await service.store.update_profile("90001", "90003", "桃友", lambda _profile: None)
-
-    await handler.call(_event(user_id=10001), Message(MessageSegment.at("90003")))
-    assert "已为 桃友(90003) 加入表情免确认白名单" in sent[-1]
-    assert await service.meme_confirm_whitelist() == {"90003"}
-
-    await handler.call(_event(user_id=10001), Message(MessageSegment.at("90003")))
-    assert "已为 桃友(90003) 退出表情免确认白名单" in sent[-1]
-    assert await service.meme_confirm_whitelist() == set()
-
-
-async def test_meme_whitelist_superuser_toggles_target_by_qq(
-    tmp_path: Path, monkeypatch
-) -> None:
-    service, handler, sent = _meme_whitelist_handler(tmp_path, monkeypatch)
-
-    await handler.call(_event(user_id=10001), Message("90004"))
-    assert "已为 90004 加入表情免确认白名单" in sent[-1]
-    assert await service.meme_confirm_whitelist() == {"90004"}
-
-    await handler.call(_event(user_id=10001), Message("90004"))
-    assert "已为 90004 退出表情免确认白名单" in sent[-1]
-    assert await service.meme_confirm_whitelist() == set()
-
-
-async def test_meme_whitelist_superuser_rejects_multiple_targets(
-    tmp_path: Path, monkeypatch
-) -> None:
-    service, handler, sent = _meme_whitelist_handler(tmp_path, monkeypatch)
-
-    two_at = _at_message("90003", "90004")
-    await handler.call(_event(user_id=10001), two_at)
-    assert "一次只能操作一个人" in sent[-1]
-    assert await service.meme_confirm_whitelist() == set()
-
-    await handler.call(_event(user_id=10001), Message("90003 90004"))
-    assert "一次只能操作一个人" in sent[-1]
-    assert await service.meme_confirm_whitelist() == set()
-
-    await handler.call(_event(user_id=10001), Message("90003，90004"))
-    assert "一次只能操作一个人" in sent[-1]
-    assert await service.meme_confirm_whitelist() == set()
-
-    mixed = _at_message("90003")
-    mixed.append(MessageSegment.text(" 90004"))
-    await handler.call(_event(user_id=10001), mixed)
-    assert "一次只能操作一个人" in sent[-1]
-    assert await service.meme_confirm_whitelist() == set()
-
-    await handler.call(_event(user_id=10001), Message("不是 QQ 号"))
-    assert "只能 @ 一位群友或填写一个 QQ 号" in sent[-1]
-    assert await service.meme_confirm_whitelist() == set()
-
-
-async def test_meme_whitelist_superuser_without_args_toggles_self(
-    tmp_path: Path, monkeypatch
-) -> None:
-    service, handler, sent = _meme_whitelist_handler(tmp_path, monkeypatch)
-
-    await handler.call(_event(user_id=10001), Message(""))
-    assert "已加入表情免确认白名单" in sent[-1]
-    assert await service.meme_confirm_whitelist() == {"10001"}
-
-    await handler.call(_event(user_id=10001), Message(""))
-    assert "已退出表情免确认白名单" in sent[-1]
-    assert await service.meme_confirm_whitelist() == set()
-
-
 async def test_batch_probability_command_query_set_scale_and_reset(
     tmp_path: Path, monkeypatch
 ) -> None:
     service = AffectionService(AffectionStore(tmp_path / "affection.json"), Config())
-    batch_cmd = register_commands(service, Config())[14]
+    batch_cmd = register_commands(service, Config())[13]
     sent: list[str] = []
 
     async def fake_finish(message: Message | str = "", **kwargs) -> None:
@@ -452,7 +325,7 @@ async def test_batch_probability_command_scales_percent_factor(
     tmp_path: Path, monkeypatch
 ) -> None:
     service = AffectionService(AffectionStore(tmp_path / "affection.json"), Config())
-    batch_cmd = register_commands(service, Config())[14]
+    batch_cmd = register_commands(service, Config())[13]
     sent: list[str] = []
 
     async def fake_finish(message: Message | str = "", **kwargs) -> None:
@@ -487,7 +360,6 @@ async def test_help_lists_every_command(tmp_path: Path, monkeypatch) -> None:
         "/馒头互动",
         "/馒头好感",
         "/馒头好感榜",
-        "/馒头表情免确认",
         "/馒头帮助",
         "/馒头好感调整",
         "/馒头好感重置",
@@ -519,7 +391,7 @@ async def test_batch_probability_finish_is_not_caught(
     tmp_path: Path, monkeypatch, argument: str
 ) -> None:
     service = AffectionService(AffectionStore(tmp_path / "affection.json"), Config())
-    batch_cmd = register_commands(service, Config())[14]
+    batch_cmd = register_commands(service, Config())[13]
     sent: list[str] = []
 
     async def fake_finish(message: Message | str = "", **kwargs) -> None:

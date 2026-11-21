@@ -26,6 +26,34 @@ class StickerAssetMissing(StickerError):
     pass
 
 
+LOCAL_STICKER_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+
+
+def pick_local_sticker(directory: str) -> bytes:
+    """从配置的绝对目录直接抽一张本地表情包。"""
+
+    if not directory:
+        raise StickerAssetMissing("未配置 MANTOU_AFFECTION_WHEEL_STICKER_DIR")
+    folder = Path(directory)
+    if not folder.is_absolute():
+        raise StickerAssetMissing("馒头表情包目录必须是绝对路径")
+
+    try:
+        images = [
+            path
+            for path in folder.iterdir()
+            if path.suffix.lower() in LOCAL_STICKER_SUFFIXES and path.is_file()
+        ]
+        if not images:
+            raise StickerAssetMissing("馒头表情包目录里没有可用图片")
+        data = random.choice(images).read_bytes()
+    except (OSError, ValueError) as error:
+        raise StickerAssetMissing(f"无法读取馒头表情包素材: {error}") from error
+    if not data:
+        raise StickerAssetMissing("抽中的馒头表情包文件为空")
+    return data
+
+
 @dataclass(frozen=True)
 class TaoziSticker:
     id: int

@@ -574,8 +574,6 @@ def register_ambient(
                 return
             if coordinator.answer(group_id, user_id, name, text):
                 return
-            # 转盘的表情选择会在转盘结束后继续等 1~9 的回复。放到最后。
-            # 避免它把正在进行的事件/问答答案当成表情选择吃掉。
             if await wheel_coordinator.answer(group_id, user_id, name, text):
                 return
         except Exception:

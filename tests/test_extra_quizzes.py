@@ -51,7 +51,7 @@ CASES = [
         HsrQuizCoordinator,
         HSR_QUIZ_SPEC,
         BUNDLED_HSR_QUIZ_PATH,
-        17,
+        16,
         "hsr_quiz_probability",
         "hsr_quiz",
         "星穹铁道问答",
@@ -62,7 +62,7 @@ CASES = [
         ZzzQuizCoordinator,
         ZZZ_QUIZ_SPEC,
         BUNDLED_ZZZ_QUIZ_PATH,
-        18,
+        17,
         "zzz_quiz_probability",
         "zzz_quiz",
         "绝区零问答",
@@ -73,7 +73,7 @@ CASES = [
         PetitPlanetQuizCoordinator,
         PETIT_PLANET_QUIZ_SPEC,
         BUNDLED_PETIT_PLANET_QUIZ_PATH,
-        19,
+        18,
         "petit_planet_quiz_probability",
         "petit_planet_quiz",
         "星布谷地问答",
@@ -252,7 +252,7 @@ def test_quiz_probability_command(
 ) -> None:
     service = _service(tmp_path)
     commands = register_commands(service, Config(), PkCoordinator(service, Config(), None))
-    assert len(commands) == 25
+    assert len(commands) == 24
     command = commands[command_index]
     assert [handler.call.__name__ for handler in command.handlers] == [
         f"handle_{attach_name}_probability"

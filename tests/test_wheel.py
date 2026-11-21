@@ -5,7 +5,6 @@ import base64
 import random
 from contextlib import suppress
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from nonebot.adapters.onebot.v11 import Message
@@ -21,7 +20,6 @@ from nonebot_plugin_mantou_affection.wheel import (
     WheelCoordinator,
     WheelOutcome,
     draw_wheel_outcome,
-    format_meme_confirm,
     format_wheel_rules,
 )
 from nonebot_plugin_mantou_affection.wheel_memes import MemeAssetMissing, MemeGenerationError
@@ -40,22 +38,18 @@ class FixedRollRng(random.Random):
     def __new__(cls, *args, **kwargs):
         return super().__new__(cls)
 
-    def __init__(self, roll: int, value: float = 0.0):
+    def __init__(self, roll: int):
         super().__init__(0)
         self.roll = roll
-        self.value = value
 
     def randrange(self, stop: int) -> int:
         assert stop == 100
         return self.roll
 
-    def random(self) -> float:
-        return self.value
-
 
 class SequenceRng(FixedRollRng):
-    def __init__(self, rolls: list[int], value: float = 0.0):
-        super().__init__(0, value)
+    def __init__(self, rolls: list[int]):
+        super().__init__(0)
         self.rolls = iter(rolls)
 
     def randrange(self, stop: int) -> int:
@@ -76,59 +70,18 @@ class FakeBot:
             raise RuntimeError("poke unsupported")
 
 
-class FakeMemeTemplate:
-    def __init__(
-        self,
-        key: str = "petpet",
-        keywords: tuple[str, ...] = ("摸摸头",),
-        tags: tuple[str, ...] = ("可爱", "宠物"),
-    ):
-        self.key = key
-        self.keywords = list(keywords)
-        self.tags = list(tags)
-
-
 class FakeMemes:
     def __init__(
         self,
         missing_users: set[str] | None = None,
-        draw_error: Exception | None = None,
         generate_error: Exception | None = None,
     ):
         self.missing_users = missing_users or set()
-        self.template = FakeMemeTemplate()
-        self.draw_error = draw_error
         self.generate_error = generate_error
-        self.draw_calls = 0
-        self.generate_calls = 0
-        self.generated: list[tuple[object, str, str]] = []
-        self.drawn_groups: list[str] = []
-        self.generated_groups: list[str] = []
-
-    def draw(self) -> tuple[FakeMemeTemplate, str]:
-        self.draw_calls += 1
-        if self.draw_error is not None:
-            raise self.draw_error
-        return self.template, "single"
-
-    async def draw_for_group(self, *, group_id: str, bot, user_id: str):
-        self.drawn_groups.append(group_id)
-        return self.draw()
+        self.calls: list[tuple[str | None, str]] = []
 
     async def generate(self, *, bot, user_id: str, nickname: str, group_id=None) -> bytes:
-        self.generated_groups.append(group_id)
-        self.generate_calls += 1
-        if self.generate_error is not None:
-            raise self.generate_error
-        if user_id in self.missing_users:
-            raise MemeAssetMissing("petpet/base.png")
-        return f"image:{user_id}".encode()
-
-    async def generate_with(
-        self, meme, kind: str, *, bot, user_id: str, nickname: str, group_id=None
-    ) -> bytes:
-        self.generated.append((meme, kind, user_id))
-        self.generated_groups.append(group_id)
+        self.calls.append((group_id, user_id))
         if self.generate_error is not None:
             raise self.generate_error
         if user_id in self.missing_users:
@@ -212,8 +165,12 @@ def make_coordinator(
     panel_quota=None,
     panel_rank_quota=None,
     wallpapers=None,
+    sticker_dir: str = "",
 ):
-    config = Config(mantou_affection_newbie_protection_below=0)
+    config = Config(
+        mantou_affection_newbie_protection_below=0,
+        mantou_affection_wheel_sticker_dir=sticker_dir,
+    )
     service = AffectionService(AffectionStore(tmp_path / "affection.json"), config)
     coordinator = WheelCoordinator(
         service,
@@ -276,19 +233,11 @@ async def operate(coordinator: WheelCoordinator, pending) -> None:
     await coordinator._auto_start(pending)
 
 
-async def cancel_meme_confirm(coordinator: WheelCoordinator, user_id: str = TRIGGER) -> None:
-    confirm = coordinator.meme_confirms.get((GROUP, user_id))
-    if confirm is None or confirm.task is None:
-        return
-    confirm.task.cancel()
-    with suppress(asyncio.CancelledError):
-        await confirm.task
-
-
 def test_wheel_weights_match_approved_table() -> None:
     weighted = [((outcome.kind, outcome.value), weight) for outcome, weight in WHEEL_OUTCOMES]
     assert weighted == [
-        (("meme", 0), 10),
+        (("meme", 0), 7),
+        (("mantou_sticker", 0), 3),
         (("taozi", 0), 1),
         (("wallpaper", 0), 10),
         (("image", 1), 2),
@@ -332,7 +281,9 @@ def test_wheel_image_quota_is_rare_and_capped_at_two() -> None:
 
 
 def test_wheel_draw_uses_independent_integer_ranges() -> None:
-    assert draw_wheel_outcome(FixedRollRng(9)).kind == "meme"
+    assert draw_wheel_outcome(FixedRollRng(6)).kind == "meme"
+    assert draw_wheel_outcome(FixedRollRng(7)).kind == "mantou_sticker"
+    assert draw_wheel_outcome(FixedRollRng(9)).kind == "mantou_sticker"
     assert draw_wheel_outcome(FixedRollRng(10)).kind == "taozi"
     assert draw_wheel_outcome(FixedRollRng(11)).kind == "wallpaper"
     assert draw_wheel_outcome(FixedRollRng(20)).kind == "wallpaper"
@@ -366,7 +317,8 @@ def test_rules_message_lists_every_probability() -> None:
     assert "倒计时结束前都可以参与" in rules
     assert "不运作" not in rules
     assert "确认" not in rules
-    assert "馒头制作随机表情 10%" in rules
+    assert "馒头制作随机表情 7%" in rules
+    assert "馒头表情包 3%（随机发一张）" in rules
     assert "桃子表情包 1%（换一张需 10 点好感）" in rules
     assert "随机壁纸 10%" in rules
     assert "馒头主动戳一戳：×1 7%、×3 5%、×5 3%、×10 2%、×20 1%" in rules
@@ -383,7 +335,8 @@ async def test_start_message_shows_probability_table(tmp_path: Path) -> None:
     _, sent, _ = await start(coordinator)
     body = sent[0].extract_plain_text()
     assert "转盘各项概率" in body
-    assert "馒头制作随机表情 10%" in body
+    assert "馒头制作随机表情 7%" in body
+    assert "馒头表情包 3%" in body
     assert "参与需要扣除 2 点好感度" in body
     coordinator.pending[GROUP].task.cancel()
 
@@ -564,8 +517,6 @@ async def test_wheel_meme_missing_requests_throttled_recheck(tmp_path: Path) -> 
     coordinator = make_coordinator(
         tmp_path, rng=SequenceRng([0, 0]), memes=memes, resources=resources
     )
-    await coordinator.service.toggle_meme_confirm_whitelist(TRIGGER)
-    await coordinator.service.toggle_meme_confirm_whitelist(OTHER)
     await give(coordinator.service, OTHER, 10)
     pending, sent, _ = await start(coordinator)
     await coordinator.answer(GROUP, OTHER, "路人", "参与")
@@ -741,214 +692,77 @@ def sent_text(sent: list[Message]) -> str:
     return "\n".join(message.extract_plain_text() for message in sent)
 
 
-def test_meme_confirm_format_falls_back_to_key_and_uncategorized() -> None:
-    meme = SimpleNamespace(key="plain_key", keywords=[], tags=[])
-
-    body = format_meme_confirm(meme, 30)
-
-    assert "「plain_key」" in body
-    assert "种类：无分类" in body
-    assert "键名：plain_key" in body
-    assert "表情内容可能引起不适，请谨慎确认" in body
-    assert "请在 30 秒内回复「确认」或「不确认」" in body
-    assert "50% 概率好感 +2" in body
-    assert "50% 概率好感 -2" in body
-
-
-async def test_wheel_meme_confirm_message_lists_template_and_warning(
-    tmp_path: Path,
-) -> None:
-    memes = FakeMemes()
-    coordinator = make_coordinator(tmp_path, rng=SequenceRng([0]), memes=memes)
-    pending, sent, _ = await start(coordinator)
-
-    await operate(coordinator, pending)
-    await asyncio.sleep(0)
-
-    assert GROUP not in coordinator.pending
-    assert (GROUP, TRIGGER) in coordinator.meme_confirms
-    body = sent_text(sent)
-    assert "「摸摸头」" in body
-    assert "种类：可爱、宠物" in body
-    assert "键名：petpet" in body
-    assert "表情内容可能引起不适，请谨慎确认" in body
-    assert "请在 30 秒内回复「确认」或「不确认」" in body
-    assert "50% 概率好感 +2" in body
-    assert "50% 概率好感 -2" in body
-    assert "30 秒" in body
-    assert not any(segment.type == "image" for message in sent for segment in message)
-    assert memes.draw_calls == 1
-    assert memes.generate_calls == 0
-    assert memes.generated == []
-    await cancel_meme_confirm(coordinator)
-
-
-async def test_wheel_meme_whitelisted_user_gets_image_without_confirm(
-    tmp_path: Path,
-) -> None:
-    memes = FakeMemes()
-    coordinator = make_coordinator(tmp_path, rng=SequenceRng([0]), memes=memes)
-    await coordinator.service.toggle_meme_confirm_whitelist(TRIGGER)
-    pending, sent, _ = await start(coordinator)
-
-    await operate(coordinator, pending)
-
-    assert coordinator.meme_confirms == {}
-    assert any(segment.type == "image" for message in sent for segment in message)
-    assert "馒头为你做了一张随机表情" in sent_text(sent)
-    assert memes.generate_calls == 1
-    assert memes.draw_calls == 0
-    assert memes.generated_groups == [GROUP]
-
-
-async def test_wheel_meme_confirm_generates_with_drawn_template(tmp_path: Path) -> None:
-    memes = FakeMemes()
-    coordinator = make_coordinator(tmp_path, rng=SequenceRng([0]), memes=memes)
+@pytest.mark.parametrize("filename", ["微笑.PNG", "挥手.gif"])
+async def test_wheel_sends_mantou_sticker_directly(tmp_path: Path, filename: str) -> None:
+    folder = tmp_path / "馒头 表情包"
+    folder.mkdir()
+    (folder / filename).write_bytes(b"local-sticker")
+    (folder / "说明.txt").write_bytes(b"not an image")
+    nested = folder / "子目录.png"
+    nested.mkdir()
+    (nested / "另一张.png").write_bytes(b"nested-sticker")
+    coordinator = make_coordinator(tmp_path, rng=SequenceRng([7]), sticker_dir=str(folder))
     await give(coordinator.service, TRIGGER, 10)
     pending, sent, _ = await start(coordinator)
+
     await operate(coordinator, pending)
-    confirm = coordinator.meme_confirms[(GROUP, TRIGGER)]
 
-    assert await coordinator.answer(GROUP, TRIGGER, "触发者", "确认") is True
-    if confirm.task is not None:
-        with suppress(asyncio.CancelledError):
-            await confirm.task
-
-    assert memes.generated == [(confirm.meme, "single", TRIGGER)]
-    assert memes.drawn_groups == [GROUP]
-    assert memes.generated_groups == [GROUP]
-    assert (GROUP, TRIGGER) not in coordinator.meme_confirms
+    award = sent[-1]
+    assert award[0].data["qq"] == TRIGGER
+    assert "抽中了「馒头表情包」" in award.extract_plain_text()
+    images = [segment for segment in award if segment.type == "image"]
+    assert len(images) == 1
+    encoded = images[0].data["file"].removeprefix("base64://")
+    assert base64.b64decode(encoded) == b"local-sticker"
     assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 10
-    assert any(segment.type == "image" for message in sent for segment in message)
-    assert "已确认，馒头为你做了一张表情" in sent_text(sent)
+    assert not coordinator.sticker_confirms
 
 
-@pytest.mark.parametrize(
-    ("value", "delta"),
-    [(0.2, 2), (0.8, -2)],
-)
-async def test_wheel_meme_decline_rolls_affection(
-    tmp_path: Path, value: float, delta: int
-) -> None:
-    memes = FakeMemes()
+@pytest.mark.parametrize("directory", ["", "relative-stickers", "missing", "empty"])
+async def test_wheel_handles_unavailable_mantou_stickers(tmp_path: Path, directory: str) -> None:
+    (tmp_path / "empty").mkdir()
+    if directory in {"missing", "empty"}:
+        directory = str(tmp_path / directory)
     coordinator = make_coordinator(
-        tmp_path, rng=SequenceRng([0], value=value), memes=memes
-    )
-    await give(coordinator.service, TRIGGER, 10)
-    pending, sent, _ = await start(coordinator)
-    await operate(coordinator, pending)
-
-    assert await coordinator.answer(GROUP, TRIGGER, "触发者", "不确认") is True
-
-    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 10 + delta
-    body = sent_text(sent)
-    assert f"好感 {delta:+d}" in body
-    assert f"当前 {10 + delta}" in body
-    assert "已放弃制作表情" in body
-    assert not any(segment.type == "image" for message in sent for segment in message)
-    assert coordinator.meme_confirms == {}
-
-
-async def test_wheel_meme_confirm_timeout_rolls_affection(tmp_path: Path) -> None:
-    memes = FakeMemes()
-    coordinator = make_coordinator(
-        tmp_path, rng=SequenceRng([0], value=0.2), memes=memes
-    )
-    coordinator.meme_confirm_timeout = 0.02
-    await give(coordinator.service, TRIGGER, 10)
-    pending, sent, _ = await start(coordinator)
-    await operate(coordinator, pending)
-    confirm = coordinator.meme_confirms[(GROUP, TRIGGER)]
-    assert confirm.task is not None
-
-    await asyncio.wait_for(confirm.task, 2)
-
-    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 12
-    assert coordinator.meme_confirms == {}
-    body = sent_text(sent)
-    assert "表情确认超时" in body
-    assert "好感 +2，当前 12" in body
-    assert not any(segment.type == "image" for message in sent for segment in message)
-
-
-async def test_wheel_meme_confirms_run_in_parallel(tmp_path: Path) -> None:
-    memes = FakeMemes()
-    coordinator = make_coordinator(
-        tmp_path, rng=SequenceRng([0, 0], value=0.2), memes=memes
+        tmp_path, rng=SequenceRng([9, 50]), sticker_dir=directory
     )
     await give(coordinator.service, TRIGGER, 10)
     await give(coordinator.service, OTHER, 10)
     pending, sent, _ = await start(coordinator)
-    await coordinator.answer(GROUP, OTHER, "路人", "参与")
+    assert await coordinator.answer(GROUP, OTHER, "路人", "参与") is True
 
     await operate(coordinator, pending)
-    await asyncio.sleep(0)
 
-    assert GROUP not in coordinator.pending
-    assert set(coordinator.meme_confirms) == {(GROUP, TRIGGER), (GROUP, OTHER)}
-    assert await coordinator.answer(GROUP, TRIGGER, "触发者", "确认") is True
-    assert await coordinator.answer(GROUP, OTHER, "路人", "不确认") is True
-
+    assert "抽中了「馒头表情包」，素材暂不可用" in sent_text(sent)
+    assert not any(segment.type == "image" for message in sent for segment in message)
     assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 10
-    assert (await coordinator.service.profile(GROUP, OTHER)).affection == 10
-    body = sent_text(sent)
-    assert "已确认，馒头为你做了一张表情" in body
-    assert "已放弃制作表情，好感 +2，当前 10" in body
-    assert coordinator.meme_confirms == {}
-    assert any(segment.type == "image" for message in sent for segment in message)
+    assert (await coordinator.service.profile(GROUP, OTHER)).affection == 9
+    assert GROUP not in coordinator.pending
 
 
-async def test_wheel_meme_confirm_replaced_by_new_draw(tmp_path: Path) -> None:
+async def test_wheel_sends_memes_to_all_winners_without_confirmation(tmp_path: Path) -> None:
     memes = FakeMemes()
-    coordinator = make_coordinator(
-        tmp_path, rng=SequenceRng([0, 50, 0]), memes=memes
-    )
-    coordinator.meme_confirm_timeout = 5
+    coordinator = make_coordinator(tmp_path, rng=SequenceRng([0, 0]), memes=memes)
     await give(coordinator.service, TRIGGER, 10)
     await give(coordinator.service, OTHER, 10)
-    pending, _, _ = await start(coordinator)
+    pending, sent, _ = await start(coordinator)
+    assert await coordinator.answer(GROUP, OTHER, "路人", "参与") is True
+
     await operate(coordinator, pending)
-    old = coordinator.meme_confirms[(GROUP, TRIGGER)]
-    assert old.task is not None
 
-    pending2, _, _ = await start(coordinator, user_id=OTHER, nickname="路人")
-    await coordinator.answer(GROUP, TRIGGER, "触发者", "参与")
-    await operate(coordinator, pending2)
-
-    new = coordinator.meme_confirms[(GROUP, TRIGGER)]
-    assert new is not old
-    assert old.accepting is False
-    with suppress(asyncio.CancelledError):
-        await old.task
-    assert old.task.done()
-    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 8
-    assert (await coordinator.service.profile(GROUP, OTHER)).affection == 11
-    await cancel_meme_confirm(coordinator)
-
-
-async def test_wheel_meme_confirm_does_not_block_new_wheel(tmp_path: Path) -> None:
-    memes = FakeMemes()
-    coordinator = make_coordinator(tmp_path, rng=SequenceRng([0, 50]), memes=memes)
-    coordinator.meme_confirm_timeout = 5
-    await give(coordinator.service, TRIGGER, 10)
-    await give(coordinator.service, OTHER, 10)
-    pending, _, _ = await start(coordinator)
-    await operate(coordinator, pending)
-    assert (GROUP, TRIGGER) in coordinator.meme_confirms
-
-    pending2, _, _ = await start(coordinator, user_id=OTHER, nickname="路人")
-    await operate(coordinator, pending2)
-
+    assert memes.calls == [(GROUP, TRIGGER), (GROUP, OTHER)]
+    awards = [message for message in sent if any(segment.type == "image" for segment in message)]
+    assert [message[0].data["qq"] for message in awards] == [TRIGGER, OTHER]
+    assert sent_text(awards).count("馒头为你做了一张随机表情") == 2
+    assert "确认" not in sent_text(sent)
     assert GROUP not in coordinator.pending
-    assert (GROUP, TRIGGER) in coordinator.meme_confirms
-    assert (await coordinator.service.profile(GROUP, OTHER)).affection == 11
+    assert await coordinator.answer(GROUP, TRIGGER, "触发者", "确认") is False
+    assert await coordinator.answer(GROUP, OTHER, "路人", "不确认") is False
     assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 10
-    await cancel_meme_confirm(coordinator)
+    assert (await coordinator.service.profile(GROUP, OTHER)).affection == 8
 
 
-async def test_wheel_meme_confirmed_asset_missing_reports_without_redraw(
-    tmp_path: Path,
-) -> None:
+async def test_wheel_meme_asset_missing_reports_without_redraw(tmp_path: Path) -> None:
     memes = FakeMemes(missing_users={TRIGGER})
     resources = FakeResources()
     coordinator = make_coordinator(
@@ -957,26 +771,22 @@ async def test_wheel_meme_confirmed_asset_missing_reports_without_redraw(
     pending, sent, _ = await start(coordinator)
     await operate(coordinator, pending)
 
-    assert await coordinator.answer(GROUP, TRIGGER, "触发者", "确认") is True
-
+    assert memes.calls == [(GROUP, TRIGGER)]
     assert resources.calls == 1
-    assert "表情素材尚未下载完成" in sent_text(sent)
+    assert "表情素材尚未下载完成，本次不重抽" in sent_text(sent)
     assert not any(segment.type == "image" for message in sent for segment in message)
-    assert coordinator.meme_confirms == {}
-    assert coordinator.meme_confirms.get((GROUP, TRIGGER)) is None
 
 
-async def test_wheel_meme_confirmed_generation_failure_reports(tmp_path: Path) -> None:
-    memes = FakeMemes(generate_error=MemeGenerationError("boom"))
+@pytest.mark.parametrize("error", [MemeGenerationError("boom"), RuntimeError("boom")])
+async def test_wheel_meme_generation_failure_reports(tmp_path: Path, error: Exception) -> None:
+    memes = FakeMemes(generate_error=error)
     coordinator = make_coordinator(tmp_path, rng=SequenceRng([0]), memes=memes)
     pending, sent, _ = await start(coordinator)
     await operate(coordinator, pending)
 
-    assert await coordinator.answer(GROUP, TRIGGER, "触发者", "确认") is True
-
+    assert memes.calls == [(GROUP, TRIGGER)]
     assert "本次表情生成失败，不重抽" in sent_text(sent)
     assert not any(segment.type == "image" for message in sent for segment in message)
-    assert coordinator.meme_confirms == {}
 
 
 async def test_wheel_taozi_asks_before_charging(tmp_path: Path) -> None:
@@ -1154,29 +964,28 @@ async def test_wheel_taozi_confirm_replaced_by_new_draw(tmp_path: Path) -> None:
     new.task.cancel()
 
 
-async def test_wheel_taozi_and_meme_confirms_coexist(tmp_path: Path) -> None:
+async def test_wheel_sends_meme_and_waits_for_taozi_exchange(tmp_path: Path) -> None:
     memes = FakeMemes()
     stickers = FakeStickers()
     coordinator = make_coordinator(
-        tmp_path, rng=SequenceRng([0, 50, 10]), memes=memes, stickers=stickers
+        tmp_path, rng=SequenceRng([0, 10]), memes=memes, stickers=stickers
     )
-    await give(coordinator.service, TRIGGER, 20)
     await give(coordinator.service, OTHER, 20)
-    pending, _, _ = await start(coordinator)
+    pending, sent, _ = await start(coordinator)
+    assert await coordinator.answer(GROUP, OTHER, "路人", "参与") is True
+
     await operate(coordinator, pending)
-    assert (GROUP, TRIGGER) in coordinator.meme_confirms
 
-    pending2, _, _ = await start(coordinator, user_id=OTHER, nickname="路人")
-    await coordinator.answer(GROUP, TRIGGER, "触发者", "参与")
-    await operate(coordinator, pending2)
-    assert (GROUP, TRIGGER) in coordinator.sticker_confirms
+    assert memes.calls == [(GROUP, TRIGGER)]
+    assert "馒头为你做了一张随机表情" in sent_text(sent)
+    assert "回复「要」或「不要」" in sent_text(sent)
+    assert stickers.picks == 0
+    assert (await coordinator.service.profile(GROUP, OTHER)).affection == 18
 
-    assert await coordinator.answer(GROUP, TRIGGER, "触发者", "要") is True
-
-    assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 8
-    assert (GROUP, TRIGGER) in coordinator.meme_confirms
-    assert (GROUP, TRIGGER) not in coordinator.sticker_confirms
-    await cancel_meme_confirm(coordinator)
+    assert await coordinator.answer(GROUP, OTHER, "路人", "要") is True
+    assert stickers.picks == 1
+    assert (await coordinator.service.profile(GROUP, OTHER)).affection == 8
+    assert not coordinator.sticker_confirms
 
 
 async def test_wheel_panel_quota_counts(tmp_path: Path) -> None:

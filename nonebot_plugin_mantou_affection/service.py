@@ -53,7 +53,6 @@ EVENT_LIMIT_WINDOW_SECONDS = EVENT_LIMIT_WINDOW_HOURS * 3600
 EVENT_LIMIT_MIN_PER_WINDOW = 1
 EVENT_LIMIT_MAX_PER_WINDOW = 100
 EVENT_LIMIT_HISTORY_KEEP = 128
-MEME_CONFIRM_WHITELIST_SETTING = "meme_confirm_whitelist"
 NEWBIE_GIFT_REPLY = " 扣分安慰：送你一张桃子表情包「{caption}」"
 AMBIENT_SCENE = "mantou.ambient"
 
@@ -697,34 +696,6 @@ class AffectionService:
         return await self.store.delete_settings(
             field.key for field in PROBABILITY_FIELDS
         )
-
-    async def meme_confirm_whitelist(self) -> set[str]:
-        """读取表情免确认白名单（全局，不分群）。"""
-
-        stored: Any = await self.store.get_setting(MEME_CONFIRM_WHITELIST_SETTING, [])
-        if not isinstance(stored, list):
-            return set()
-        return {
-            str(value)
-            for value in stored
-            if isinstance(value, (str, int)) and not isinstance(value, bool)
-        }
-
-    async def toggle_meme_confirm_whitelist(self, user_id: str) -> bool:
-        """切换某人的表情免确认状态，返回切换后是否在白名单。"""
-
-        user = str(user_id)
-        whitelist = await self.meme_confirm_whitelist()
-        if user in whitelist:
-            whitelist.discard(user)
-            enabled = False
-        else:
-            whitelist.add(user)
-            enabled = True
-        await self.store.set_setting(
-            MEME_CONFIRM_WHITELIST_SETTING, sorted(whitelist)
-        )
-        return enabled
 
     async def _stored_int(self, key: str, default: int) -> int:
         """读取运行时覆盖的整数设置，缺省或数据损坏时退回配置默认值。"""

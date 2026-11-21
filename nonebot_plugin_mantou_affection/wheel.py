@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import random
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from nonebot import logger
 from nonebot.adapters.onebot.v11 import MessageSegment
@@ -11,7 +11,7 @@ from nonebot.adapters.onebot.v11 import MessageSegment
 from .logic import NEWBIE_PROTECTION_NOTE, protect_deduction
 from .service import normalize_nickname
 from .wheel_memes import MemeAssetMissing, MemeGenerationError
-from .wheel_stickers import StickerAssetMissing, StickerError
+from .wheel_stickers import StickerAssetMissing, StickerError, pick_local_sticker
 from .wheel_wallpapers import Wallpaper, WallpaperUnavailable
 
 if TYPE_CHECKING:
@@ -25,7 +25,8 @@ class WheelOutcome:
 
 
 WHEEL_OUTCOMES: tuple[tuple[WheelOutcome, int], ...] = (
-    (WheelOutcome("meme"), 10),
+    (WheelOutcome("meme"), 7),
+    (WheelOutcome("mantou_sticker"), 3),
     (WheelOutcome("taozi"), 1),
     (WheelOutcome("wallpaper"), 10),
     (WheelOutcome("image", 1), 2),
@@ -74,6 +75,9 @@ def _join_weights(items: list[tuple[int, int]], prefix: str) -> str:
 
 def format_wheel_rules(timeout: int, newbie_below: int = 50) -> str:
     meme_weight = sum(weight for outcome, weight in WHEEL_OUTCOMES if outcome.kind == "meme")
+    mantou_sticker_weight = sum(
+        weight for outcome, weight in WHEEL_OUTCOMES if outcome.kind == "mantou_sticker"
+    )
     taozi_weight = sum(weight for outcome, weight in WHEEL_OUTCOMES if outcome.kind == "taozi")
     wallpaper_weight = sum(
         weight for outcome, weight in WHEEL_OUTCOMES if outcome.kind == "wallpaper"
@@ -93,6 +97,7 @@ def format_wheel_rules(timeout: int, newbie_below: int = 50) -> str:
         f"好感度低于 {newbie_below} 的群友有新手保护：所有扣分只扣 1/3。\n"
         "转盘各项概率：\n"
         f"· 馒头制作随机表情 {meme_weight}%\n"
+        f"· 馒头表情包 {mantou_sticker_weight}%（随机发一张）\n"
         f"· 桃子表情包 {taozi_weight}%（换一张需 {WHEEL_TAOZI_COST} 点好感）\n"
         f"· 随机壁纸 {wallpaper_weight}%（米游社二创图，原神 / 星铁 / 绝区零随机）\n"
         f"· 馒头主动戳一戳：{_join_weights(pokes, '×')}\n"
@@ -104,15 +109,6 @@ def format_wheel_rules(timeout: int, newbie_below: int = 50) -> str:
     )
 
 
-WHEEL_MEME_CONFIRM_REPLY = (
-    " 你抽中了表情「{name}」（种类：{tags}，键名：{key}）。\n"
-    "表情内容可能引起不适，请谨慎确认。\n"
-    "请在 {timeout} 秒内回复「确认」或「不确认」。\n"
-    "不确认或超时未回复，都按 50% 概率好感 +2、50% 概率好感 -2 处理。"
-)
-WHEEL_MEME_CONFIRMED_REPLY = " 已确认，馒头为你做了一张表情："
-WHEEL_MEME_DECLINED_REPLY = " 已放弃制作表情，好感 {delta:+d}，当前 {affection}"
-WHEEL_MEME_TIMEOUT_REPLY = " 表情确认超时，已放弃制作，好感 {delta:+d}，当前 {affection}"
 WHEEL_MEME_ASSET_MISSING_REPLY = " 表情素材尚未下载完成，本次不重抽"
 WHEEL_MEME_FAILED_REPLY = " 本次表情生成失败，不重抽"
 
@@ -146,29 +142,6 @@ def format_sticker_prompt(
     )
 
 
-def _meme_name(meme: Any) -> str:
-    for keyword in getattr(meme, "keywords", None) or ():
-        text = str(keyword).strip()
-        if text:
-            return text
-    return str(getattr(meme, "key", "") or "").strip() or "未知表情"
-
-
-def _meme_tags(meme: Any) -> str:
-    tags = [str(tag).strip() for tag in (getattr(meme, "tags", None) or ())]
-    tags = [tag for tag in tags if tag]
-    return "、".join(tags) or "无分类"
-
-
-def format_meme_confirm(meme: Any, timeout: int) -> str:
-    return WHEEL_MEME_CONFIRM_REPLY.format(
-        name=_meme_name(meme),
-        tags=_meme_tags(meme),
-        key=str(getattr(meme, "key", "") or "").strip() or "未知",
-        timeout=timeout,
-    )
-
-
 @dataclass
 class WheelParticipant:
     user_id: str
@@ -180,29 +153,6 @@ class PendingWheel:
         self.group_id = group_id
         self.trigger = WheelParticipant(user_id, nickname)
         self.participants: list[WheelParticipant] = []
-        self.bot = bot
-        self.send = send
-        self.accepting = True
-        self.task: asyncio.Task | None = None
-
-
-class PendingMemeConfirm:
-    def __init__(
-        self,
-        group_id: str,
-        user_id: str,
-        nickname: str,
-        meme: Any,
-        kind: str,
-        *,
-        bot,
-        send,
-    ):
-        self.group_id = group_id
-        self.user_id = user_id
-        self.nickname = nickname
-        self.meme = meme
-        self.kind = kind
         self.bot = bot
         self.send = send
         self.accepting = True
@@ -262,14 +212,10 @@ class WheelCoordinator:
         self.panel_rank_quota = panel_rank_quota
         self.poke_delay = max(float(poke_delay), 0.0)
         self.choice_timeout = float(config.mantou_affection_wheel_timeout)
-        self.meme_confirm_timeout = float(
-            config.mantou_affection_wheel_meme_confirm_timeout
-        )
         self.sticker_confirm_timeout = float(
             config.mantou_affection_wheel_taozi_timeout
         )
         self.pending: dict[str, PendingWheel] = {}
-        self.meme_confirms: dict[tuple[str, str], PendingMemeConfirm] = {}
         self.sticker_confirms: dict[tuple[str, str], PendingStickerConfirm] = {}
         self._lock = asyncio.Lock()
 
@@ -314,15 +260,6 @@ class WheelCoordinator:
     async def answer(self, group_id: str, user_id: str, nickname: str, text: str) -> bool:
         keyword = text.strip()
         user = str(user_id)
-        meme_confirm = self.meme_confirms.get((str(group_id), user))
-        if (
-            meme_confirm is not None
-            and meme_confirm.accepting
-            and keyword in {"确认", "不确认"}
-        ):
-            await self._answer_meme_confirm(meme_confirm, accepted=keyword == "确认")
-            return True
-
         sticker_confirm = self.sticker_confirms.get((str(group_id), user))
         if (
             sticker_confirm is not None
@@ -435,6 +372,8 @@ class WheelCoordinator:
                         await self._run_panel_quota(pending, participant, outcome.value)
                     elif outcome.kind == "panel_rank":
                         await self._run_panel_rank_quota(pending, participant, outcome.value)
+                    elif outcome.kind == "mantou_sticker":
+                        await self._run_mantou_sticker_outcome(pending, participant)
                     elif outcome.kind == "taozi":
                         await self._run_sticker_outcome(pending, participant)
                     elif outcome.kind == "wallpaper":
@@ -620,160 +559,7 @@ class WheelCoordinator:
             + MessageSegment.text(f" 壁纸「{label}」没发出去，原图：{wallpaper.url}")
         )
 
-    async def _run_meme_outcome(
-        self, pending: PendingWheel, participant: WheelParticipant
-    ) -> None:
-        try:
-            whitelist = await self.service.meme_confirm_whitelist()
-        except Exception:
-            logger.exception("[mantou-affection] 读取表情免确认白名单失败")
-            whitelist = set()
-        if participant.user_id in whitelist:
-            await self._run_meme(pending, participant)
-            return
-        try:
-            if self.memes is None:
-                raise MemeGenerationError("meme-generator 未安装")
-            meme, kind = await self.memes.draw_for_group(
-                group_id=pending.group_id, bot=pending.bot, user_id=participant.user_id
-            )
-        except MemeGenerationError as error:
-            await self._report_meme_error(participant.user_id, pending.send, error)
-            return
-        await self._request_meme_confirm(pending, participant, meme, kind)
-
-    async def _request_meme_confirm(
-        self,
-        pending: PendingWheel,
-        participant: WheelParticipant,
-        meme: Any,
-        kind: str,
-    ) -> None:
-        key = (pending.group_id, participant.user_id)
-        old = self.meme_confirms.pop(key, None)
-        if old is not None:
-            old.accepting = False
-            if old.task is not None:
-                old.task.cancel()
-        confirm = PendingMemeConfirm(
-            pending.group_id,
-            participant.user_id,
-            participant.nickname,
-            meme,
-            kind,
-            bot=pending.bot,
-            send=pending.send,
-        )
-        self.meme_confirms[key] = confirm
-        try:
-            await pending.send(
-                MessageSegment.at(participant.user_id)
-                + MessageSegment.text(
-                    format_meme_confirm(meme, int(self.meme_confirm_timeout))
-                )
-            )
-        except Exception:
-            confirm.accepting = False
-            if self.meme_confirms.get(key) is confirm:
-                self.meme_confirms.pop(key, None)
-            raise
-        if self.meme_confirms.get(key) is confirm and confirm.accepting:
-            confirm.task = asyncio.create_task(self._expire_meme_confirm(confirm))
-
-    async def _expire_meme_confirm(self, confirm: PendingMemeConfirm) -> None:
-        try:
-            await asyncio.sleep(self.meme_confirm_timeout)
-        except asyncio.CancelledError:
-            return
-        await self._settle_meme_confirm(confirm, declined=False)
-
-    async def _answer_meme_confirm(
-        self, confirm: PendingMemeConfirm, *, accepted: bool
-    ) -> None:
-        if (
-            not confirm.accepting
-            or self.meme_confirms.get((confirm.group_id, confirm.user_id)) is not confirm
-        ):
-            return
-        if not accepted:
-            await self._settle_meme_confirm(confirm, declined=True)
-            return
-
-        self._cancel_meme_confirm(confirm)
-        try:
-            if self.memes is None:
-                raise MemeGenerationError("meme-generator 未安装")
-            image = await self.memes.generate_with(
-                confirm.meme,
-                confirm.kind,
-                bot=confirm.bot,
-                user_id=confirm.user_id,
-                nickname=confirm.nickname,
-                group_id=confirm.group_id,
-            )
-        except MemeGenerationError as error:
-            await self._report_meme_error(confirm.user_id, confirm.send, error)
-            return
-        except Exception:
-            logger.exception("[mantou-affection] 转盘表情确认后生成失败")
-            await confirm.send(
-                MessageSegment.at(confirm.user_id)
-                + MessageSegment.text(WHEEL_MEME_FAILED_REPLY)
-            )
-            return
-        await confirm.send(
-            MessageSegment.at(confirm.user_id)
-            + MessageSegment.text(WHEEL_MEME_CONFIRMED_REPLY)
-            + MessageSegment.image(image)
-        )
-
-    async def _settle_meme_confirm(
-        self, confirm: PendingMemeConfirm, *, declined: bool
-    ) -> None:
-        if (
-            not confirm.accepting
-            or self.meme_confirms.get((confirm.group_id, confirm.user_id)) is not confirm
-        ):
-            return
-        self._cancel_meme_confirm(confirm)
-        delta = 2 if self.rng.random() < 0.5 else -2
-        template = (
-            WHEEL_MEME_DECLINED_REPLY if declined else WHEEL_MEME_TIMEOUT_REPLY
-        )
-        try:
-            applied, profile, protected = await self.service.adjust(
-                confirm.group_id, confirm.user_id, confirm.nickname, delta
-            )
-            note = NEWBIE_PROTECTION_NOTE if protected else ""
-            await confirm.send(
-                MessageSegment.at(confirm.user_id)
-                + MessageSegment.text(
-                    template.format(delta=applied, affection=profile.affection) + note
-                )
-            )
-            if applied < 0:
-                await self.service.send_gift(
-                    confirm.send,
-                    confirm.group_id,
-                    confirm.user_id,
-                    confirm.nickname,
-                )
-        except Exception:
-            logger.exception(
-                f"[mantou-affection] 转盘表情确认结算失败 group={confirm.group_id} "
-                f"user={confirm.user_id}"
-            )
-
-    def _cancel_meme_confirm(self, confirm: PendingMemeConfirm) -> None:
-        confirm.accepting = False
-        key = (confirm.group_id, confirm.user_id)
-        if self.meme_confirms.get(key) is confirm:
-            self.meme_confirms.pop(key, None)
-        task = confirm.task
-        if task is not None and task is not asyncio.current_task():
-            task.cancel()
-
-    async def _run_meme(self, pending: PendingWheel, participant: WheelParticipant) -> None:
+    async def _run_meme_outcome(self, pending: PendingWheel, participant: WheelParticipant) -> None:
         try:
             if self.memes is None:
                 raise MemeGenerationError("meme-generator 未安装")
@@ -785,6 +571,13 @@ class WheelCoordinator:
             )
         except MemeGenerationError as error:
             await self._report_meme_error(participant.user_id, pending.send, error)
+            return
+        except Exception:
+            logger.exception("[mantou-affection] 转盘表情生成失败")
+            await pending.send(
+                MessageSegment.at(participant.user_id)
+                + MessageSegment.text(WHEEL_MEME_FAILED_REPLY)
+            )
             return
         await pending.send(
             MessageSegment.at(participant.user_id)
@@ -805,6 +598,27 @@ class WheelCoordinator:
         logger.warning(f"[mantou-affection] memes 结果生成失败: {error}")
         await send(
             MessageSegment.at(user_id) + MessageSegment.text(WHEEL_MEME_FAILED_REPLY)
+        )
+
+    async def _run_mantou_sticker_outcome(
+        self, pending: PendingWheel, participant: WheelParticipant
+    ) -> None:
+        mention = MessageSegment.at(participant.user_id)
+        try:
+            image = await asyncio.to_thread(
+                pick_local_sticker, self.config.mantou_affection_wheel_sticker_dir
+            )
+        except StickerAssetMissing as error:
+            logger.warning(f"[mantou-affection] 馒头表情包素材不可用: {error}")
+            await pending.send(
+                mention + MessageSegment.text(" 抽中了「馒头表情包」，素材暂不可用，本次不重抽")
+            )
+            return
+
+        await pending.send(
+            mention
+            + MessageSegment.text(" 抽中了「馒头表情包」：")
+            + MessageSegment.image(image)
         )
 
     async def _run_sticker_outcome(
