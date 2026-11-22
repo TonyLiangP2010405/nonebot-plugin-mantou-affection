@@ -106,7 +106,7 @@ def test_format_probability(value: float, expected: str) -> None:
 def test_registered_matchers_include_probability_command() -> None:
     from nonebot_plugin_mantou_affection import matchers
 
-    assert len(matchers) == 24
+    assert len(matchers) == 25
     (
         _profile_cmd,
         _interact_cmd,
@@ -131,6 +131,7 @@ def test_registered_matchers_include_probability_command() -> None:
         event_limit_count_cmd,
         admin_help_cmd,
         wallpaper_cmd,
+        sticker_test_cmd,
         _image_cmd,
     ) = matchers
     assert probability_cmd.priority == 10
@@ -174,6 +175,7 @@ def test_registered_matchers_include_probability_command() -> None:
         event_limit_count_cmd: "handle_event_limit_count",
         admin_help_cmd: "handle_admin_help",
         wallpaper_cmd: "handle_wallpaper",
+        sticker_test_cmd: "handle_sticker_test",
     }
     for matcher, handler_name in expected_limit_handlers.items():
         assert matcher.priority == 10
@@ -377,6 +379,7 @@ async def test_help_lists_every_command(tmp_path: Path, monkeypatch) -> None:
         "/馒头转盘概率",
         "/馒头概率总调",
         "/馒头壁纸",
+        "/馒头表情包",
         "/馒头限制开关",
         "/馒头限制次数",
         "/馒头管理帮助",

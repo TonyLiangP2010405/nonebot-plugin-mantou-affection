@@ -29,8 +29,18 @@ class StickerAssetMissing(StickerError):
 LOCAL_STICKER_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 
 
-def pick_local_sticker(directory: str) -> bytes:
-    """从配置的绝对目录直接抽一张本地表情包。"""
+@dataclass(frozen=True)
+class LocalStickerPick:
+    """一次本地表情包抽取的结果，目录清单一并带回来给自检命令显示。"""
+
+    directory: Path
+    images: tuple[Path, ...]
+    path: Path
+    data: bytes
+
+
+def scan_local_stickers(directory: str) -> tuple[Path, ...]:
+    """列出配置目录顶层可用的表情包图片，规则与抽图完全一致。"""
 
     if not directory:
         raise StickerAssetMissing("未配置 MANTOU_AFFECTION_WHEEL_STICKER_DIR")
@@ -44,14 +54,33 @@ def pick_local_sticker(directory: str) -> bytes:
             for path in folder.iterdir()
             if path.suffix.lower() in LOCAL_STICKER_SUFFIXES and path.is_file()
         ]
-        if not images:
-            raise StickerAssetMissing("馒头表情包目录里没有可用图片")
-        data = random.choice(images).read_bytes()
+    except (OSError, ValueError) as error:
+        raise StickerAssetMissing(f"无法读取馒头表情包素材: {error}") from error
+    if not images:
+        raise StickerAssetMissing("馒头表情包目录里没有可用图片")
+    return tuple(sorted(images))
+
+
+def draw_local_sticker(directory: str) -> LocalStickerPick:
+    """从配置的绝对目录抽一张本地表情包，并带上目录清单。"""
+
+    images = scan_local_stickers(directory)
+    target = random.choice(images)
+    try:
+        data = target.read_bytes()
     except (OSError, ValueError) as error:
         raise StickerAssetMissing(f"无法读取馒头表情包素材: {error}") from error
     if not data:
         raise StickerAssetMissing("抽中的馒头表情包文件为空")
-    return data
+    return LocalStickerPick(
+        directory=Path(directory), images=images, path=target, data=data
+    )
+
+
+def pick_local_sticker(directory: str) -> bytes:
+    """从配置的绝对目录直接抽一张本地表情包。"""
+
+    return draw_local_sticker(directory).data
 
 
 @dataclass(frozen=True)

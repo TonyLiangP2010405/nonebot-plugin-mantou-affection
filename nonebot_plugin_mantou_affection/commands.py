@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+from pathlib import Path
+
 from nonebot import get_driver, logger, on_command
 from nonebot.adapters import Event
 from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent, Message, MessageSegment
@@ -29,6 +32,7 @@ from .service import (
     AffectionService,
     normalize_nickname,
 )
+from .wheel_stickers import StickerAssetMissing, draw_local_sticker
 from .wheel_wallpapers import (
     WallpaperLibrary,
     WallpaperUnavailable,
@@ -66,6 +70,30 @@ WALLPAPER_FANART_WORDS = frozenset({"二创", "同人", "fanart", "fan"})
 WALLPAPER_OFFICIAL_WORDS = frozenset({"官方", "official"})
 WALLPAPER_FAILED_REPLY = "这次没取到壁纸：图源暂时连不上，稍后再试。"
 WALLPAPER_DISABLED_REPLY = "壁纸库没有接线，暂时抽不了。"
+STICKER_TEST_UNSET_REPLY = (
+    "还没配置馒头表情包目录。\n"
+    "请在机器人项目的 .env 里加一行（绝对路径，用引号包住）：\n"
+    'MANTOU_AFFECTION_WHEEL_STICKER_DIR="/srv/bot/表情包/馒头"\n'
+    "改完重启 NoneBot 再发一次。"
+)
+STICKER_TEST_RELATIVE_REPLY = (
+    "配置的目录不是绝对路径：{directory}\n"
+    "请改成从 / 开头的绝对路径，重启后生效。"
+)
+STICKER_TEST_FAILED_REPLY = (
+    "读取馒头表情包目录失败：{reason}\n"
+    "目录：{directory}\n"
+    "检查目录是否存在、里面有没有 PNG/JPG/JPEG/GIF/WebP 图片，"
+    "以及 bot 进程有没有读权限。"
+)
+STICKER_TEST_ERROR_REPLY = "读取馒头表情包目录时出错，详情见日志。"
+STICKER_TEST_OK_REPLY = (
+    "🥟 馒头表情包自检通过：目录里共 {count} 张，本次抽中 {name}\n"
+    "目录：{directory}"
+)
+STICKER_TEST_SEND_FAILED_REPLY = (
+    "读到了 {name}（{size} 字节），但发送图片失败，详情见日志。"
+)
 PROBABILITY_BATCH_USAGE = (
     "用法：\n"
     "/馒头概率总调 0.05% —— 全部统一设为该值\n"
@@ -99,6 +127,7 @@ ADMIN_HELP_LINES: tuple[str, ...] = (
     "/馒头概率总调 —— 总览全部概率；带数值统一设置，"
     "×倍率缩放，重置恢复默认",
     "/馒头壁纸 [官方/二创] [原神/星铁/绝区零] —— 手动抽一张壁纸",
+    "/馒头表情包 —— 从配置目录抽一张，自检表情包素材是否可用",
     "/馒头限制开关 [开/关] —— 查看或切换事件限制（默认关闭）",
     f"/馒头限制次数 5 —— 查看或调整每群每 {EVENT_LIMIT_WINDOW_HOURS} 小时"
     "最多触发几次活动（1~100）",
@@ -335,6 +364,13 @@ def register_commands(
     wallpaper_cmd = on_command(
         "馒头壁纸",
         aliases={"馒头随机壁纸", "馒头抽壁纸"},
+        permission=SUPERUSER,
+        priority=10,
+        block=True,
+    )
+    sticker_test_cmd = on_command(
+        "馒头表情包",
+        aliases={"馒头表情包自检"},
         permission=SUPERUSER,
         priority=10,
         block=True,
@@ -1125,6 +1161,45 @@ def register_commands(
             caption + MessageSegment.text(f"\n下载地址：{wallpaper.url}")
         )
 
+    @sticker_test_cmd.handle()
+    async def handle_sticker_test() -> None:
+        directory = config.mantou_affection_wheel_sticker_dir.strip()
+        if not directory:
+            await sticker_test_cmd.finish(STICKER_TEST_UNSET_REPLY)
+            return
+        if not Path(directory).is_absolute():
+            await sticker_test_cmd.finish(
+                STICKER_TEST_RELATIVE_REPLY.format(directory=directory)
+            )
+            return
+        try:
+            picked = await asyncio.to_thread(draw_local_sticker, directory)
+        except StickerAssetMissing as error:
+            logger.warning(f"[mantou-affection] 馒头表情包目录自检未通过: {error}")
+            await sticker_test_cmd.finish(
+                STICKER_TEST_FAILED_REPLY.format(reason=error, directory=directory)
+            )
+            return
+        except Exception:
+            logger.exception("[mantou-affection] 馒头表情包目录自检出错")
+            await sticker_test_cmd.finish(STICKER_TEST_ERROR_REPLY)
+            return
+
+        caption = STICKER_TEST_OK_REPLY.format(
+            count=len(picked.images), name=picked.path.name, directory=directory
+        )
+        try:
+            await sticker_test_cmd.send(
+                MessageSegment.text(caption) + MessageSegment.image(picked.data)
+            )
+        except Exception:
+            logger.exception("[mantou-affection] 馒头表情包自检图片发送失败")
+            await sticker_test_cmd.finish(
+                STICKER_TEST_SEND_FAILED_REPLY.format(
+                    name=picked.path.name, size=len(picked.data)
+                )
+            )
+
     @image_cmd.handle()
     async def handle_image(
         event: GroupMessageEvent,
@@ -1182,5 +1257,6 @@ def register_commands(
         event_limit_count_cmd,
         admin_help_cmd,
         wallpaper_cmd,
+        sticker_test_cmd,
         image_cmd,
     )
