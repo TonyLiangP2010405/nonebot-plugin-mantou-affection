@@ -25,6 +25,10 @@ OTHER = "94203"
 
 
 class SequenceRng(random.Random):
+    def __new__(cls, *args, **kwargs):
+        # Python 3.9/3.10 的 _random.Random.__new__ 会尝试哈希构造参数, 子类必须显式接管。
+        return super().__new__(cls)
+
     def __init__(self, rolls: list[int]):
         super().__init__(0)
         self.rolls = iter(rolls)
