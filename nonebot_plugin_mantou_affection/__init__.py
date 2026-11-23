@@ -69,6 +69,7 @@ from .wheel_memes import (
 from .wheel_spins import WheelSpinQuotaStore, register_spin_commands
 from .wheel_stickers import TaoziStickerLibrary
 from .wheel_wallpapers import WallpaperLibrary
+from .whoami import BUNDLED_WHOAMI_PATH, WhoAmICoordinator, WhoAmILibrary
 from .zzz_quiz import BUNDLED_ZZZ_QUIZ_PATH, ZzzQuizCoordinator
 
 plugin_config = get_plugin_config(Config)
@@ -133,6 +134,11 @@ fill_blank_coordinator = FillBlankCoordinator(
     service, plugin_config, fill_blank_library, events=event_coordinator
 )
 event_coordinator.attach_fill_blank(fill_blank_coordinator)
+whoami_library = WhoAmILibrary(BUNDLED_WHOAMI_PATH)
+whoami_coordinator = WhoAmICoordinator(
+    service, plugin_config, whoami_library, events=event_coordinator
+)
+event_coordinator.attach_whoami(whoami_coordinator)
 meme_generator_adapter = MemeGeneratorAdapter(
     bot_name=plugin_config.mantou_affection_bot_name,
     blocked_terms=parse_blocked_terms(plugin_config.mantou_affection_memes_blocked_terms),
@@ -168,7 +174,12 @@ wheel_coordinator = WheelCoordinator(
 event_coordinator.attach_wheel(wheel_coordinator)
 spin_matchers = register_spin_commands(wheel_coordinator)
 matchers = register_commands(
-    service, plugin_config, pk_coordinator, image_processing, wallpapers
+    service,
+    plugin_config,
+    pk_coordinator,
+    image_processing,
+    wallpapers,
+    whoami_coordinator,
 )
 ambient_matcher, answer_matcher = register_ambient(
     service,
@@ -184,6 +195,7 @@ ambient_matcher, answer_matcher = register_ambient(
     zzz_quiz_coordinator,
     petit_planet_quiz_coordinator,
     fill_blank_coordinator,
+    whoami_coordinator,
 )
 force_matchers = register_force_commands(
     service,

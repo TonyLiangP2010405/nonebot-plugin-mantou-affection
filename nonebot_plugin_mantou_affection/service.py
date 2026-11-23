@@ -42,6 +42,7 @@ HSR_QUIZ_PROBABILITY_SETTING = "hsr_quiz_probability"
 ZZZ_QUIZ_PROBABILITY_SETTING = "zzz_quiz_probability"
 PETIT_PLANET_QUIZ_PROBABILITY_SETTING = "petit_planet_quiz_probability"
 FILL_BLANK_PROBABILITY_SETTING = "fill_blank_probability"
+WHOAMI_PROBABILITY_SETTING = "whoami_probability"
 WHEEL_PROBABILITY_SETTING = "wheel_probability"
 EVENT_LIMIT_ENABLED_SETTING = "event_limit_enabled"
 EVENT_LIMIT_PER_WINDOW_SETTING = "event_limit_per_window"
@@ -175,6 +176,11 @@ PROBABILITY_FIELDS: tuple[ProbabilityField, ...] = (
         FILL_BLANK_PROBABILITY_SETTING,
         "补句问答",
         "mantou_affection_fill_blank_chance",
+    ),
+    ProbabilityField(
+        WHOAMI_PROBABILITY_SETTING,
+        "我是谁",
+        "mantou_affection_whoami_chance",
     ),
     ProbabilityField(WHEEL_PROBABILITY_SETTING, "命运齿轮", "mantou_affection_wheel_chance"),
 )
@@ -528,6 +534,31 @@ class AffectionService:
 
     async def set_fill_blank_probability(self, value: float) -> None:
         await self.store.set_setting(FILL_BLANK_PROBABILITY_SETTING, float(value))
+
+    async def whoami_triggered(self) -> bool:
+        """我是谁不看榜单或好感度，只按独立概率判定。"""
+
+        chance = await self.whoami_probability()
+        return self.rng.random() < chance
+
+    async def whoami_probability(self) -> float:
+        """我是谁的触发概率，运行时用 /馒头我是谁概率 覆盖过就优先用它。"""
+
+        return await self._stored_probability(
+            WHOAMI_PROBABILITY_SETTING,
+            self.config.mantou_affection_whoami_chance,
+        )
+
+    async def whoami_probability_override(self) -> float | None:
+        """读取运行时覆盖的我是谁概率，没覆盖过返回 None。"""
+
+        stored: Any = await self.store.get_setting(WHOAMI_PROBABILITY_SETTING, None)
+        if isinstance(stored, bool) or not isinstance(stored, (int, float)):
+            return None
+        return min(1.0, max(0.0, float(stored)))
+
+    async def set_whoami_probability(self, value: float) -> None:
+        await self.store.set_setting(WHOAMI_PROBABILITY_SETTING, float(value))
 
     async def wheel_triggered(self, group_id: str, user_id: str) -> bool:
         profile = await self.store.get_profile(group_id, user_id)

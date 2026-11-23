@@ -106,7 +106,7 @@ def test_format_probability(value: float, expected: str) -> None:
 def test_registered_matchers_include_probability_command() -> None:
     from nonebot_plugin_mantou_affection import matchers
 
-    assert len(matchers) == 25
+    assert len(matchers) == 27
     (
         _profile_cmd,
         _interact_cmd,
@@ -132,6 +132,8 @@ def test_registered_matchers_include_probability_command() -> None:
         admin_help_cmd,
         wallpaper_cmd,
         sticker_test_cmd,
+        whoami_cmd,
+        whoami_chance_cmd,
         _image_cmd,
     ) = matchers
     assert probability_cmd.priority == 10
@@ -158,6 +160,7 @@ def test_registered_matchers_include_probability_command() -> None:
         _hsr_quiz_cmd: "handle_hsr_quiz_probability",
         _zzz_quiz_cmd: "handle_zzz_quiz_probability",
         _petit_planet_quiz_cmd: "handle_petit_planet_quiz_probability",
+        whoami_chance_cmd: "handle_whoami_probability",
     }
     for matcher, handler_name in expected_handlers.items():
         assert matcher.priority == 10
@@ -168,6 +171,12 @@ def test_registered_matchers_include_probability_command() -> None:
     assert batch_probability_cmd.block is True
     assert [handler.call.__name__ for handler in batch_probability_cmd.handlers] == [
         "handle_probability_batch"
+    ]
+
+    assert whoami_cmd.priority == 10
+    assert whoami_cmd.block is True
+    assert [handler.call.__name__ for handler in whoami_cmd.handlers] == [
+        "handle_whoami"
     ]
 
     expected_limit_handlers = {
@@ -290,7 +299,7 @@ async def test_batch_probability_command_query_set_scale_and_reset(
     handler = batch_cmd.handlers[0]
 
     await handler.call(Message(""))
-    assert "共 12 项" in sent[-1]
+    assert "共 13 项" in sent[-1]
     assert "馒头小动作：0.05%（配置默认）" in sent[-1]
     assert "×2" in sent[-1]
 
@@ -300,7 +309,7 @@ async def test_batch_probability_command_query_set_scale_and_reset(
     assert await service.bet_probability() == pytest.approx(0.01)
 
     await handler.call(Message("×2"))
-    assert "已按 ×2 缩放 12 项活动概率" in sent[-1]
+    assert "已按 ×2 缩放 13 项活动概率" in sent[-1]
     assert "馒头小动作：1% → 2%" in sent[-1]
     assert await service.wheel_probability() == pytest.approx(0.02)
 
@@ -308,7 +317,7 @@ async def test_batch_probability_command_query_set_scale_and_reset(
     assert "运行时覆盖，配置默认 0.05%" in sent[-1]
 
     await handler.call(Message("重置"))
-    assert "已清除 12 项运行时概率覆盖" in sent[-1]
+    assert "已清除 13 项运行时概率覆盖" in sent[-1]
     assert await service.bet_probability() == pytest.approx(
         Config().mantou_affection_bet_chance
     )
@@ -336,7 +345,7 @@ async def test_batch_probability_command_scales_percent_factor(
     monkeypatch.setattr(batch_cmd, "finish", fake_finish)
 
     await batch_cmd.handlers[0].call(Message("×50%"))
-    assert "已按 ×0.5 缩放 12 项活动概率" in sent[-1]
+    assert "已按 ×0.5 缩放 13 项活动概率" in sent[-1]
     assert await service.pk_probability() == pytest.approx(0.005)
 
 
@@ -387,6 +396,8 @@ async def test_help_lists_every_command(tmp_path: Path, monkeypatch) -> None:
         "/馒头图像处理",
         "/翻转",
         "/馒头再来一次",
+        "/馒头我是谁",
+        "/馒头我是谁概率",
     }
 
 

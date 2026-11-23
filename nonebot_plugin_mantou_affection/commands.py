@@ -38,6 +38,12 @@ from .wheel_wallpapers import (
     WallpaperUnavailable,
     match_wallpaper_game,
 )
+from .whoami import (
+    WHOAMI_BUSY_REPLY,
+    WHOAMI_LIMIT_REPLY,
+    WHOAMI_UNAVAILABLE_REPLY,
+    WhoAmICoordinator,
+)
 
 BET_CHANCE_USAGE = (
     "请输入 0~1 的小数（如 0.0005）或百分数（如 0.05%），0 即关闭馒头博弈"
@@ -60,6 +66,9 @@ PETIT_PLANET_CHANCE_USAGE = (
 )
 FILL_BLANK_CHANCE_USAGE = (
     "请输入 0~1 的小数（如 0.0005）或百分数（如 0.05%），0 即关闭补句问答"
+)
+WHOAMI_CHANCE_USAGE = (
+    "请输入 0~1 的小数（如 0.0005）或百分数（如 0.05%），0 即关闭我是谁"
 )
 WHEEL_CHANCE_USAGE = "请输入 0~1 的小数或百分数（如 0.1%），0 即关闭馒头转盘"
 WALLPAPER_USAGE = (
@@ -107,6 +116,7 @@ MEMBER_HELP_LINES: tuple[str, ...] = (
     "/馒头图像处理 —— 处理图片并保持动图，支持 GIF 变速（回复图片后使用）",
     "/翻转 /旋转 90 /gif变速 0.5x —— 回复图片后直接用的图像处理快捷键",
     "/馒头再来一次 —— 用抽到的转盘次数自己单独再转一轮（其他人不能参与）",
+    "/馒头我是谁 —— 猜猜米哈游的角色或场景，越早答对好感越多",
     "/馒头帮助 —— 打开这份菜单",
 )
 ADMIN_HELP_LINES: tuple[str, ...] = (
@@ -124,6 +134,7 @@ ADMIN_HELP_LINES: tuple[str, ...] = (
     "/馒头绝区零概率 0.05% —— 查看或调整绝区零问答概率",
     "/馒头星布谷地概率 0.05% —— 查看或调整星布谷地问答概率",
     "/馒头补句概率 0.05% —— 查看或调整补句问答概率",
+    "/馒头我是谁概率 0.05% —— 查看或调整我是谁的出现概率",
     "/馒头转盘概率 0.1% —— 查看或调整命运齿轮概率",
     "/馒头概率总调 —— 总览全部概率；带数值统一设置，"
     "×倍率缩放，重置恢复默认",
@@ -216,6 +227,7 @@ def register_commands(
     pk: PkCoordinator | None = None,
     image_processing: ImageProcessingCoordinator | None = None,
     wallpapers: WallpaperLibrary | None = None,
+    whoami: WhoAmICoordinator | None = None,
 ) -> tuple:
     profile_cmd = on_command(
         "馒头好感",
@@ -337,6 +349,20 @@ def register_commands(
     fill_blank_cmd = on_command(
         "馒头补句概率",
         aliases={"馒头补句触发概率"},
+        permission=SUPERUSER,
+        priority=10,
+        block=True,
+    )
+    whoami_cmd = on_command(
+        "馒头我是谁",
+        aliases={"馒头猜猜我是谁", "馒头猜角色", "馒头猜猜看"},
+        rule=GROUP_ONLY,
+        priority=10,
+        block=True,
+    )
+    whoami_chance_cmd = on_command(
+        "馒头我是谁概率",
+        aliases={"馒头猜猜概率", "馒头猜角色概率"},
         permission=SUPERUSER,
         priority=10,
         block=True,
@@ -928,6 +954,42 @@ def register_commands(
             f"补句问答概率已调整为 {_format_probability(value)}"
         )
 
+    @whoami_chance_cmd.handle()
+    async def handle_whoami_probability(args: Message = CommandArg()) -> None:
+        raw = args.extract_plain_text().strip()
+        if not raw:
+            try:
+                current = await service.whoami_probability()
+                override = await service.whoami_probability_override()
+            except Exception:
+                logger.exception("[mantou-affection] 读取我是谁概率失败")
+                await whoami_chance_cmd.finish("读取失败，请检查数据目录权限后重试。")
+                return
+            default = config.mantou_affection_whoami_chance
+            if override is None:
+                source = f"配置默认 {_format_probability(default)}"
+            else:
+                source = f"运行时覆盖，配置默认 {_format_probability(default)}"
+            await whoami_chance_cmd.finish(
+                f"当前我是谁概率：{_format_probability(current)}（{source}）\n"
+                f"用法：{WHOAMI_CHANCE_USAGE}"
+            )
+            return
+        try:
+            value = parse_probability(raw)
+        except ValueError as error:
+            await whoami_chance_cmd.finish(f"{error}。{WHOAMI_CHANCE_USAGE}")
+            return
+        try:
+            await service.set_whoami_probability(value)
+        except Exception:
+            logger.exception("[mantou-affection] 保存我是谁概率失败")
+            await whoami_chance_cmd.finish("保存失败，请检查数据目录权限后重试。")
+            return
+        await whoami_chance_cmd.finish(
+            f"我是谁概率已调整为 {_format_probability(value)}"
+        )
+
     @batch_probability_cmd.handle()
     async def handle_probability_batch(args: Message = CommandArg()) -> None:
         raw = args.extract_plain_text().strip()
@@ -1201,6 +1263,39 @@ def register_commands(
                 )
             )
 
+    @whoami_cmd.handle()
+    async def handle_whoami(event: GroupMessageEvent) -> None:
+        if whoami is None:
+            await whoami_cmd.finish(WHOAMI_UNAVAILABLE_REPLY)
+            return
+        group_id = str(event.group_id)
+        try:
+            allowed = await service.event_limit_allows(group_id)
+        except Exception:
+            logger.exception("[mantou-affection] 判定事件限制失败")
+            allowed = True
+        if not allowed:
+            await whoami_cmd.finish(WHOAMI_LIMIT_REPLY)
+            return
+        nickname = event.sender.card or event.sender.nickname or ""
+        started = await whoami.start(
+            group_id=group_id,
+            user_id=str(event.user_id),
+            nickname=nickname,
+            send=whoami_cmd.send,
+        )
+        if not started:
+            await whoami_cmd.finish(
+                WHOAMI_BUSY_REPLY
+                if whoami.busy(group_id)
+                else WHOAMI_UNAVAILABLE_REPLY
+            )
+            return
+        try:
+            await service.record_event_trigger(group_id)
+        except Exception:
+            logger.exception("[mantou-affection] 记录事件限制失败")
+
     @image_cmd.handle()
     async def handle_image(
         event: GroupMessageEvent,
@@ -1259,5 +1354,7 @@ def register_commands(
         admin_help_cmd,
         wallpaper_cmd,
         sticker_test_cmd,
+        whoami_cmd,
+        whoami_chance_cmd,
         image_cmd,
     )

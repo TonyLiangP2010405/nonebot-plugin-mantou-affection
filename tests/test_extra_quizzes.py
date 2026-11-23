@@ -252,7 +252,7 @@ def test_quiz_probability_command(
 ) -> None:
     service = _service(tmp_path)
     commands = register_commands(service, Config(), PkCoordinator(service, Config(), None))
-    assert len(commands) == 25
+    assert len(commands) == 27
     command = commands[command_index]
     assert [handler.call.__name__ for handler in command.handlers] == [
         f"handle_{attach_name}_probability"

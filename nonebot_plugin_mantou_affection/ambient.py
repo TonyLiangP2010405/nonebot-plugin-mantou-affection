@@ -31,6 +31,7 @@ from .pk import BUNDLED_PK_PATH, PkCoordinator, PkQuestionLibrary
 from .service import AffectionService
 from .teyvat_quiz import BUNDLED_TEYVAT_QUIZ_PATH, TeyvatQuizCoordinator
 from .wheel import WheelCoordinator
+from .whoami import BUNDLED_WHOAMI_PATH, WhoAmICoordinator, WhoAmILibrary
 from .zzz_quiz import BUNDLED_ZZZ_QUIZ_PATH, ZzzQuizCoordinator
 
 ANSWERS = {"1": 0, "2": 1, "3": 2, "4": 3, "5": 4, "6": 5}
@@ -108,6 +109,7 @@ class EventCoordinator:
         zzz_quiz: ZzzQuizCoordinator | None = None,
         petit_planet_quiz: PetitPlanetQuizCoordinator | None = None,
         fill_blank: FillBlankCoordinator | None = None,
+        whoami: WhoAmICoordinator | None = None,
     ):
         self.service = service
         self.config = config
@@ -123,6 +125,7 @@ class EventCoordinator:
         self.zzz_quiz = zzz_quiz
         self.petit_planet_quiz = petit_planet_quiz
         self.fill_blank = fill_blank
+        self.whoami = whoami
         self.pending: dict[str, PendingEvent] = {}
 
     def attach_find_char(self, findchar: FindCharCoordinator) -> None:
@@ -175,8 +178,13 @@ class EventCoordinator:
 
         self.fill_blank = fill_blank
 
+    def attach_whoami(self, whoami: WhoAmICoordinator) -> None:
+        """接入我是谁，让它和其余活动共用同一个群的席位。"""
+
+        self.whoami = whoami
+
     def busy(self, group_id: str) -> bool:
-        """本群是否已经有待结算的活动：随机事件、找字、博弈、问答、群友问答、提瓦特问答、补句问答或转盘。"""
+        """本群是否已经有待结算的活动：随机事件、找字、博弈、问答、群友问答、提瓦特问答、补句问答、我是谁或转盘。"""
 
         key = str(group_id)
         if key in self.pending:
@@ -193,6 +201,7 @@ class EventCoordinator:
                 self.zzz_quiz,
                 self.petit_planet_quiz,
                 self.fill_blank,
+                self.whoami,
                 self.wheel,
             )
         )
@@ -446,8 +455,9 @@ def register_ambient(
     zzz_quiz: ZzzQuizCoordinator | None = None,
     petit_planet_quiz: PetitPlanetQuizCoordinator | None = None,
     fill_blank: FillBlankCoordinator | None = None,
+    whoami: WhoAmICoordinator | None = None,
 ) -> tuple:
-    """群友发言时按概率触发找字、博弈、随机问答、群友问答、提瓦特问答、星穹铁道问答、绝区零问答、补句问答、转盘或馒头小动作。
+    """群友发言时按概率触发找字、博弈、随机问答、群友问答、提瓦特问答、星穹铁道问答、绝区零问答、补句问答、我是谁、转盘或馒头小动作。
 
     找字和博弈保留各自的好感度门槛；随机问答、群友问答、提瓦特问答、星穹铁道问答、绝区零问答和
     补句问答不看榜单或好感度，分别默认每次群消息有 1%、0.05%、0.05%、0.05%、0.05%、0.05% 概率
@@ -534,6 +544,14 @@ def register_ambient(
     coordinator.attach_petit_planet_quiz(petit_planet_quiz_coordinator)
     coordinator.attach_zzz_quiz(zzz_quiz_coordinator)
     coordinator.attach_fill_blank(fill_blank_coordinator)
+    whoami_coordinator = whoami or WhoAmICoordinator(
+        service,
+        config,
+        WhoAmILibrary(BUNDLED_WHOAMI_PATH),
+        events=coordinator,
+        rng=coordinator.rng,
+    )
+    coordinator.attach_whoami(whoami_coordinator)
     ambient = on_message(rule=GROUP_ONLY, priority=90, block=False)
     answer = on_message(rule=GROUP_ONLY, priority=5, block=False)
 
@@ -567,6 +585,8 @@ def register_ambient(
             if await petit_planet_quiz_coordinator.answer(group_id, user_id, name, text):
                 return
             if await fill_blank_coordinator.answer(group_id, user_id, name, text):
+                return
+            if whoami_coordinator.answer(group_id, user_id, name, text):
                 return
             if await bet_coordinator.answer(group_id, user_id, name, text):
                 return
@@ -812,6 +832,25 @@ def register_ambient(
                 )
             except Exception:
                 logger.exception("[mantou-affection] 发起补句问答失败")
+                started = False
+            if started:
+                return await note_activity()
+
+        try:
+            whoami_ready = await service.whoami_triggered()
+        except Exception:
+            logger.exception("[mantou-affection] 判定我是谁失败")
+            whoami_ready = False
+        if whoami_ready:
+            try:
+                started = await whoami_coordinator.start(
+                    group_id=group_id,
+                    user_id=user_id,
+                    nickname=nickname,
+                    send=ambient.send,
+                )
+            except Exception:
+                logger.exception("[mantou-affection] 发起我是谁失败")
                 started = False
             if started:
                 return await note_activity()

@@ -53,6 +53,8 @@ class Config(BaseModel):
     mantou_affection_petit_planet_timeout: int = Field(default=60, ge=5, le=600)
     mantou_affection_fill_blank_chance: float = Field(default=0.0005, ge=0.0, le=1.0)
     mantou_affection_fill_blank_timeout: int = Field(default=60, ge=5, le=600)
+    mantou_affection_whoami_chance: float = Field(default=0.0005, ge=0.0, le=1.0)
+    mantou_affection_whoami_timeout: int = Field(default=75, ge=10, le=600)
     mantou_affection_event_limit_enabled: bool = False
     mantou_affection_event_limit_per_window: int = Field(
         default=5,
