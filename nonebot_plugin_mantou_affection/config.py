@@ -34,6 +34,8 @@ class Config(BaseModel):
     mantou_affection_wheel_chance: float = Field(default=0.001, ge=0.0, le=1.0)
     mantou_affection_wheel_timeout: int = Field(default=60, ge=3, le=300)
     mantou_affection_wheel_sticker_dir: str = ""
+    mantou_affection_multiplier_chance: float = Field(default=0.2, ge=0.0, le=1.0)
+    mantou_affection_multiplier_timeout: int = Field(default=30, ge=3, le=300)
     mantou_affection_wheel_taozi_timeout: int = Field(default=30, ge=5, le=300)
     mantou_affection_memes_extra_repos: bool = True
     mantou_affection_memes_blocked_terms: str = ""

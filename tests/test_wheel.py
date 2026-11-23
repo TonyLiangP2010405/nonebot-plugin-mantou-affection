@@ -170,6 +170,7 @@ def make_coordinator(
     config = Config(
         mantou_affection_newbie_protection_below=0,
         mantou_affection_wheel_sticker_dir=sticker_dir,
+        mantou_affection_multiplier_chance=0.0,
     )
     service = AffectionService(AffectionStore(tmp_path / "affection.json"), config)
     coordinator = WheelCoordinator(
@@ -249,18 +250,29 @@ def test_wheel_weights_match_approved_table() -> None:
         (("poke", 20), 1),
         (("panel", 1), 5),
         (("panel_rank", 1), 3),
-        (("affection", 1), 7),
-        (("affection", 2), 6),
-        (("affection", 3), 5),
-        (("affection", 5), 4),
-        (("affection", 10), 3),
+        (("affection", 1), 5),
+        (("affection", 2), 4),
+        (("affection", 3), 4),
+        (("affection", 4), 3),
+        (("affection", 5), 2),
+        (("affection", 6), 2),
+        (("affection", 8), 1),
+        (("affection", 10), 1),
         (("affection", 20), 1),
-        (("affection", -1), 7),
-        (("affection", -2), 6),
-        (("affection", -3), 5),
-        (("affection", -5), 3),
-        (("affection", -10), 2),
+        (("affection", 50), 1),
+        (("affection", -1), 5),
+        (("affection", -2), 4),
+        (("affection", -3), 3),
+        (("affection", -4), 2),
+        (("affection", -5), 2),
+        (("affection", -6), 1),
+        (("affection", -8), 1),
+        (("affection", -10), 1),
         (("affection", -20), 1),
+        (("affection", -50), 1),
+        (("spin", 1), 3),
+        (("spin", 2), 1),
+        (("spin", 3), 1),
     ]
     assert sum(weight for _, weight in WHEEL_OUTCOMES) == 100
 
@@ -304,9 +316,13 @@ def test_wheel_draw_uses_independent_integer_ranges() -> None:
     assert draw_wheel_outcome(FixedRollRng(47)) == WheelOutcome("panel_rank", 1)
     assert draw_wheel_outcome(FixedRollRng(49)) == WheelOutcome("panel_rank", 1)
     assert draw_wheel_outcome(FixedRollRng(50)).value == 1
-    assert draw_wheel_outcome(FixedRollRng(75)).value == 20
-    assert draw_wheel_outcome(FixedRollRng(76)).value == -1
-    assert draw_wheel_outcome(FixedRollRng(99)).value == -20
+    assert draw_wheel_outcome(FixedRollRng(72)).value == 20
+    assert draw_wheel_outcome(FixedRollRng(73)).value == 50
+    assert draw_wheel_outcome(FixedRollRng(74)).value == -1
+    assert draw_wheel_outcome(FixedRollRng(94)).value == -50
+    assert draw_wheel_outcome(FixedRollRng(95)) == WheelOutcome("spin", 1)
+    assert draw_wheel_outcome(FixedRollRng(98)) == WheelOutcome("spin", 2)
+    assert draw_wheel_outcome(FixedRollRng(99)) == WheelOutcome("spin", 3)
 
 
 def test_rules_message_lists_every_probability() -> None:
@@ -327,8 +343,8 @@ def test_rules_message_lists_every_probability() -> None:
     assert "群面板排名次数 3%" in rules
     assert "图像处理次数：×1 2%、×2 1%" in rules
     assert "每张图消耗 1 次" in rules
-    assert "+1 7%" in rules and "+20 1%" in rules
-    assert "-1 7%" in rules and "-20 1%" in rules
+    assert "+1 5%" in rules and "+50 1%" in rules
+    assert "-1 5%" in rules and "-50 1%" in rules
 
 
 async def test_start_message_shows_probability_table(tmp_path: Path) -> None:
@@ -476,7 +492,7 @@ async def test_wheel_auto_start_settles_once(tmp_path: Path) -> None:
 
 
 async def test_wheel_operation_draws_each_person_independently(tmp_path: Path) -> None:
-    coordinator = make_coordinator(tmp_path, rng=SequenceRng([50, 75]))
+    coordinator = make_coordinator(tmp_path, rng=SequenceRng([50, 73]))
     await give(coordinator.service, TRIGGER, 10)
     await give(coordinator.service, OTHER, 10)
     pending, sent, _ = await start(coordinator)
@@ -484,8 +500,8 @@ async def test_wheel_operation_draws_each_person_independently(tmp_path: Path) -
 
     await operate(coordinator, pending)
     assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 11
-    assert (await coordinator.service.profile(GROUP, OTHER)).affection == 28
-    assert any("转盘好感 +20，当前 28" in message.extract_plain_text() for message in sent)
+    assert (await coordinator.service.profile(GROUP, OTHER)).affection == 58
+    assert any("转盘好感 +50，当前 58" in message.extract_plain_text() for message in sent)
 
 
 async def test_wheel_image_quota_does_not_call_poke_api(
@@ -531,17 +547,25 @@ async def test_wheel_meme_missing_requests_throttled_recheck(tmp_path: Path) -> 
     ("roll", "delta"),
     [
         (50, 1),
-        (57, 2),
-        (63, 3),
-        (68, 5),
-        (72, 10),
-        (75, 20),
-        (76, -1),
-        (83, -2),
-        (89, -3),
-        (94, -5),
-        (97, -10),
-        (99, -20),
+        (55, 2),
+        (59, 3),
+        (63, 4),
+        (66, 5),
+        (68, 6),
+        (70, 8),
+        (71, 10),
+        (72, 20),
+        (73, 50),
+        (74, -1),
+        (79, -2),
+        (83, -3),
+        (86, -4),
+        (88, -5),
+        (90, -6),
+        (91, -8),
+        (92, -10),
+        (93, -20),
+        (94, -50),
     ],
 )
 async def test_wheel_affection_outcomes(tmp_path: Path, roll: int, delta: int) -> None:
@@ -603,7 +627,7 @@ async def test_wheel_poke_failure_reports_without_raising(tmp_path: Path) -> Non
 
 
 async def test_wheel_uses_actual_applied_delta_at_bounds(tmp_path: Path) -> None:
-    coordinator = make_coordinator(tmp_path, rng=SequenceRng([75, 99]))
+    coordinator = make_coordinator(tmp_path, rng=SequenceRng([73, 94]))
     await give(coordinator.service, TRIGGER, 999)
     await give(coordinator.service, OTHER, 4)
     pending, sent, _ = await start(coordinator)

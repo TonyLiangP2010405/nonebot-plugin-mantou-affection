@@ -11,6 +11,7 @@ from nonebot.adapters.onebot.v11 import MessageSegment
 from .logic import NEWBIE_PROTECTION_NOTE, protect_deduction
 from .service import normalize_nickname
 from .wheel_memes import MemeAssetMissing, MemeGenerationError
+from .wheel_spins import REROLL_COMMAND, SOLO_JOIN_REPLY, SPIN_OUTCOME_NAMES
 from .wheel_stickers import StickerAssetMissing, StickerError, pick_local_sticker
 from .wheel_wallpapers import Wallpaper, WallpaperUnavailable
 
@@ -38,18 +39,29 @@ WHEEL_OUTCOMES: tuple[tuple[WheelOutcome, int], ...] = (
     (WheelOutcome("poke", 20), 1),
     (WheelOutcome("panel", 1), 5),
     (WheelOutcome("panel_rank", 1), 3),
-    (WheelOutcome("affection", 1), 7),
-    (WheelOutcome("affection", 2), 6),
-    (WheelOutcome("affection", 3), 5),
-    (WheelOutcome("affection", 5), 4),
-    (WheelOutcome("affection", 10), 3),
+    (WheelOutcome("affection", 1), 5),
+    (WheelOutcome("affection", 2), 4),
+    (WheelOutcome("affection", 3), 4),
+    (WheelOutcome("affection", 4), 3),
+    (WheelOutcome("affection", 5), 2),
+    (WheelOutcome("affection", 6), 2),
+    (WheelOutcome("affection", 8), 1),
+    (WheelOutcome("affection", 10), 1),
     (WheelOutcome("affection", 20), 1),
-    (WheelOutcome("affection", -1), 7),
-    (WheelOutcome("affection", -2), 6),
-    (WheelOutcome("affection", -3), 5),
-    (WheelOutcome("affection", -5), 3),
-    (WheelOutcome("affection", -10), 2),
+    (WheelOutcome("affection", 50), 1),
+    (WheelOutcome("affection", -1), 5),
+    (WheelOutcome("affection", -2), 4),
+    (WheelOutcome("affection", -3), 3),
+    (WheelOutcome("affection", -4), 2),
+    (WheelOutcome("affection", -5), 2),
+    (WheelOutcome("affection", -6), 1),
+    (WheelOutcome("affection", -8), 1),
+    (WheelOutcome("affection", -10), 1),
     (WheelOutcome("affection", -20), 1),
+    (WheelOutcome("affection", -50), 1),
+    (WheelOutcome("spin", 1), 3),
+    (WheelOutcome("spin", 2), 1),
+    (WheelOutcome("spin", 3), 1),
 )
 
 
@@ -63,6 +75,26 @@ def draw_wheel_outcome(rng: random.Random) -> WheelOutcome:
     raise AssertionError("转盘权重必须合计 100")
 
 
+# 好感结果触发倍率转盘后从这五档里抽一个倍率, 权重合计 100
+MULTIPLIER_OUTCOMES: tuple[tuple[int, int], ...] = (
+    (1, 30),
+    (2, 30),
+    (3, 22),
+    (4, 12),
+    (5, 6),
+)
+
+
+def draw_multiplier(rng: random.Random) -> int:
+    roll = rng.randrange(100)
+    cursor = 0
+    for multiplier, weight in MULTIPLIER_OUTCOMES:
+        cursor += weight
+        if roll < cursor:
+            return multiplier
+    raise AssertionError("倍率权重必须合计 100")
+
+
 WHEEL_JOIN_COST = 2
 WHEEL_TAOZI_COST = 10
 
@@ -71,7 +103,18 @@ def _join_weights(items: list[tuple[int, int]], prefix: str) -> str:
     return "、".join(f"{prefix}{value} {weight}%" for value, weight in items)
 
 
-def format_wheel_rules(timeout: int, newbie_below: int = 50) -> str:
+def _format_percent(value: float) -> str:
+    percent = f"{value * 100:.4f}".rstrip("0").rstrip(".")
+    return f"{percent or '0'}%"
+
+
+def format_wheel_rules(
+    timeout: int,
+    newbie_below: int = 50,
+    *,
+    multiplier_chance: float = 0.0,
+    multiplier_timeout: int = 30,
+) -> str:
     meme_weight = sum(weight for outcome, weight in WHEEL_OUTCOMES if outcome.kind == "meme")
     mantou_sticker_weight = sum(
         weight for outcome, weight in WHEEL_OUTCOMES if outcome.kind == "mantou_sticker"
@@ -86,6 +129,16 @@ def format_wheel_rules(timeout: int, newbie_below: int = 50) -> str:
     panel_ranks = sum(weight for outcome, weight in WHEEL_OUTCOMES if outcome.kind == "panel_rank")
     gains = [(o.value, w) for o, w in WHEEL_OUTCOMES if o.kind == "affection" and o.value > 0]
     losses = [(-o.value, w) for o, w in WHEEL_OUTCOMES if o.kind == "affection" and o.value < 0]
+    spins = {o.value: w for o, w in WHEEL_OUTCOMES if o.kind == "spin"}
+    multiplier_hint = ""
+    if multiplier_chance > 0:
+        multiplier_hint = (
+            f"抽到好感结果有 {_format_percent(multiplier_chance)} 概率触发倍率转盘："
+            f"{multiplier_timeout} 秒后开转，×1~×{MULTIPLIER_OUTCOMES[-1][0]} 倍做最终结算。\n"
+        )
+    spin_line = "、".join(
+        f"{SPIN_OUTCOME_NAMES[value]} {weight}%" for value, weight in sorted(spins.items())
+    )
 
     return (
         " 馒头命运齿轮转盘出现了！"
@@ -93,6 +146,7 @@ def format_wheel_rules(timeout: int, newbie_below: int = 50) -> str:
         f"其他群友发送“参与”即可加入，{timeout} 秒后自动开转，每人独立抽取一次。\n"
         "倒计时结束前都可以参与，开转后不再接受新的参与者。\n"
         f"好感度低于 {newbie_below} 的群友有新手保护：所有扣分只扣 1/3。\n"
+        f"{multiplier_hint}"
         "转盘各项概率：\n"
         f"· 馒头制作随机表情 {meme_weight}%\n"
         f"· 馒头表情包 {mantou_sticker_weight}%（随机发一张）\n"
@@ -102,6 +156,7 @@ def format_wheel_rules(timeout: int, newbie_below: int = 50) -> str:
         f"· 角色面板次数 {panels}%（在喵喵插件里免费查看一次角色面板）\n"
         f"· 群面板排名次数 {panel_ranks}%（在喵喵插件里免费查看一次群面板排名）\n"
         f"· 图像处理次数：{_join_weights(images, '×')}（每张图消耗 1 次）\n"
+        f"· {spin_line}（中奖者自己单独再转一轮，其他人不能参与）\n"
         f"· 好感增加：{_join_weights(gains, '+')}\n"
         f"· 好感减少：{_join_weights(losses, '-')}"
     )
@@ -154,6 +209,7 @@ class PendingWheel:
         self.bot = bot
         self.send = send
         self.accepting = True
+        self.solo = False
         self.task: asyncio.Task | None = None
 
 
@@ -195,6 +251,8 @@ class WheelCoordinator:
         image_quota=None,
         panel_quota=None,
         panel_rank_quota=None,
+        spin_quota=None,
+        multiplier_rng: random.Random | None = None,
         poke_delay: float = 0.2,
     ):
         self.service = service
@@ -208,6 +266,11 @@ class WheelCoordinator:
         self.image_quota = image_quota
         self.panel_quota = panel_quota
         self.panel_rank_quota = panel_rank_quota
+        self.spin_quota = spin_quota
+        self.multiplier_rng = multiplier_rng or random.Random()
+        self.multiplier_chance = float(config.mantou_affection_multiplier_chance)
+        self.multiplier_timeout = float(config.mantou_affection_multiplier_timeout)
+        self.settlements: set[asyncio.Task] = set()
         self.poke_delay = max(float(poke_delay), 0.0)
         self.choice_timeout = float(config.mantou_affection_wheel_timeout)
         self.sticker_confirm_timeout = float(
@@ -245,6 +308,8 @@ class WheelCoordinator:
             rules = format_wheel_rules(
                 int(self.choice_timeout),
                 self.config.mantou_affection_newbie_protection_below,
+                multiplier_chance=self.multiplier_chance,
+                multiplier_timeout=int(self.multiplier_timeout),
             )
             await send(MessageSegment.at(user) + MessageSegment.text(rules))
         except Exception:
@@ -254,6 +319,52 @@ class WheelCoordinator:
             if self.pending.get(group) is pending and pending.accepting:
                 pending.task = asyncio.create_task(self._auto_start(pending))
         return True
+
+    async def spin_personal(
+        self, *, group_id: str, user_id: str, nickname: str, bot, send
+    ) -> str:
+        """消耗 1 次「再来一次」，立刻为该群友单独开转一轮。
+
+        个人转盘没有参与窗口，其他人不能加入，结果照常结算。
+        返回 ``ok`` / ``empty`` / ``busy`` / ``unavailable`` / ``failed``。
+        """
+
+        group = str(group_id)
+        user = str(user_id)
+        async with self._lock:
+            if self.busy(group):
+                return "busy"
+            if self.spin_quota is None:
+                return "unavailable"
+            try:
+                remaining = await self.spin_quota.consume(group, user, 1)
+            except Exception:
+                logger.exception("[mantou-affection] 扣除转盘次数失败")
+                return "failed"
+            if remaining is None:
+                return "empty"
+            pending = PendingWheel(
+                group,
+                user,
+                normalize_nickname(nickname, user),
+                bot=bot,
+                send=send,
+            )
+            pending.accepting = False
+            pending.solo = True
+            self.pending[group] = pending
+        try:
+            await pending.send(
+                MessageSegment.at(user)
+                + MessageSegment.text(
+                    f" 🎡 使用「{SPIN_OUTCOME_NAMES[1]}」，本轮只有你能转"
+                    f"（剩余 {remaining} 次），马上开转。"
+                )
+            )
+        except Exception:
+            logger.exception("[mantou-affection] 发送个人转盘提示失败")
+        await self._run_operation(pending)
+        return "ok"
 
     async def answer(self, group_id: str, user_id: str, nickname: str, text: str) -> bool:
         keyword = text.strip()
@@ -276,6 +387,9 @@ class WheelCoordinator:
 
     async def _join(self, pending: PendingWheel, user_id: str, nickname: str) -> bool:
         async with self._lock:
+            if pending.solo:
+                await pending.send(SOLO_JOIN_REPLY)
+                return True
             if not pending.accepting or self.pending.get(pending.group_id) is not pending:
                 return True
             if user_id == pending.trigger.user_id:
@@ -339,26 +453,7 @@ class WheelCoordinator:
                 try:
                     outcome = draw_wheel_outcome(self.rng)
                     if outcome.kind == "affection":
-                        applied, profile, protected = await self.service.adjust(
-                            pending.group_id,
-                            participant.user_id,
-                            participant.nickname,
-                            outcome.value,
-                        )
-                        note = NEWBIE_PROTECTION_NOTE if protected else ""
-                        await pending.send(
-                            MessageSegment.at(participant.user_id)
-                            + MessageSegment.text(
-                                f" 转盘好感 {applied:+d}，当前 {profile.affection}{note}"
-                            )
-                        )
-                        if applied < 0:
-                            await self.service.send_gift(
-                                pending.send,
-                                pending.group_id,
-                                participant.user_id,
-                                participant.nickname,
-                            )
+                        await self._run_affection(pending, participant, outcome.value)
                     elif outcome.kind == "image":
                         await self._run_image_quota(pending, participant, outcome.value)
                     elif outcome.kind == "poke":
@@ -367,6 +462,8 @@ class WheelCoordinator:
                         await self._run_panel_quota(pending, participant, outcome.value)
                     elif outcome.kind == "panel_rank":
                         await self._run_panel_rank_quota(pending, participant, outcome.value)
+                    elif outcome.kind == "spin":
+                        await self._run_spin_quota(pending, participant, outcome.value)
                     elif outcome.kind == "mantou_sticker":
                         await self._run_mantou_sticker_outcome(pending, participant)
                     elif outcome.kind == "taozi":
@@ -382,6 +479,113 @@ class WheelCoordinator:
                     )
         finally:
             self.discard(pending)
+
+    def _multiplier_triggered(self) -> bool:
+        chance = min(max(self.multiplier_chance, 0.0), 1.0)
+        if chance <= 0:
+            return False
+        return self.multiplier_rng.randrange(100) < round(chance * 100)
+
+    async def _run_affection(
+        self, pending: PendingWheel, participant: WheelParticipant, delta: int
+    ) -> None:
+        """好感结果先掷一次倍率入口；命中就把结算延后到倍率转盘开转之后。"""
+
+        if not self._multiplier_triggered():
+            await self._settle_affection(pending, participant, delta)
+            return
+        await self._start_multiplier(pending, participant, delta)
+
+    async def _start_multiplier(
+        self, pending: PendingWheel, participant: WheelParticipant, delta: int
+    ) -> None:
+        """公告倍率转盘并起一个延迟结算任务，不阻塞本轮其他人的抽取。"""
+
+        try:
+            await pending.send(
+                MessageSegment.at(participant.user_id)
+                + MessageSegment.text(
+                    f" 抽到好感 {delta:+d}，触发倍率转盘！"
+                    f"{int(self.multiplier_timeout)} 秒后开转，按倍率做最终结算。"
+                )
+            )
+        except Exception:
+            logger.exception("[mantou-affection] 发送倍率转盘公告失败")
+        task = asyncio.create_task(
+            self._settle_with_multiplier(pending, participant, delta)
+        )
+        self.settlements.add(task)
+        task.add_done_callback(self.settlements.discard)
+
+    async def _settle_with_multiplier(
+        self, pending: PendingWheel, participant: WheelParticipant, delta: int
+    ) -> None:
+        try:
+            await asyncio.sleep(self.multiplier_timeout)
+        except asyncio.CancelledError:
+            return
+        multiplier = draw_multiplier(self.multiplier_rng)
+        await self._settle_affection(
+            pending,
+            participant,
+            delta * multiplier,
+            multiplier=multiplier,
+            base=delta,
+        )
+
+    async def _settle_affection(
+        self,
+        pending: PendingWheel,
+        participant: WheelParticipant,
+        delta: int,
+        *,
+        multiplier: int = 0,
+        base: int | None = None,
+    ) -> None:
+        if base is None:
+            base = delta
+        try:
+            applied, profile, protected = await self.service.adjust(
+                pending.group_id,
+                participant.user_id,
+                participant.nickname,
+                delta,
+            )
+        except Exception:
+            logger.exception("[mantou-affection] 转盘好感结算失败")
+            await pending.send(
+                MessageSegment.at(participant.user_id)
+                + MessageSegment.text(" 馒头想结算这次好感，但账本没打开，这次先欠着")
+            )
+            return
+        note = NEWBIE_PROTECTION_NOTE if protected else ""
+        if multiplier:
+            detail = (
+                f" 🎰 倍率转盘 ×{multiplier}：好感 {base:+d} → {applied:+d}，"
+                f"当前 {profile.affection}{note}"
+            )
+        else:
+            detail = f" 转盘好感 {applied:+d}，当前 {profile.affection}{note}"
+        await pending.send(
+            MessageSegment.at(participant.user_id) + MessageSegment.text(detail)
+        )
+        if applied < 0:
+            await self.service.send_gift(
+                pending.send,
+                pending.group_id,
+                participant.user_id,
+                participant.nickname,
+            )
+
+    async def wait_pending_settlements(self) -> None:
+        """等所有延迟结算（倍率转盘）跑完；测试和优雅退出都用得上。"""
+
+        while True:
+            pending = [task for task in self.settlements if not task.done()]
+            if not pending:
+                break
+            await asyncio.gather(*pending, return_exceptions=True)
+        await asyncio.sleep(0)
 
     async def _run_image_quota(
         self, pending: PendingWheel, participant: WheelParticipant, count: int
@@ -458,6 +662,33 @@ class WheelCoordinator:
             + MessageSegment.text(
                 f" 🏆 抽到群面板排名次数 ×{count}，当前共 {total} 次"
                 "（在喵喵插件里发送 /面板排名 使用）"
+            )
+        )
+
+    async def _run_spin_quota(
+        self, pending: PendingWheel, participant: WheelParticipant, count: int
+    ) -> None:
+        """转盘抽到「再来一次」：记 1~3 次个人转盘次数，并告诉本人怎么用。"""
+
+        name = SPIN_OUTCOME_NAMES.get(count, SPIN_OUTCOME_NAMES[1])
+        try:
+            if self.spin_quota is None:
+                raise RuntimeError("转盘次数账本未接线")
+            total = await self.spin_quota.add(
+                pending.group_id, participant.user_id, count
+            )
+        except Exception:
+            logger.exception("[mantou-affection] 转盘发放再来一次次数失败")
+            await pending.send(
+                MessageSegment.at(participant.user_id)
+                + MessageSegment.text(" 馒头想给你记「再来一次」次数，但账本没打开，这次先欠着")
+            )
+            return
+        await pending.send(
+            MessageSegment.at(participant.user_id)
+            + MessageSegment.text(
+                f" 🎡 抽到「{name}」，转盘次数 +{count}，当前共 {total} 次"
+                f"（发送 /{REROLL_COMMAND} 自己单独转一轮，其他人不能参与）"
             )
         )
 

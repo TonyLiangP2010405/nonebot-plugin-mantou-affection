@@ -66,6 +66,7 @@ from .wheel_memes import (
     MemeResourceManager,
     parse_blocked_terms,
 )
+from .wheel_spins import WheelSpinQuotaStore, register_spin_commands
 from .wheel_stickers import TaoziStickerLibrary
 from .wheel_wallpapers import WallpaperLibrary
 from .zzz_quiz import BUNDLED_ZZZ_QUIZ_PATH, ZzzQuizCoordinator
@@ -78,6 +79,7 @@ panel_quota = PanelQuotaStore(Path(get_plugin_data_dir()) / "panel_quota.json")
 panel_rank_quota = PanelRankQuotaStore(
     Path(get_plugin_data_dir()) / "panel_rank_quota.json"
 )
+spin_quota = WheelSpinQuotaStore(Path(get_plugin_data_dir()) / "wheel_spins.json")
 text_library = AffectionTextLibrary(
     Path(__file__).parent / "resources" / "affection_texts.json",
     plugin_config.mantou_affection_text_path,
@@ -161,8 +163,10 @@ wheel_coordinator = WheelCoordinator(
     image_quota=image_quota,
     panel_quota=panel_quota,
     panel_rank_quota=panel_rank_quota,
+    spin_quota=spin_quota,
 )
 event_coordinator.attach_wheel(wheel_coordinator)
+spin_matchers = register_spin_commands(wheel_coordinator)
 matchers = register_commands(
     service, plugin_config, pk_coordinator, image_processing, wallpapers
 )

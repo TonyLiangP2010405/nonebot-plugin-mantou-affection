@@ -386,6 +386,7 @@ async def test_help_lists_every_command(tmp_path: Path, monkeypatch) -> None:
         "/馒头强制事件",
         "/馒头图像处理",
         "/翻转",
+        "/馒头再来一次",
     }
 
 
