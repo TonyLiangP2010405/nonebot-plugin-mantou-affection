@@ -63,8 +63,6 @@ def draw_wheel_outcome(rng: random.Random) -> WheelOutcome:
     raise AssertionError("转盘权重必须合计 100")
 
 
-WHEEL_MAX_PARTICIPANTS = 4
-WHEEL_TOTAL_SEATS = WHEEL_MAX_PARTICIPANTS + 1
 WHEEL_JOIN_COST = 2
 WHEEL_TAOZI_COST = 10
 
@@ -91,7 +89,7 @@ def format_wheel_rules(timeout: int, newbie_below: int = 50) -> str:
 
     return (
         " 馒头命运齿轮转盘出现了！"
-        f"含触发者最多 {WHEEL_TOTAL_SEATS} 人，参与需要扣除 {WHEEL_JOIN_COST} 点好感度。\n"
+        f"参与需要扣除 {WHEEL_JOIN_COST} 点好感度，人数不限。\n"
         f"其他群友发送“参与”即可加入，{timeout} 秒后自动开转，每人独立抽取一次。\n"
         "倒计时结束前都可以参与，开转后不再接受新的参与者。\n"
         f"好感度低于 {newbie_below} 的群友有新手保护：所有扣分只扣 1/3。\n"
@@ -285,9 +283,6 @@ class WheelCoordinator:
                 return True
             if any(item.user_id == user_id for item in pending.participants):
                 await pending.send("你已经参与本轮转盘了。")
-                return True
-            if len(pending.participants) >= WHEEL_MAX_PARTICIPANTS:
-                await pending.send(f"本轮转盘名额已满（含触发者最多 {WHEEL_TOTAL_SEATS} 人）。")
                 return True
             name = normalize_nickname(nickname, user_id)
             cost = WHEEL_JOIN_COST

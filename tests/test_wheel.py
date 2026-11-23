@@ -312,7 +312,8 @@ def test_wheel_draw_uses_independent_integer_ranges() -> None:
 def test_rules_message_lists_every_probability() -> None:
     rules = format_wheel_rules(60)
     assert "参与需要扣除 2 点好感度" in rules
-    assert "含触发者最多 5 人" in rules
+    assert "人数不限" in rules
+    assert "最多 5 人" not in rules
     assert "60 秒后自动开转" in rules
     assert "倒计时结束前都可以参与" in rules
     assert "不运作" not in rules
@@ -373,27 +374,26 @@ async def test_wheel_join_requires_enough_affection(tmp_path: Path) -> None:
     pending.task.cancel()
 
 
-async def test_wheel_join_cap_duplicate_and_trigger_notices(tmp_path: Path) -> None:
+async def test_wheel_join_has_no_participant_cap(tmp_path: Path) -> None:
     coordinator = make_coordinator(tmp_path)
     user_ids = [str(94010 + index) for index in range(6)]
     pending, sent, _ = await start(coordinator)
 
-    for user_id in user_ids[:4]:
+    for user_id in user_ids:
         await give(coordinator.service, user_id, 10)
         await coordinator.answer(GROUP, user_id, "路人", "参与")
     await coordinator.answer(GROUP, user_ids[0], "路人", "参与")
-    await coordinator.answer(GROUP, user_ids[4], "路人", "参与")
     await coordinator.answer(GROUP, TRIGGER, "触发者", "参与")
 
-    assert len(pending.participants) == 4
+    assert len(pending.participants) == 6
     scores = [
         (await coordinator.service.profile(GROUP, user_id)).affection
-        for user_id in user_ids[:4]
+        for user_id in user_ids
     ]
-    assert scores == [8, 8, 8, 8]
+    assert scores == [8, 8, 8, 8, 8, 8]
     texts = [message.extract_plain_text() for message in sent]
     assert any("你已经参与本轮转盘了" in text for text in texts)
-    assert any("名额已满（含触发者最多 5 人）" in text for text in texts)
+    assert not any("名额已满" in text for text in texts)
     assert any("触发者已自动加入" in text for text in texts)
     assert pending.accepting is True
     pending.task.cancel()
