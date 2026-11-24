@@ -967,9 +967,11 @@ async def test_plugin_wiring_runs_find_char_end_to_end(monkeypatch) -> None:
     group_id = "90091"
     trigger_id = "90092"
     answer_id = "90093"
+    from nonebot_plugin_mantou_affection import event_coordinator
     from nonebot_plugin_mantou_affection import event_wheel as event_wheel_module
 
     monkeypatch.setattr(plugin_config, "mantou_affection_event_wheel_chance", 1.0)
+    monkeypatch.setattr(plugin_config, "mantou_affection_event_wheel_timeout", 0.01)
     monkeypatch.setattr(plugin_config, "mantou_affection_wheel_chance", 0.0)
     monkeypatch.setattr(plugin_config, "mantou_affection_find_char_timeout", 0.05)
     monkeypatch.setattr(plugin_config, "mantou_affection_newbie_protection_below", 0)
@@ -990,10 +992,13 @@ async def test_plugin_wiring_runs_find_char_end_to_end(monkeypatch) -> None:
     await ambient_matcher.handlers[0].call(
         _event("晚上好", user_id=int(trigger_id), group_id=int(group_id))
     )
+    assert event_coordinator.event_wheel is not None
+    await event_coordinator.event_wheel.wait_settled()
 
-    assert len(sent) == 2
-    assert "事件转盘转到了「找字」" in sent[0].extract_plain_text()
-    assert FIND_CHAR_PREFIX in sent[1].extract_plain_text()
+    assert len(sent) == 3
+    assert "触发了事件转盘" in sent[0].extract_plain_text()
+    assert "事件转盘转到了「找字」" in sent[1].extract_plain_text()
+    assert FIND_CHAR_PREFIX in sent[2].extract_plain_text()
     pending = find_char_coordinator.pending[group_id]
     assert pending.task is not None
 
@@ -1002,10 +1007,10 @@ async def test_plugin_wiring_runs_find_char_end_to_end(monkeypatch) -> None:
     )
     await asyncio.wait_for(pending.task, 2)
 
-    assert len(sent) == 3
-    assert _at_ids(sent[2]) == [answer_id, trigger_id]
-    assert "好感度 +2" in _lines(sent[2])[0]
-    assert "超时未答" in _lines(sent[2])[1]
+    assert len(sent) == 4
+    assert _at_ids(sent[3]) == [answer_id, trigger_id]
+    assert "好感度 +2" in _lines(sent[3])[0]
+    assert "超时未答" in _lines(sent[3])[1]
     assert await get_affection(group_id, answer_id) == 5
     assert await get_affection(group_id, trigger_id) == 1
 
@@ -1026,6 +1031,7 @@ async def _ambient_setup(
     coordinator_rng = config_kwargs.pop("coordinator_rng", random.Random(0))
     config_kwargs.setdefault("mantou_affection_newbie_protection_below", 0)
     config_kwargs.setdefault("mantou_affection_event_wheel_chance", 0.0)
+    config_kwargs.setdefault("mantou_affection_event_wheel_timeout", 0.01)
     config_kwargs.setdefault("mantou_affection_wheel_chance", 0.0)
     config = Config(**config_kwargs)
     service = _service(
@@ -1060,16 +1066,20 @@ async def test_event_wheel_lands_on_find_char_game(
         tmp_path,
         monkeypatch,
         mantou_affection_event_wheel_chance=1.0,
+        mantou_affection_event_wheel_timeout=0.01,
         coordinator_rng=FixedSlotRng(EVENT_WHEEL_FINDCHAR),
         mantou_affection_find_char_timeout=30,
     )
     await _give_affection(service, 12)
 
     await ambient.handlers[0].call(_event())
+    assert coordinator.event_wheel is not None
+    await coordinator.event_wheel.wait_settled()
 
-    assert len(sent) == 2
-    assert "事件转盘转到了「找字」" in sent[0].extract_plain_text()
-    message = sent[1]
+    assert len(sent) == 3
+    assert "触发了事件转盘" in sent[0].extract_plain_text()
+    assert "事件转盘转到了「找字」" in sent[1].extract_plain_text()
+    message = sent[2]
     assert [segment.type for segment in message] == ["at", "text"]
     assert _at_ids(message) == [TRIGGER_ID]
     pending = find_char.pending[GROUP_ID]
@@ -1105,6 +1115,7 @@ async def test_event_wheel_stays_silent_when_group_is_busy(
         tmp_path,
         monkeypatch,
         mantou_affection_event_wheel_chance=1.0,
+        mantou_affection_event_wheel_timeout=0.01,
         coordinator_rng=FixedSlotRng(EVENT_WHEEL_FINDCHAR),
     )
     await _give_affection(service, 12)

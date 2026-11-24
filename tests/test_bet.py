@@ -981,6 +981,7 @@ async def _ambient_setup(
     coordinator_rng = config_kwargs.pop("coordinator_rng", random.Random(0))
     config_kwargs.setdefault("mantou_affection_newbie_protection_below", 0)
     config_kwargs.setdefault("mantou_affection_event_wheel_chance", 0.0)
+    config_kwargs.setdefault("mantou_affection_event_wheel_timeout", 0.01)
     config_kwargs.setdefault("mantou_affection_wheel_chance", 0.0)
     config = Config(**config_kwargs)
     service = _service(
@@ -1030,17 +1031,21 @@ async def test_event_wheel_starts_bet_for_high_affection(
         bundled_texts_path,
         monkeypatch,
         mantou_affection_event_wheel_chance=1.0,
+        mantou_affection_event_wheel_timeout=0.01,
         coordinator_rng=FixedSlotRng(EVENT_WHEEL_BET),
     )
     await _seed_recent_and_affection(service, bet, TRIGGER_ID, RIVAL_A, RIVAL_B)
 
     await ambient.handlers[0].call(_event())
+    assert _events.event_wheel is not None
+    await _events.event_wheel.wait_settled()
 
     assert GROUP_ID in bet.pending
     assert set(bet.pending[GROUP_ID].named_ids) == {TRIGGER_ID, RIVAL_A, RIVAL_B}
-    assert len(sent) == 2
-    assert "事件转盘转到了「馒头博弈」" in sent[0].extract_plain_text()
-    assert "🎲 馒头博弈！" in sent[1].extract_plain_text()
+    assert len(sent) == 3
+    assert "触发了事件转盘" in sent[0].extract_plain_text()
+    assert "事件转盘转到了「馒头博弈」" in sent[1].extract_plain_text()
+    assert "🎲 馒头博弈！" in sent[2].extract_plain_text()
     await _cancel_task(bet)
 
 
@@ -1052,17 +1057,20 @@ async def test_event_wheel_does_not_land_on_bet_below_affection_threshold(
         bundled_texts_path,
         monkeypatch,
         mantou_affection_event_wheel_chance=1.0,
+        mantou_affection_event_wheel_timeout=0.01,
         coordinator_rng=FixedSlotRng(EVENT_WHEEL_BET),
     )
     await _seed_recent_and_affection(service, bet, RIVAL_A, RIVAL_B, score=60)
     await _give_affection(service, 50, TRIGGER_ID)
 
     await ambient.handlers[0].call(_event())
+    assert _events.event_wheel is not None
+    await _events.event_wheel.wait_settled()
 
     # 好感没超过门槛时博弈不进候选池 转盘不会转到它
     assert bet.pending == {}
-    assert sent
-    assert "馒头博弈" not in sent[0].extract_plain_text()
+    assert len(sent) >= 2
+    assert "馒头博弈" not in sent[1].extract_plain_text()
 
 
 async def test_event_wheel_does_not_land_on_bet_without_enough_rivals(
@@ -1073,6 +1081,7 @@ async def test_event_wheel_does_not_land_on_bet_without_enough_rivals(
         bundled_texts_path,
         monkeypatch,
         mantou_affection_event_wheel_chance=1.0,
+        mantou_affection_event_wheel_timeout=0.01,
         coordinator_rng=FixedSlotRng(EVENT_WHEEL_BET),
     )
     await _give_affection(service, 60, TRIGGER_ID)
@@ -1080,10 +1089,12 @@ async def test_event_wheel_does_not_land_on_bet_without_enough_rivals(
     bet.note_message(GROUP_ID, RIVAL_A, "甲")
 
     await ambient.handlers[0].call(_event())
+    assert _events.event_wheel is not None
+    await _events.event_wheel.wait_settled()
 
     assert bet.pending == {}
-    assert sent
-    assert "馒头博弈" not in sent[0].extract_plain_text()
+    assert len(sent) >= 2
+    assert "馒头博弈" not in sent[1].extract_plain_text()
 
 
 async def test_event_wheel_starts_bet_regardless_of_legacy_bet_chance(
@@ -1096,12 +1107,15 @@ async def test_event_wheel_starts_bet_regardless_of_legacy_bet_chance(
         bundled_texts_path,
         monkeypatch,
         mantou_affection_event_wheel_chance=1.0,
+        mantou_affection_event_wheel_timeout=0.01,
         mantou_affection_bet_chance=0.0,
         coordinator_rng=FixedSlotRng(EVENT_WHEEL_BET),
     )
     await _seed_recent_and_affection(service, bet, TRIGGER_ID, RIVAL_A, RIVAL_B)
 
     await ambient.handlers[0].call(_event())
+    assert _events.event_wheel is not None
+    await _events.event_wheel.wait_settled()
 
     assert GROUP_ID in bet.pending
     await _cancel_task(bet)

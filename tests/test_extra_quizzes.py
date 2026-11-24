@@ -263,6 +263,7 @@ async def test_event_wheel_lands_on_quiz(
 ) -> None:
     config = Config(
         mantou_affection_event_wheel_chance=1.0,
+        mantou_affection_event_wheel_timeout=0.01,
         mantou_affection_wheel_chance=0.0,
         mantou_affection_ambient_enabled=False,
         mantou_affection_newbie_protection_below=0,
@@ -278,11 +279,14 @@ async def test_event_wheel_lands_on_quiz(
 
     monkeypatch.setattr(ambient, "send", fake_send)
     await ambient.handlers[0].call(_event())
+    assert events.event_wheel is not None
+    await events.event_wheel.wait_settled()
 
     assert GROUP_ID in coordinator.pending
-    assert len(sent) == 2
-    assert f"事件转盘转到了「{label}」" in sent[0].extract_plain_text()
-    assert spec.prefix in sent[1].extract_plain_text()
+    assert len(sent) == 3
+    assert "触发了事件转盘" in sent[0].extract_plain_text()
+    assert f"事件转盘转到了「{label}」" in sent[1].extract_plain_text()
+    assert spec.prefix in sent[2].extract_plain_text()
     coordinator.pending[GROUP_ID].task.cancel()
     with suppress(asyncio.CancelledError):
         await coordinator.pending[GROUP_ID].task

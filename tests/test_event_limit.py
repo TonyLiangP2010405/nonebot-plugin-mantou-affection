@@ -87,6 +87,13 @@ class _FixedSlotRng(random.Random):
         return self.slot if self.slot in items else items[0]
 
 
+async def _settle_wheel(coordinator: EventCoordinator) -> None:
+    """等事件转盘倒计时结束、活动真正开起来。"""
+
+    assert coordinator.event_wheel is not None
+    await coordinator.event_wheel.wait_settled()
+
+
 def _capture_send(matcher, monkeypatch) -> list[Message]:
     sent: list[Message] = []
 
@@ -256,6 +263,7 @@ async def test_ambient_handler_stays_quiet_when_quota_is_spent(
 ) -> None:
     config = Config(
         mantou_affection_event_wheel_chance=1.0,
+        mantou_affection_event_wheel_timeout=0.01,
         mantou_affection_newbie_protection_below=0,
         mantou_affection_event_limit_enabled=True,
         mantou_affection_event_limit_per_window=5,
@@ -280,6 +288,7 @@ async def test_ambient_handler_records_real_activity(
 ) -> None:
     config = Config(
         mantou_affection_event_wheel_chance=1.0,
+        mantou_affection_event_wheel_timeout=0.01,
         mantou_affection_ambient_enabled=False,
         mantou_affection_newbie_protection_below=0,
         mantou_affection_event_limit_enabled=True,
@@ -293,6 +302,7 @@ async def test_ambient_handler_records_real_activity(
     await _give_affection(service)
 
     await ambient.handlers[0].call(_event())
+    await _settle_wheel(coordinator)
 
     assert sent
     assert GROUP_ID in coordinator.findchar.pending
@@ -305,6 +315,7 @@ async def test_plain_ambient_reaction_does_not_consume_quota(
 ) -> None:
     config = Config(
         mantou_affection_event_wheel_chance=1.0,
+        mantou_affection_event_wheel_timeout=0.01,
         mantou_affection_wheel_chance=0.0,
         mantou_affection_newbie_protection_below=0,
         mantou_affection_event_limit_enabled=True,
@@ -317,9 +328,10 @@ async def test_plain_ambient_reaction_does_not_consume_quota(
     await _give_affection(service)
 
     await ambient.handlers[0].call(_event())
+    await _settle_wheel(coordinator)
 
-    assert len(sent) == 2
-    assert "事件转盘转到了「馒头小动作」" in str(sent[0])
+    assert len(sent) == 3
+    assert "事件转盘转到了「馒头小动作」" in str(sent[1])
     assert await service.event_limit_used(GROUP_ID) == 0
 
 

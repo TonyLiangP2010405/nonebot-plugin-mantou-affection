@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import random
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
@@ -39,6 +40,7 @@ EVENT_WHEEL_ZZZ_QUIZ = "zzz_quiz"
 EVENT_WHEEL_PETIT_PLANET_QUIZ = "petit_planet_quiz"
 EVENT_WHEEL_WHOAMI = "whoami"
 
+EVENT_WHEEL_TRIGGERED = " 触发了事件转盘！{seconds} 秒后揭晓转到哪一项……"
 EVENT_WHEEL_RESULT = "🎡 事件转盘转到了「{label}」！"
 EVENT_WHEEL_FAILED = "「{label}」这次没开起来，馒头挠了挠头。"
 
@@ -51,6 +53,19 @@ class EventWheelSlot:
 
     key: str
     label: str
+
+
+@dataclass
+class PendingSpin:
+    """一次已经公告、正在等揭晓的事件转盘；倒计时结束才公告转到的格子并开局。"""
+
+    group_id: str
+    user_id: str
+    nickname: str
+    slot: str
+    send: Send
+    revealed: bool = False
+    task: asyncio.Task | None = None
 
 
 # 顺序与 /馒头强制事件 的 1~13 完全一致 方便对照
@@ -86,10 +101,12 @@ def _current_bot():
 class EventWheelCoordinator:
     """事件转盘：把群消息触发的 13 项活动收进一个等概率转盘。
 
-    命中概率由 :meth:`AffectionService.event_wheel_triggered` 单独判定；转盘在
-    当前能开的项目里等概率抽一格，先公告转到的名字，再直接开对应活动。某项条件
-    不满足（好感门槛、题库为空、对手不够）时不会进候选池，所以转到的项目基本都能
-    正常开局；真的开局失败时补一句提示，不吃群席位也不记账。
+    命中概率由 :meth:`AffectionService.event_wheel_triggered` 单独判定。命中后先
+    公告「@触发者 触发了事件转盘！N 秒后揭晓转到哪一项……」，倒计时期间本群席位被
+    占住，别的活动不会插进来；倒计时结束再公告转到的格子和开对应活动。转盘只在
+    当前能开的项目里等概率抽一格，某项条件不满足（好感门槛、题库为空、对手不够）
+    时不会进候选池，所以转到的项目基本都能正常开局；真的开局失败时补一句提示，
+    不占限流额度。
     """
 
     def __init__(
@@ -110,6 +127,7 @@ class EventWheelCoordinator:
         fill_blank: FillBlankCoordinator | None = None,
         whoami: WhoAmICoordinator | None = None,
         rng: random.Random | None = None,
+        timeout: float | None = None,
     ):
         self.service = service
         self.config = config
@@ -126,16 +144,30 @@ class EventWheelCoordinator:
         self.fill_blank = fill_blank
         self.whoami = whoami
         self.rng = rng or random.Random()
+        timeout_value = (
+            config.mantou_affection_event_wheel_timeout if timeout is None else timeout
+        )
+        self.timeout = max(0.0, float(timeout_value))
+        self.pending: dict[str, PendingSpin] = {}
+        self.spin_tasks: set[asyncio.Task] = set()
 
     def labels(self) -> tuple[str, ...]:
         """按固定顺序返回 13 格的名字，供命令里展示。"""
 
         return tuple(slot.label for slot in EVENT_WHEEL_SLOTS)
 
+    def spinning(self, group_id: str) -> bool:
+        """本群是否正在等事件转盘揭晓；公告已经发出去、结果还没公布。"""
+
+        pending = self.pending.get(str(group_id))
+        return pending is not None and not pending.revealed
+
     def busy(self, group_id: str) -> bool:
         """本群是否已有待结算的活动；有的话事件转盘直接安静，不公告也不开局。"""
 
         key = str(group_id)
+        if self.spinning(key):
+            return True
         events_busy = getattr(self.events, "busy", None)
         if callable(events_busy) and events_busy(key):
             return True
@@ -191,42 +223,97 @@ class EventWheelCoordinator:
             slots.append(EVENT_WHEEL_WHOAMI)
         return tuple(slots)
 
-    async def start(
+    async def spin(
         self,
         *,
         group_id: str,
         user_id: str,
-        nickname: str,
+        nickname: str = "",
         send: Send,
     ) -> str | None:
-        """转一次并直接开对应活动，返回真正开起来的格子键；一项都没开返回 None。"""
+        """公告「触发了事件转盘」并起一个倒计时，返回抽到的格子键；开不了转盘返回 None。
+
+        真正的「转到了哪一项」要等 :meth:`_settle` 在倒计时结束后才公告，倒计时期间
+        本群席位被占住（:meth:`spinning`），别的活动不会插进来。
+        """
 
         if self.busy(group_id):
             return None
-        slots = await self.available_slots(group_id, user_id)
-        key = self.draw_slot(slots)
-        if key is None:
+        slots = await self.available_slots(group_id, str(user_id))
+        slot = self.draw_slot(slots)
+        if slot is None:
             return None
-        label = EVENT_WHEEL_LABELS[key]
+        key = str(group_id)
+        pending = PendingSpin(key, str(user_id), nickname, slot, send)
+        self.pending[key] = pending
         try:
-            await send(EVENT_WHEEL_RESULT.format(label=label))
-        except Exception:
-            logger.exception("[mantou-affection] 发送事件转盘结果失败")
-            return None
-        try:
-            started = await self._start_slot(
-                key, group_id=group_id, user_id=user_id, nickname=nickname, send=send
+            await send(
+                MessageSegment.text("🎡 ")
+                + MessageSegment.at(user_id)
+                + MessageSegment.text(
+                    EVENT_WHEEL_TRIGGERED.format(seconds=int(self.timeout))
+                )
             )
         except Exception:
-            logger.exception("[mantou-affection] 事件转盘开局失败")
-            started = False
-        if started:
-            return key
+            logger.exception("[mantou-affection] 发送事件转盘触发提示失败")
+            self.pending.pop(key, None)
+            return None
+        pending.task = asyncio.create_task(self._settle(pending))
+        self.spin_tasks.add(pending.task)
+        pending.task.add_done_callback(self.spin_tasks.discard)
+        return slot
+
+    async def _settle(self, pending: PendingSpin) -> None:
+        """倒计时结束：公告转到的格子，直接开对应活动。"""
+
         try:
-            await send(EVENT_WHEEL_FAILED.format(label=label))
-        except Exception:
-            logger.exception("[mantou-affection] 发送事件转盘失败提示失败")
-        return None
+            try:
+                await asyncio.sleep(self.timeout)
+            except asyncio.CancelledError:
+                return
+            pending.revealed = True
+            label = EVENT_WHEEL_LABELS[pending.slot]
+            try:
+                await pending.send(EVENT_WHEEL_RESULT.format(label=label))
+            except Exception:
+                logger.exception("[mantou-affection] 发送事件转盘结果失败")
+            try:
+                started = await self._start_slot(
+                    pending.slot,
+                    group_id=pending.group_id,
+                    user_id=pending.user_id,
+                    nickname=pending.nickname,
+                    send=pending.send,
+                )
+            except Exception:
+                logger.exception("[mantou-affection] 事件转盘开局失败")
+                started = False
+            if started:
+                if pending.slot != EVENT_WHEEL_AMBIENT:
+                    try:
+                        await self.service.record_event_trigger(pending.group_id)
+                    except Exception:
+                        logger.exception("[mantou-affection] 记录事件限制失败")
+                return
+            try:
+                await pending.send(EVENT_WHEEL_FAILED.format(label=label))
+            except Exception:
+                logger.exception("[mantou-affection] 发送事件转盘失败提示失败")
+        finally:
+            if self.pending.get(pending.group_id) is pending:
+                self.pending.pop(pending.group_id, None)
+
+    async def wait_settled(self) -> None:
+        """等所有正在转的事件转盘结算完，测试和清理用。"""
+
+        tasks = [task for task in self.spin_tasks if not task.done()]
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    def discard(self, group_id: str) -> None:
+        pending = self.pending.pop(str(group_id), None)
+        if pending is not None and pending.task is not None:
+            pending.task.cancel()
 
     def draw_slot(self, slots: Sequence[str]) -> str | None:
         """在可用格子里等概率抽一格，没有候选返回 None。"""

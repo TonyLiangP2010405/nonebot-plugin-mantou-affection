@@ -128,6 +128,7 @@ def _quiet_config(**kwargs) -> Config:
 
     kwargs.setdefault("mantou_affection_ambient_enabled", True)
     kwargs.setdefault("mantou_affection_event_wheel_chance", 0.0)
+    kwargs.setdefault("mantou_affection_event_wheel_timeout", 0.01)
     kwargs.setdefault("mantou_affection_wheel_chance", 0.0)
     kwargs.setdefault("mantou_affection_newbie_protection_below", 0)
     return Config(**kwargs)
@@ -201,6 +202,13 @@ def _ambient_setup(
     return service, coordinator, ambient, sent
 
 
+async def _settle_wheel(coordinator) -> None:
+    """等事件转盘倒计时结束、活动真正开起来。"""
+
+    assert coordinator.event_wheel is not None
+    await coordinator.event_wheel.wait_settled()
+
+
 async def test_ambient_handler_stays_quiet_after_hours(
     bundled_texts_path: Path, tmp_path: Path, monkeypatch
 ) -> None:
@@ -230,9 +238,11 @@ async def test_ambient_handler_speaks_within_hours(
     await _give_affection(service)
 
     await ambient.handlers[0].call(_event())
+    await _settle_wheel(_coordinator)
 
-    assert len(sent) == 2
-    assert "事件转盘转到了「馒头小动作」" in str(sent[0])
+    assert len(sent) == 3
+    assert "触发了事件转盘" in str(sent[0])
+    assert "事件转盘转到了「馒头小动作」" in str(sent[1])
 
 
 async def test_ambient_handler_starts_activity_within_hours(
@@ -249,6 +259,7 @@ async def test_ambient_handler_starts_activity_within_hours(
     await _give_affection(service)
 
     await ambient.handlers[0].call(_event())
+    await _settle_wheel(coordinator)
 
     assert sent
     assert GROUP_ID in coordinator.findchar.pending

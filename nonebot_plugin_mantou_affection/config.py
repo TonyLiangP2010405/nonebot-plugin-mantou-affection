@@ -20,6 +20,9 @@ class Config(BaseModel):
     mantou_affection_link_cooldown: int = Field(default=300, ge=0, le=86400)
     mantou_affection_ambient_enabled: bool = True
     mantou_affection_event_wheel_chance: float = Field(default=0.015, ge=0.0, le=1.0)
+    mantou_affection_event_wheel_timeout: float = Field(
+        default=30.0, ge=0.0, le=300.0
+    )
     mantou_affection_event_timeout: int = Field(default=20, ge=3, le=120)
     mantou_affection_event_timeout_penalty: int = Field(default=5, ge=1, le=100)
     mantou_affection_poke_event_chance: float = Field(default=0.0005, ge=0.0, le=1.0)

@@ -141,6 +141,7 @@ def _setup(
     config_kwargs.setdefault("mantou_affection_wheel_chance", 0.0)
     config_kwargs.setdefault("mantou_affection_newbie_protection_below", 0)
     config_kwargs.setdefault("mantou_affection_event_wheel_chance", 0.0)
+    config_kwargs.setdefault("mantou_affection_event_wheel_timeout", 0.01)
     config = Config(**config_kwargs)
     service = _service(tmp_path, AffectionTextLibrary(bundled_texts_path), config)
     coordinator = _coordinator(service, config, bundled_texts_path, rng=rng)
@@ -165,6 +166,14 @@ async def _settle(coordinator: EventCoordinator, timeout: float = 0.01) -> list[
     task = coordinator.schedule(pending, group_id=GROUP_ID, send=fake_send, timeout=timeout)
     await asyncio.wait_for(task, 2)
     return sent
+
+
+async def _settle_wheel(coordinator: EventCoordinator) -> None:
+    """等事件转盘倒计时结束、活动真正开起来。"""
+
+    wheel = coordinator.event_wheel
+    assert wheel is not None
+    await wheel.wait_settled()
 
 
 async def _cancel_task(coordinator: EventCoordinator) -> None:
@@ -216,10 +225,12 @@ async def test_ambient_handler_mentions_sender_with_band_copy(
     await _give_affection(coordinator.service, 10)
 
     await ambient.handlers[0].call(_event())
+    await _settle_wheel(coordinator)
 
-    assert len(sent) == 2
-    assert "事件转盘转到了「馒头小动作」" in _body(sent[0])
-    message = sent[1]
+    assert len(sent) == 3
+    assert "触发了事件转盘" in _body(sent[0])
+    assert "事件转盘转到了「馒头小动作」" in _body(sent[1])
+    message = sent[2]
     assert [segment.type for segment in message] == ["at", "text"]
     assert message[0].data["qq"] == TRIGGER_ID
     assert message.extract_plain_text().strip() in ambient_copy
@@ -325,10 +336,11 @@ async def test_event_wheel_can_land_on_random_event(
     await _give_affection(coordinator.service, 10)
 
     await ambient.handlers[0].call(_event())
+    await _settle_wheel(coordinator)
 
-    assert len(sent) == 2
-    assert "事件转盘转到了「随机事件」" in _body(sent[0])
-    text = _body(sent[1]).strip()
+    assert len(sent) == 3
+    assert "事件转盘转到了「随机事件」" in _body(sent[1])
+    text = _body(sent[2]).strip()
     assert text.startswith("⚡ 触发随机事件！")
     assert "大家都可以回答，直接发送 1、2、3 即可（答题不用@）" in text
     assert "请在 3 秒内作答，被点名的群友超时未答好感度 -5！" in text
@@ -356,6 +368,7 @@ async def test_event_wheel_stays_silent_when_group_is_busy(
     await _give_affection(coordinator.service, 10)
     await _give_affection(coordinator.service, 10, user_id=OTHER_ID)
     await ambient.handlers[0].call(_event())
+    await _settle_wheel(coordinator)
     assert GROUP_ID in coordinator.pending
 
     sent.clear()

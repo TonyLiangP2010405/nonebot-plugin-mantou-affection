@@ -494,10 +494,11 @@ async def test_group_quiz_answer_router_uses_ambient(tmp_path: Path, monkeypatch
 async def test_event_wheel_lands_on_group_quiz(tmp_path: Path, monkeypatch) -> None:
     config = Config(
         mantou_affection_event_wheel_chance=1.0,
+        mantou_affection_event_wheel_timeout=0.01,
         mantou_affection_wheel_chance=0.0,
         mantou_affection_ambient_enabled=False,
     )
-    _service, _events, _pk, group_quiz, _wheel, ambient, _answer, sent = _ambient_setup(
+    _service, events, _pk, group_quiz, _wheel, ambient, _answer, sent = _ambient_setup(
         tmp_path,
         config,
         monkeypatch,
@@ -505,11 +506,14 @@ async def test_event_wheel_lands_on_group_quiz(tmp_path: Path, monkeypatch) -> N
     )
 
     await ambient.handlers[0].call(_event("随便聊聊", user_id=int(INITIATOR)))
+    assert events.event_wheel is not None
+    await events.event_wheel.wait_settled()
 
-    assert len(sent) == 2
-    assert "事件转盘转到了「群友问答」" in sent[0].extract_plain_text()
-    assert GROUP_QUIZ_PREFIX in sent[1].extract_plain_text()
-    assert _at_ids(sent[1]) == [INITIATOR]
+    assert len(sent) == 3
+    assert "触发了事件转盘" in sent[0].extract_plain_text()
+    assert "事件转盘转到了「群友问答」" in sent[1].extract_plain_text()
+    assert GROUP_QUIZ_PREFIX in sent[2].extract_plain_text()
+    assert _at_ids(sent[2]) == [INITIATOR]
     assert GROUP_ID in group_quiz.pending
     await _cancel_task(group_quiz)
 
@@ -519,10 +523,11 @@ async def test_group_quiz_empty_library_is_not_in_the_wheel(
 ) -> None:
     config = Config(
         mantou_affection_event_wheel_chance=1.0,
+        mantou_affection_event_wheel_timeout=0.01,
         mantou_affection_wheel_chance=0.0,
         mantou_affection_ambient_enabled=False,
     )
-    service, _events, _pk, group_quiz, _wheel, ambient, _answer, sent = _ambient_setup(
+    service, events, pk, group_quiz, _wheel, ambient, _answer, sent = _ambient_setup(
         tmp_path,
         config,
         monkeypatch,
@@ -532,7 +537,12 @@ async def test_group_quiz_empty_library_is_not_in_the_wheel(
     await _give_affection(service, 10, INITIATOR)
 
     await ambient.handlers[0].call(_event("随便聊聊", user_id=int(INITIATOR)))
+    assert events.event_wheel is not None
+    await events.event_wheel.wait_settled()
 
     assert group_quiz.pending == {}
-    assert sent
-    assert "群友问答" not in sent[0].extract_plain_text()
+    assert len(sent) == 3
+    assert "群友问答" not in sent[1].extract_plain_text()
+    pending = pk.pending.pop(GROUP_ID, None)
+    if pending is not None and pending.task is not None:
+        pending.task.cancel()

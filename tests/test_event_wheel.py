@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import random
 from types import SimpleNamespace
 
@@ -53,9 +54,9 @@ def _quiz(*, ready: bool = True, started: bool = True) -> SimpleNamespace:
     )
 
 
-def _wheel() -> SimpleNamespace:
+def _wheel(*, started: bool = True) -> SimpleNamespace:
     async def start(**kwargs) -> bool:
-        return True
+        return started
 
     return SimpleNamespace(start=start)
 
@@ -115,18 +116,23 @@ def _bet(*, candidates: int = 3, started: bool = True) -> SimpleNamespace:
 
 
 class _FakeService:
-    """只提供事件转盘真正用到的两个能力。"""
+    """只提供事件转盘真正用到的几个能力。"""
 
     def __init__(self, *, affection: int = 10, ambient_text: str | None = AMBIENT_COPY):
         self.affection = affection
         self.text_library = object()
         self.ambient_text = ambient_text
+        self.triggered: list[str] = []
 
     async def profile(self, group_id: str, user_id: str) -> SimpleNamespace:
         return SimpleNamespace(affection=self.affection)
 
     async def ambient_reaction(self, group_id: str, user_id: str) -> str | None:
         return self.ambient_text
+
+    async def record_event_trigger(self, group_id: str) -> int:
+        self.triggered.append(str(group_id))
+        return len(self.triggered)
 
 
 def _coordinator(
@@ -141,6 +147,7 @@ def _coordinator(
     wheel: SimpleNamespace | None = None,
     group_quiz: SimpleNamespace | None = None,
     whoami: SimpleNamespace | None = None,
+    timeout: float = 0.01,
 ) -> EventWheelCoordinator:
     return EventWheelCoordinator(
         service or _FakeService(),  # type: ignore[arg-type]
@@ -153,18 +160,23 @@ def _coordinator(
         group_quiz=group_quiz,
         whoami=whoami,
         rng=FixedSlotRng(slot),
+        timeout=timeout,
     )
 
 
-async def _start(coordinator: EventWheelCoordinator) -> tuple[str | None, list]:
+async def _spin(
+    coordinator: EventWheelCoordinator, *, settle: bool = True
+) -> tuple[str | None, list]:
     sent: list = []
 
     async def send(message) -> None:
         sent.append(message)
 
-    result = await coordinator.start(
+    result = await coordinator.spin(
         group_id=GROUP_ID, user_id=USER_ID, nickname="桃友", send=send
     )
+    if settle:
+        await coordinator.wait_settled()
     return result, sent
 
 
@@ -195,12 +207,12 @@ async def test_available_slots_require_positive_affection_for_wheel() -> None:
     coordinator = _coordinator(service=_FakeService(affection=10), slot=EVENT_WHEEL_WHEEL)
 
     slots = await coordinator.available_slots(GROUP_ID, USER_ID)
-    result, sent = await _start(coordinator)
+    result, sent = await _spin(coordinator)
 
     assert EVENT_WHEEL_WHEEL in slots
     assert result == EVENT_WHEEL_WHEEL
-    assert len(sent) == 1
-    assert "命运齿轮转盘" in str(sent[0])
+    assert len(sent) == 2
+    assert "命运齿轮转盘" in str(sent[-1])
 
 
 async def test_available_slots_filter_bet_by_affection_threshold() -> None:
@@ -240,18 +252,71 @@ async def test_draw_slot_returns_none_without_candidates() -> None:
     assert coordinator.draw_slot(()) is None
 
 
-async def test_start_announces_then_starts_ambient_copy() -> None:
+async def test_spin_announces_trigger_before_reveal() -> None:
     coordinator = _coordinator(slot=EVENT_WHEEL_AMBIENT)
 
-    result, sent = await _start(coordinator)
+    result, sent = await _spin(coordinator, settle=False)
 
     assert result == EVENT_WHEEL_AMBIENT
-    assert len(sent) == 2
-    assert "事件转盘转到了「馒头小动作」" in str(sent[0])
-    assert AMBIENT_COPY in str(sent[1])
+    assert len(sent) == 1
+    trigger = sent[0]
+    assert trigger[1].type == "at"
+    assert trigger[1].data["qq"] == USER_ID
+    body = trigger.extract_plain_text()
+    assert "触发了事件转盘" in body
+    assert "揭晓转到哪一项" in body
+    assert "转到了" not in body
+    assert coordinator.pending[GROUP_ID].revealed is False
+
+    await coordinator.wait_settled()
 
 
-async def test_start_returns_none_and_stays_silent_when_nothing_available() -> None:
+async def test_spin_waits_configured_timeout_before_reveal() -> None:
+    coordinator = _coordinator(slot=EVENT_WHEEL_AMBIENT, timeout=0.05)
+
+    _result, sent = await _spin(coordinator, settle=False)
+    assert len(sent) == 1
+
+    await asyncio.sleep(0.02)
+    assert len(sent) == 1
+
+    await coordinator.wait_settled()
+    assert len(sent) == 3
+    assert "转到了「馒头小动作」" in str(sent[1])
+    assert AMBIENT_COPY in str(sent[2])
+
+
+async def test_spin_keeps_group_busy_until_reveal() -> None:
+    coordinator = _coordinator(slot=EVENT_WHEEL_AMBIENT, timeout=0.05)
+
+    _result, _sent = await _spin(coordinator, settle=False)
+
+    assert coordinator.spinning(GROUP_ID) is True
+    assert coordinator.busy(GROUP_ID) is True
+    assert (
+        await coordinator.spin(
+            group_id=GROUP_ID, user_id=USER_ID, nickname="桃友", send=lambda m: asyncio.sleep(0)
+        )
+        is None
+    )
+
+    await coordinator.wait_settled()
+    assert coordinator.spinning(GROUP_ID) is False
+    assert coordinator.busy(GROUP_ID) is False
+
+
+async def test_spin_reveals_and_starts_ambient_copy() -> None:
+    coordinator = _coordinator(slot=EVENT_WHEEL_AMBIENT)
+
+    result, sent = await _spin(coordinator)
+
+    assert result == EVENT_WHEEL_AMBIENT
+    assert len(sent) == 3
+    assert "事件转盘转到了「馒头小动作」" in str(sent[1])
+    assert AMBIENT_COPY in str(sent[2])
+
+
+async def test_spin_stays_silent_when_nothing_available() -> None:
     coordinator = _coordinator(
         service=_FakeService(ambient_text=None),
         config=Config(mantou_affection_ambient_enabled=False),
@@ -263,74 +328,71 @@ async def test_start_returns_none_and_stays_silent_when_nothing_available() -> N
     )
     coordinator.wheel = None  # type: ignore[assignment]
 
-    result, sent = await _start(coordinator)
+    result, sent = await _spin(coordinator)
 
     assert result is None
     assert sent == []
 
 
-async def test_start_reports_when_announced_activity_cannot_start() -> None:
+async def test_spin_reports_when_revealed_activity_cannot_start() -> None:
     coordinator = _coordinator(
         slot=EVENT_WHEEL_FINDCHAR,
         findchar=_findchar(started=False),
     )
 
-    result, sent = await _start(coordinator)
+    result, sent = await _spin(coordinator)
 
-    assert result is None
-    assert len(sent) == 2
-    assert "事件转盘转到了「找字」" in str(sent[0])
-    assert "这次没开起来" in str(sent[1])
-
-
-async def test_busy_group_stays_silent_and_skips_drawing() -> None:
-    events = _events()
-    events.busy = lambda group_id: True
-    coordinator = _coordinator(slot=EVENT_WHEEL_AMBIENT, events=events)
-
-    result, sent = await _start(coordinator)
-
-    assert result is None
-    assert sent == []
+    assert result == EVENT_WHEEL_FINDCHAR
+    assert len(sent) == 3
+    assert "事件转盘转到了「找字」" in str(sent[1])
+    assert "这次没开起来" in str(sent[2])
 
 
-async def test_busy_group_detected_via_peer_pending() -> None:
-    wheel = _wheel()
-    wheel.pending = {GROUP_ID: object()}
-    coordinator = _coordinator(slot=EVENT_WHEEL_AMBIENT, wheel=wheel)
-
-    assert coordinator.busy(GROUP_ID) is True
-    result, sent = await _start(coordinator)
-    assert result is None
-    assert sent == []
-
-
-async def test_start_swallows_send_errors() -> None:
+async def test_spin_swallows_trigger_send_errors() -> None:
     coordinator = _coordinator(slot=EVENT_WHEEL_AMBIENT)
 
     async def broken_send(message) -> None:
         raise RuntimeError("send is down")
 
-    result = await coordinator.start(
+    result = await coordinator.spin(
         group_id=GROUP_ID, user_id=USER_ID, nickname="桃友", send=broken_send
     )
 
     assert result is None
+    assert coordinator.pending == {}
 
 
-async def test_start_uses_quiz_coordinator_when_configured() -> None:
+async def test_reveal_send_error_still_starts_activity() -> None:
+    coordinator = _coordinator(slot=EVENT_WHEEL_AMBIENT, timeout=0.01)
+    calls = {"count": 0}
+
+    async def flaky_send(message) -> None:
+        calls["count"] += 1
+        if calls["count"] == 2:
+            raise RuntimeError("reveal is down")
+
+    slot = await coordinator.spin(
+        group_id=GROUP_ID, user_id=USER_ID, nickname="桃友", send=flaky_send
+    )
+    await coordinator.wait_settled()
+
+    assert slot == EVENT_WHEEL_AMBIENT
+    assert calls["count"] == 3
+
+
+async def test_spin_uses_quiz_coordinator_when_configured() -> None:
     coordinator = _coordinator(slot=EVENT_WHEEL_GROUP_QUIZ, group_quiz=_quiz())
 
-    result, sent = await _start(coordinator)
+    result, sent = await _spin(coordinator)
 
     assert result == EVENT_WHEEL_GROUP_QUIZ
-    assert len(sent) == 1
-    assert "群友问答" in str(sent[0])
+    assert len(sent) == 2
+    assert "群友问答" in str(sent[1])
 
 
-async def test_start_dispatches_event_and_bet() -> None:
-    event_result, _ = await _start(_coordinator(slot=EVENT_WHEEL_EVENT))
-    bet_result, _ = await _start(
+async def test_spin_dispatches_event_and_bet() -> None:
+    event_result, _ = await _spin(_coordinator(slot=EVENT_WHEEL_EVENT))
+    bet_result, _ = await _spin(
         _coordinator(
             service=_FakeService(affection=60),
             slot=EVENT_WHEEL_BET,
@@ -342,7 +404,7 @@ async def test_start_dispatches_event_and_bet() -> None:
     assert bet_result == EVENT_WHEEL_BET
 
 
-async def test_start_falls_back_to_first_candidate_when_picked_slot_unavailable() -> None:
+async def test_spin_falls_back_to_first_candidate_when_picked_slot_unavailable() -> None:
     """抽到不在候选池里的格子时会退回第一个候选，保证总能开到一格。"""
 
     coordinator = _coordinator(
@@ -350,7 +412,54 @@ async def test_start_falls_back_to_first_candidate_when_picked_slot_unavailable(
         slot=EVENT_WHEEL_FINDCHAR,
     )
 
-    result, _sent = await _start(coordinator)
+    result, _sent = await _spin(coordinator)
 
     assert result is not None
     assert result != EVENT_WHEEL_FINDCHAR
+
+
+async def test_busy_group_stays_silent_and_skips_drawing() -> None:
+    events = _events()
+    events.busy = lambda group_id: True
+    coordinator = _coordinator(slot=EVENT_WHEEL_AMBIENT, events=events)
+
+    result, sent = await _spin(coordinator)
+
+    assert result is None
+    assert sent == []
+
+
+async def test_busy_group_detected_via_peer_pending() -> None:
+    wheel = _wheel()
+    wheel.pending = {GROUP_ID: object()}
+    coordinator = _coordinator(slot=EVENT_WHEEL_AMBIENT, wheel=wheel)
+
+    assert coordinator.busy(GROUP_ID) is True
+    result, sent = await _spin(coordinator)
+    assert result is None
+    assert sent == []
+
+
+async def test_quota_recorded_only_for_real_activities() -> None:
+    service = _FakeService()
+    ambient_coordinator = _coordinator(service=service, slot=EVENT_WHEEL_AMBIENT)
+    quiz_coordinator = _coordinator(service=service, slot=EVENT_WHEEL_PK)
+
+    await _spin(ambient_coordinator)
+    assert service.triggered == []
+
+    await _spin(quiz_coordinator)
+    assert service.triggered == [GROUP_ID]
+
+
+async def test_discard_cancels_countdown() -> None:
+    coordinator = _coordinator(slot=EVENT_WHEEL_AMBIENT, timeout=5.0)
+
+    _result, sent = await _spin(coordinator, settle=False)
+    assert len(sent) == 1
+
+    coordinator.discard(GROUP_ID)
+    await coordinator.wait_settled()
+
+    assert coordinator.pending == {}
+    assert coordinator.spinning(GROUP_ID) is False

@@ -461,6 +461,7 @@ async def test_whoami_command_reports_busy(tmp_path: Path, monkeypatch) -> None:
 async def test_event_wheel_lands_on_whoami(tmp_path: Path, monkeypatch) -> None:
     config = Config(
         mantou_affection_event_wheel_chance=1.0,
+        mantou_affection_event_wheel_timeout=0.01,
         mantou_affection_wheel_chance=0.0,
         mantou_affection_ambient_enabled=False,
         mantou_affection_newbie_protection_below=0,
@@ -483,12 +484,15 @@ async def test_event_wheel_lands_on_whoami(tmp_path: Path, monkeypatch) -> None:
 
     monkeypatch.setattr(ambient, "send", fake_send)
     await ambient.handlers[0].call(_event())
+    assert events.event_wheel is not None
+    await events.event_wheel.wait_settled()
 
     assert GROUP_ID in coordinator.pending
-    assert len(sent) == 2
-    assert "事件转盘转到了「我是谁」" in sent[0].extract_plain_text()
-    assert "我是谁" in sent[1].extract_plain_text()
-    assert len(sent[1]["image"]) == 1
+    assert len(sent) == 3
+    assert "触发了事件转盘" in sent[0].extract_plain_text()
+    assert "事件转盘转到了「我是谁」" in sent[1].extract_plain_text()
+    assert "我是谁" in sent[2].extract_plain_text()
+    assert len(sent[2]["image"]) == 1
     await _stop(coordinator)
 
 

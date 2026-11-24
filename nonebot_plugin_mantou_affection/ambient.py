@@ -13,7 +13,7 @@ from nonebot.typing import T_State
 from .bet import BUNDLED_ROUNDS_PATH, BetCoordinator, BetLibrary
 from .commands import GROUP_ONLY
 from .config import Config
-from .event_wheel import EVENT_WHEEL_AMBIENT, EventWheelCoordinator
+from .event_wheel import EventWheelCoordinator
 from .events import Event, EventLibrary, EventOption
 from .fill_blank import (
     BUNDLED_FILL_BLANK_PATH,
@@ -127,6 +127,7 @@ class EventCoordinator:
         self.petit_planet_quiz = petit_planet_quiz
         self.fill_blank = fill_blank
         self.whoami = whoami
+        self.event_wheel: EventWheelCoordinator | None = None
         self.pending: dict[str, PendingEvent] = {}
 
     def attach_find_char(self, findchar: FindCharCoordinator) -> None:
@@ -184,11 +185,19 @@ class EventCoordinator:
 
         self.whoami = whoami
 
+    def attach_event_wheel(self, event_wheel: EventWheelCoordinator) -> None:
+        """接入事件转盘，让它在倒计时期间也能占住本群席位。"""
+
+        self.event_wheel = event_wheel
+
     def busy(self, group_id: str) -> bool:
         """本群是否已经有待结算的活动：随机事件、找字、博弈、问答、群友问答、提瓦特问答、补句问答、我是谁或转盘。"""
 
         key = str(group_id)
         if key in self.pending:
+            return True
+        if self.event_wheel is not None and self.event_wheel.spinning(key):
+            # 事件转盘提示已经发出去 结果还没揭晓 这段时间也算本群忙
             return True
         return any(
             peer is not None and key in peer.pending
@@ -453,14 +462,15 @@ def register_ambient(
     fill_blank: FillBlankCoordinator | None = None,
     whoami: WhoAmICoordinator | None = None,
 ) -> tuple:
-    """群友发言时先掷事件转盘的概率，命中后转到哪项就开哪项；馒头转盘另有独立判定。
+    """群友发言时先掷事件转盘的概率，命中后先公告触发、倒计时结束再揭晓并开局。
 
     事件转盘把 13 项活动（馒头小动作、随机事件、找字、博弈、问答、群友问答、命运齿轮转盘、
     补句、提瓦特、星穹铁道、绝区零、星布谷地、我是谁）放在一起等概率抽取，每项自己的好感门槛和
-    题库门槛照旧，开不起来的不会进候选池。馒头转盘除了可能被事件转盘转到，还保留自己独立的
-    触发概率（好感度大于 0 且不受开启时段限制）。几种活动互斥，不会在同一条消息上同时触发；
-    所有数字答案都走这里的答案路由，「参与」也由同一个 answer matcher 转给转盘。
-    事件预处理器只给博弈记录最近发言表。
+    题库门槛照旧，开不起来的不会进候选池。命中后先发一条「@触发者 触发了事件转盘！N 秒后揭晓
+    转到哪一项……」，倒计时期间本群席位被占住；时间到了再公告转到的格子和开对应活动。
+    馒头转盘除了可能被事件转盘转到，还保留自己独立的触发概率（好感度大于 0 且不受开启时段限制）。
+    几种活动互斥，不会在同一条消息上同时触发；所有数字答案都走这里的答案路由，「参与」也由同一个
+    answer matcher 转给转盘。事件预处理器只给博弈记录最近发言表。
     """
 
     coordinator = events or EventCoordinator(service, config)
@@ -564,7 +574,9 @@ def register_ambient(
         fill_blank=fill_blank_coordinator,
         whoami=whoami_coordinator,
         rng=coordinator.rng,
+        timeout=config.mantou_affection_event_wheel_timeout,
     )
+    coordinator.attach_event_wheel(event_wheel)
     ambient = on_message(rule=GROUP_ONLY, priority=90, block=False)
     answer = on_message(rule=GROUP_ONLY, priority=5, block=False)
 
@@ -673,7 +685,8 @@ def register_ambient(
             wheel_hit = False
         if wheel_hit:
             try:
-                slot = await event_wheel.start(
+                # 先公告触发 30 秒后揭晓 限流额度由转盘在活动真正开起来后记账
+                spinning = await event_wheel.spin(
                     group_id=group_id,
                     user_id=user_id,
                     nickname=nickname,
@@ -681,11 +694,8 @@ def register_ambient(
                 )
             except Exception:
                 logger.exception("[mantou-affection] 事件转盘开局失败")
-                slot = None
-            if slot is not None:
-                # 转到馒头小动作只算冒个泡 不占限流额度
-                if slot != EVENT_WHEEL_AMBIENT:
-                    await note_activity()
+                spinning = None
+            if spinning is not None:
                 return
 
         if await try_wheel():
