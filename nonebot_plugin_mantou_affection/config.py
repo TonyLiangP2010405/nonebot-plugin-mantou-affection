@@ -19,12 +19,10 @@ class Config(BaseModel):
     mantou_affection_link_daily_limit: int = Field(default=10, ge=0, le=1000)
     mantou_affection_link_cooldown: int = Field(default=300, ge=0, le=86400)
     mantou_affection_ambient_enabled: bool = True
-    mantou_affection_ambient_probability: float = Field(default=0.0005, ge=0.0, le=1.0)
-    mantou_affection_ambient_event_ratio: float = Field(default=0.333, ge=0.0, le=1.0)
+    mantou_affection_event_wheel_chance: float = Field(default=0.015, ge=0.0, le=1.0)
     mantou_affection_event_timeout: int = Field(default=20, ge=3, le=120)
     mantou_affection_event_timeout_penalty: int = Field(default=5, ge=1, le=100)
     mantou_affection_poke_event_chance: float = Field(default=0.0005, ge=0.0, le=1.0)
-    mantou_affection_find_char_chance: float = Field(default=0.0005, ge=0.0, le=1.0)
     mantou_affection_poke_find_char_chance: float = Field(default=0.0005, ge=0.0, le=1.0)
     mantou_affection_find_char_timeout: int = Field(default=30, ge=3, le=300)
     mantou_affection_bet_chance: float = Field(default=0.0005, ge=0.0, le=1.0)
@@ -39,21 +37,13 @@ class Config(BaseModel):
     mantou_affection_wheel_taozi_timeout: int = Field(default=30, ge=5, le=300)
     mantou_affection_memes_extra_repos: bool = True
     mantou_affection_memes_blocked_terms: str = ""
-    mantou_affection_pk_chance: float = Field(default=0.01, ge=0.0, le=1.0)
     mantou_affection_pk_low_stock_warning: int = Field(default=100, ge=0, le=100000)
-    mantou_affection_group_quiz_chance: float = Field(default=0.0005, ge=0.0, le=1.0)
     mantou_affection_group_quiz_timeout: int = Field(default=60, ge=5, le=600)
-    mantou_affection_teyvat_chance: float = Field(default=0.0005, ge=0.0, le=1.0)
     mantou_affection_teyvat_timeout: int = Field(default=60, ge=5, le=600)
-    mantou_affection_hsr_chance: float = Field(default=0.0005, ge=0.0, le=1.0)
     mantou_affection_hsr_timeout: int = Field(default=60, ge=5, le=600)
-    mantou_affection_zzz_chance: float = Field(default=0.0005, ge=0.0, le=1.0)
     mantou_affection_zzz_timeout: int = Field(default=60, ge=5, le=600)
-    mantou_affection_petit_planet_chance: float = Field(default=0.0005, ge=0.0, le=1.0)
     mantou_affection_petit_planet_timeout: int = Field(default=60, ge=5, le=600)
-    mantou_affection_fill_blank_chance: float = Field(default=0.0005, ge=0.0, le=1.0)
     mantou_affection_fill_blank_timeout: int = Field(default=60, ge=5, le=600)
-    mantou_affection_whoami_chance: float = Field(default=0.0005, ge=0.0, le=1.0)
     mantou_affection_whoami_timeout: int = Field(default=75, ge=10, le=600)
     mantou_affection_event_limit_enabled: bool = False
     mantou_affection_event_limit_per_window: int = Field(

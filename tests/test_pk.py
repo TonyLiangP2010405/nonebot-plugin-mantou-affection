@@ -14,6 +14,7 @@ from nonebot_plugin_mantou_affection.ambient import EventCoordinator, register_a
 from nonebot_plugin_mantou_affection.bet import BetCoordinator, BetLibrary
 from nonebot_plugin_mantou_affection.commands import register_commands
 from nonebot_plugin_mantou_affection.config import Config
+from nonebot_plugin_mantou_affection.event_wheel import EVENT_WHEEL_PK
 from nonebot_plugin_mantou_affection.events import EventLibrary
 from nonebot_plugin_mantou_affection.findchar import FindCharCoordinator, FindCharLibrary
 from nonebot_plugin_mantou_affection.models import Profile
@@ -46,6 +47,18 @@ class FixedRng(random.Random):
 
     def random(self) -> float:
         return self.value
+
+
+class FixedSlotRng(random.Random):
+    """让事件转盘固定转到指定格子。"""
+
+    def __init__(self, slot: str):
+        super().__init__(0)
+        self.slot = slot
+
+    def choice(self, seq):  # type: ignore[override]
+        items = list(seq)
+        return self.slot if self.slot in items else items[0]
 
 
 def _event(
@@ -241,7 +254,6 @@ def test_pk_library_accepts_bare_list_and_rejects_broken_root(tmp_path: Path) ->
 
 def test_pk_defaults() -> None:
     config = Config()
-    assert getattr(config, "mantou_affection_pk_chance", None) == 0.01
     assert config.mantou_affection_pk_low_stock_warning == 100
 
 
@@ -276,31 +288,6 @@ def test_pk_library_pick_skips_used(tmp_path: Path) -> None:
     assert picked is not None
     assert not set(picked) & {0, 1, 2}
     assert library.pick(set(range(10)), 3, random.Random(0)) is None
-
-
-async def test_pk_triggered_uses_configured_probability(tmp_path: Path) -> None:
-    service = _service(tmp_path)
-    trigger = getattr(service, "pk_triggered", None)
-    assert callable(trigger)
-
-    service.rng = FixedRng(0.009)
-    assert await trigger() is True
-    service.rng = FixedRng(0.01)
-    assert await trigger() is False
-
-
-async def test_pk_probability_runtime_override(tmp_path: Path) -> None:
-    service = _service(tmp_path)
-    probability = getattr(service, "pk_probability", None)
-    override = getattr(service, "pk_probability_override", None)
-    setter = getattr(service, "set_pk_probability", None)
-    assert callable(probability) and callable(override) and callable(setter)
-
-    assert await probability() == 0.01
-    assert await override() is None
-    await setter(0.25)
-    assert await probability() == 0.25
-    assert await override() == 0.25
 
 
 # ------------------------------------------------------------ 开局与作答
@@ -508,36 +495,19 @@ def _commands(tmp_path: Path, monkeypatch) -> tuple:
     service = _service(tmp_path)
     coordinator = PkCoordinator(service, Config(), _library(tmp_path))
     commands = register_commands(service, Config(), coordinator)
-    assert len(commands) == 27
-    probability_cmd, bank_cmd = commands[9:11]
+    assert len(commands) == 17
+    bank_cmd = commands[8]
     sent: list[str] = []
 
     async def fake_finish(message: Message | str = "", **kwargs) -> None:
         sent.append(str(message))
 
-    for command in (probability_cmd, bank_cmd):
-        monkeypatch.setattr(command, "finish", fake_finish)
-    return service, coordinator, probability_cmd, bank_cmd, sent
-
-
-async def test_pk_probability_command_reports_and_sets(tmp_path: Path, monkeypatch) -> None:
-    service, _coordinator, probability_cmd, _bank, sent = _commands(tmp_path, monkeypatch)
-
-    await probability_cmd.handlers[0].call(Message(""))
-    assert "当前馒头问答概率：1%" in sent[0]
-
-    await probability_cmd.handlers[0].call(Message("2.5%"))
-    assert "馒头问答概率已调整为 2.5%" in sent[1]
-    assert await service.pk_probability() == 0.025
-
-    await probability_cmd.handlers[0].call(Message("0"))
-    assert await service.pk_probability() == 0
-    await probability_cmd.handlers[0].call(Message("abc"))
-    assert "0~1" in sent[-1]
+    monkeypatch.setattr(bank_cmd, "finish", fake_finish)
+    return service, coordinator, bank_cmd, sent
 
 
 async def test_pk_bank_command_reports_remaining(tmp_path: Path, monkeypatch) -> None:
-    service, coordinator, _probability, bank_cmd, sent = _commands(tmp_path, monkeypatch)
+    service, coordinator, bank_cmd, sent = _commands(tmp_path, monkeypatch)
     await service.store.add_used_questions([0, 1])
 
     await bank_cmd.handlers[0].call()
@@ -592,30 +562,33 @@ async def test_pk_answer_router_uses_ambient(tmp_path: Path) -> None:
     assert (await coordinator.service.profile(GROUP_ID, INITIATOR)).affection == 3
 
 
-async def test_pk_ambient_trigger_needs_no_affection_or_ranking(
+async def test_event_wheel_lands_on_pk_without_affection(
     tmp_path: Path, monkeypatch
 ) -> None:
-    service = _service(tmp_path, Config())
-    events = EventCoordinator(service, Config(), None, rng=random.Random(0))
+    config = Config(
+        mantou_affection_event_wheel_chance=1.0,
+        mantou_affection_wheel_chance=0.0,
+        mantou_affection_ambient_enabled=False,
+        mantou_affection_newbie_protection_below=0,
+    )
+    service = _service(tmp_path, config)
+    events = EventCoordinator(service, config, None, rng=FixedSlotRng(EVENT_WHEEL_PK))
     coordinator = _coordinator(tmp_path, events=events)
     coordinator.question_timeout = 30
     events.attach_pk(coordinator)
-    ambient, _answer = register_ambient(service, Config(), events, None, None, coordinator)
+    ambient, _answer = register_ambient(service, config, events, None, None, coordinator)
     sent: list[Message] = []
-
-    async def always_triggered() -> bool:
-        return True
 
     async def fake_send(message) -> None:
         sent.append(Message(message) if isinstance(message, str) else message)
 
-    monkeypatch.setattr(service, "pk_triggered", always_triggered, raising=False)
     monkeypatch.setattr(ambient, "send", fake_send)
     await ambient.handlers[0].call(_event("随便聊聊", user_id=int(INITIATOR)))
 
-    assert len(sent) == 1
-    assert _at_ids(sent[0]) == [INITIATOR]
-    assert "桃子问答" in sent[0].extract_plain_text()
-    assert "30 秒" in sent[0].extract_plain_text()
+    assert len(sent) == 2
+    assert "事件转盘转到了「桃子问答」" in sent[0].extract_plain_text()
+    assert _at_ids(sent[1]) == [INITIATOR]
+    assert "桃子问答" in sent[1].extract_plain_text()
+    assert "30 秒" in sent[1].extract_plain_text()
     assert (await service.profile(GROUP_ID, INITIATOR)).affection == 0
     await _cancel_task(coordinator)

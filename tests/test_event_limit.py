@@ -13,6 +13,10 @@ from nonebot_plugin_mantou_affection.ambient import EventCoordinator, register_a
 from nonebot_plugin_mantou_affection.commands import register_commands
 from nonebot_plugin_mantou_affection.config import Config
 from nonebot_plugin_mantou_affection.copywriting import AffectionTextLibrary
+from nonebot_plugin_mantou_affection.event_wheel import (
+    EVENT_WHEEL_AMBIENT,
+    EVENT_WHEEL_FINDCHAR,
+)
 from nonebot_plugin_mantou_affection.events import EventLibrary
 from nonebot_plugin_mantou_affection.models import Profile
 from nonebot_plugin_mantou_affection.parsing import (
@@ -71,11 +75,23 @@ async def _give_affection(service: AffectionService, score: int = 10) -> None:
     await service.store.update_profile(GROUP_ID, TRIGGER_ID, "桃友", bump)
 
 
+class _FixedSlotRng(random.Random):
+    """让事件转盘固定转到指定格子。"""
+
+    def __init__(self, slot: str) -> None:
+        super().__init__(0)
+        self.slot = slot
+
+    def choice(self, seq):
+        items = list(seq)
+        return self.slot if self.slot in items else items[0]
+
+
 def _capture_send(matcher, monkeypatch) -> list[Message]:
     sent: list[Message] = []
 
-    async def fake_send(message: Message) -> None:
-        sent.append(message)
+    async def fake_send(message) -> None:
+        sent.append(message if isinstance(message, Message) else Message(message))
 
     monkeypatch.setattr(matcher, "send", fake_send)
     return sent
@@ -239,8 +255,7 @@ async def test_ambient_handler_stays_quiet_when_quota_is_spent(
     bundled_texts_path: Path, tmp_path: Path, monkeypatch
 ) -> None:
     config = Config(
-        mantou_affection_ambient_probability=1.0,
-        mantou_affection_ambient_event_ratio=0.0,
+        mantou_affection_event_wheel_chance=1.0,
         mantou_affection_newbie_protection_below=0,
         mantou_affection_event_limit_enabled=True,
         mantou_affection_event_limit_per_window=5,
@@ -264,7 +279,7 @@ async def test_ambient_handler_records_real_activity(
     bundled_texts_path: Path, tmp_path: Path, monkeypatch
 ) -> None:
     config = Config(
-        mantou_affection_find_char_chance=1.0,
+        mantou_affection_event_wheel_chance=1.0,
         mantou_affection_ambient_enabled=False,
         mantou_affection_newbie_protection_below=0,
         mantou_affection_event_limit_enabled=True,
@@ -272,7 +287,7 @@ async def test_ambient_handler_records_real_activity(
         mantou_affection_wheel_chance=0.0,
     )
     service = _service(tmp_path, config)
-    coordinator = EventCoordinator(service, config)
+    coordinator = EventCoordinator(service, config, rng=_FixedSlotRng(EVENT_WHEEL_FINDCHAR))
     ambient, _answer = register_ambient(service, config, coordinator)
     sent = _capture_send(ambient, monkeypatch)
     await _give_affection(service)
@@ -289,31 +304,22 @@ async def test_plain_ambient_reaction_does_not_consume_quota(
     bundled_texts_path: Path, tmp_path: Path, monkeypatch
 ) -> None:
     config = Config(
-        mantou_affection_ambient_probability=1.0,
-        mantou_affection_ambient_event_ratio=0.0,
-        mantou_affection_find_char_chance=0.0,
-        mantou_affection_bet_chance=0.0,
-        mantou_affection_pk_chance=0.0,
-        mantou_affection_group_quiz_chance=0.0,
-        mantou_affection_teyvat_chance=0.0,
-        mantou_affection_hsr_chance=0.0,
-        mantou_affection_zzz_chance=0.0,
-        mantou_affection_petit_planet_chance=0.0,
-        mantou_affection_fill_blank_chance=0.0,
+        mantou_affection_event_wheel_chance=1.0,
         mantou_affection_wheel_chance=0.0,
         mantou_affection_newbie_protection_below=0,
         mantou_affection_event_limit_enabled=True,
         mantou_affection_event_limit_per_window=5,
     )
     service = _service(tmp_path, config, text_library=AffectionTextLibrary(bundled_texts_path))
-    coordinator = EventCoordinator(service, config)
+    coordinator = EventCoordinator(service, config, rng=_FixedSlotRng(EVENT_WHEEL_AMBIENT))
     ambient, _answer = register_ambient(service, config, coordinator)
     sent = _capture_send(ambient, monkeypatch)
     await _give_affection(service)
 
     await ambient.handlers[0].call(_event())
 
-    assert len(sent) == 1
+    assert len(sent) == 2
+    assert "事件转盘转到了「馒头小动作」" in str(sent[0])
     assert await service.event_limit_used(GROUP_ID) == 0
 
 

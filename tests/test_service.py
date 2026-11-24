@@ -131,7 +131,6 @@ async def test_ambient_reaction_follows_affection_band(
     service = _service(
         tmp_path,
         text_library=_library(tmp_path),
-        mantou_affection_ambient_probability=1.0,
     )
     await _set_affection(service, score)
     assert await service.ambient_reaction("100", "200") == AMBIENT_TEXTS[band]
@@ -142,7 +141,6 @@ async def test_ambient_reaction_is_silent_when_disabled(tmp_path: Path) -> None:
         tmp_path,
         text_library=_library(tmp_path),
         mantou_affection_ambient_enabled=False,
-        mantou_affection_ambient_probability=1.0,
     )
     await _set_affection(service, 100)
     assert await service.ambient_reaction("100", "200") is None
@@ -152,53 +150,50 @@ async def test_ambient_reaction_skips_zero_affection(tmp_path: Path) -> None:
     service = _service(
         tmp_path,
         text_library=_library(tmp_path),
-        mantou_affection_ambient_probability=1.0,
     )
-    assert await service.ambient_reaction("100", "200") is None
-
-
-async def test_ambient_reaction_never_fires_at_zero_probability(tmp_path: Path) -> None:
-    service = _service(
-        tmp_path,
-        text_library=_library(tmp_path),
-        mantou_affection_ambient_probability=0.0,
-    )
-    await _set_affection(service, 100)
     assert await service.ambient_reaction("100", "200") is None
 
 
 async def test_ambient_reaction_without_library_returns_none(tmp_path: Path) -> None:
-    service = _service(tmp_path, mantou_affection_ambient_probability=1.0)
+    service = _service(tmp_path)
     await _set_affection(service, 100)
     assert await service.ambient_reaction("100", "200") is None
 
 
-async def test_ambient_probability_prefers_stored_override(tmp_path: Path) -> None:
+async def test_event_wheel_probability_prefers_stored_override(tmp_path: Path) -> None:
     service = _service(tmp_path)
-    assert await service.ambient_probability() == 0.0005
+    assert await service.event_wheel_probability() == 0.015
 
-    await service.set_ambient_probability(0.05)
-    assert await service.ambient_probability() == 0.05
+    await service.set_event_wheel_probability(0.05)
+    assert await service.event_wheel_probability() == 0.05
+    assert await service.event_wheel_probability_override() == 0.05
 
     restarted = AffectionService(
         AffectionStore(tmp_path / "affection.json"),
         Config(),
         rng=random.Random(0),
     )
-    assert await restarted.ambient_probability() == 0.05
+    assert await restarted.event_wheel_probability() == 0.05
 
 
-async def test_ambient_probability_ignores_broken_setting(tmp_path: Path) -> None:
-    service = _service(tmp_path, mantou_affection_ambient_probability=0.2)
-    await service.store.set_setting("ambient_probability", "not a number")
-    assert await service.ambient_probability() == 0.2
+async def test_event_wheel_probability_ignores_broken_setting(tmp_path: Path) -> None:
+    service = _service(tmp_path, mantou_affection_event_wheel_chance=0.2)
+    await service.store.set_setting("event_wheel_probability", "not a number")
+    assert await service.event_wheel_probability() == 0.2
+
+
+async def test_event_wheel_triggered_follows_probability(tmp_path: Path) -> None:
+    always = _service(tmp_path, mantou_affection_event_wheel_chance=1.0)
+    assert await always.event_wheel_triggered() is True
+
+    never = _service(tmp_path, mantou_affection_event_wheel_chance=0.0)
+    assert await never.event_wheel_triggered() is False
 
 
 async def test_ambient_reaction_propagates_store_errors(tmp_path: Path, monkeypatch) -> None:
     service = _service(
         tmp_path,
         text_library=_library(tmp_path),
-        mantou_affection_ambient_probability=1.0,
     )
 
     async def broken(group_id: str, user_id: str) -> Profile:
@@ -271,30 +266,22 @@ async def test_probability_states_show_defaults_and_overrides(tmp_path: Path) ->
     service = _service(tmp_path)
     states = await service.probability_states()
 
-    assert [state.label for state in states] == [
-        "馒头小动作",
-        "找字（群消息）",
-        "找字（戳一戳）",
-        "馒头博弈",
-        "桃子问答",
-        "群友问答",
-        "提瓦特问答",
-        "星穹铁道问答",
-        "绝区零问答",
-        "星布谷地问答",
-        "补句问答",
-        "我是谁",
-        "命运齿轮",
+    assert [state.label for state in states] == ["事件转盘", "馒头转盘"]
+    assert [state.key for state in states] == [
+        "event_wheel_probability",
+        "wheel_probability",
     ]
     assert all(state.overridden is False for state in states)
     assert all(state.value == state.default for state in states)
+    assert states[0].value == pytest.approx(0.015)
+    assert states[1].value == pytest.approx(0.001)
 
-    await service.set_bet_probability(0.02)
+    await service.set_event_wheel_probability(0.2)
     states = await service.probability_states()
-    bet = next(state for state in states if state.label == "馒头博弈")
-    assert bet.value == pytest.approx(0.02)
-    assert bet.default == pytest.approx(0.0005)
-    assert bet.overridden is True
+    event_wheel = next(state for state in states if state.label == "事件转盘")
+    assert event_wheel.value == pytest.approx(0.2)
+    assert event_wheel.default == pytest.approx(0.015)
+    assert event_wheel.overridden is True
 
 
 async def test_set_all_probabilities_persists_every_field(tmp_path: Path) -> None:
@@ -302,24 +289,24 @@ async def test_set_all_probabilities_persists_every_field(tmp_path: Path) -> Non
     await service.set_all_probabilities(0.01)
 
     states = await service.probability_states()
-    assert len(states) == 13
+    assert len(states) == 2
     assert all(state.value == pytest.approx(0.01) for state in states)
     assert all(state.overridden is True for state in states)
 
     payload = json.loads((tmp_path / "affection.json").read_text(encoding="utf-8"))
-    assert len(payload["settings"]) == 13
+    assert len(payload["settings"]) == 2
 
 
 async def test_scale_all_probabilities_uses_effective_values(tmp_path: Path) -> None:
     service = _service(tmp_path)
-    await service.set_bet_probability(0.01)
+    await service.set_event_wheel_probability(0.01)
 
     changes = await service.scale_all_probabilities(2)
     by_label = {change.label: change for change in changes}
-    assert by_label["馒头博弈"].before == pytest.approx(0.01)
-    assert by_label["馒头博弈"].after == pytest.approx(0.02)
-    assert by_label["馒头小动作"].before == pytest.approx(0.0005)
-    assert by_label["馒头小动作"].after == pytest.approx(0.001)
+    assert by_label["事件转盘"].before == pytest.approx(0.01)
+    assert by_label["事件转盘"].after == pytest.approx(0.02)
+    assert by_label["馒头转盘"].before == pytest.approx(0.001)
+    assert by_label["馒头转盘"].after == pytest.approx(0.002)
     assert await service.wheel_probability() == pytest.approx(0.002)
 
 
@@ -331,12 +318,25 @@ async def test_scale_all_probabilities_clamps_at_one(tmp_path: Path) -> None:
     assert all(change.after == 1.0 for change in changes)
 
 
+async def test_reset_all_probabilities_cleans_legacy_event_overrides(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    await service.set_event_wheel_probability(0.05)
+    await service.store.set_setting("find_char_group_chance", 0.5)
+    await service.store.set_setting("whoami_probability", 0.2)
+
+    assert await service.reset_all_probabilities() == 3
+    assert await service.store.get_setting("find_char_group_chance", None) is None
+    assert await service.store.get_setting("whoami_probability", None) is None
+
+
 async def test_reset_all_probabilities_keeps_other_settings(tmp_path: Path) -> None:
     service = _service(tmp_path)
     await service.set_all_probabilities(0)
     await service.store.set_setting("meme_confirm_whitelist", ["10001"])
 
-    assert await service.reset_all_probabilities() == 13
+    assert await service.reset_all_probabilities() == 2
     states = await service.probability_states()
     assert all(state.overridden is False for state in states)
     assert await service.store.get_setting("meme_confirm_whitelist", []) == ["10001"]

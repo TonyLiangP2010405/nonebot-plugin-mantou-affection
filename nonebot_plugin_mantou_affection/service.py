@@ -31,19 +31,10 @@ from .models import (
 )
 from .storage import AffectionStore
 
-AMBIENT_PROBABILITY_SETTING = "ambient_probability"
-FIND_CHAR_GROUP_CHANCE_SETTING = "find_char_group_chance"
-FIND_CHAR_POKE_CHANCE_SETTING = "find_char_poke_chance"
-BET_PROBABILITY_SETTING = "bet_probability"
-PK_PROBABILITY_SETTING = "pk_probability"
-GROUP_QUIZ_PROBABILITY_SETTING = "group_quiz_probability"
-TEYVAT_QUIZ_PROBABILITY_SETTING = "teyvat_quiz_probability"
-HSR_QUIZ_PROBABILITY_SETTING = "hsr_quiz_probability"
-ZZZ_QUIZ_PROBABILITY_SETTING = "zzz_quiz_probability"
-PETIT_PLANET_QUIZ_PROBABILITY_SETTING = "petit_planet_quiz_probability"
-FILL_BLANK_PROBABILITY_SETTING = "fill_blank_probability"
-WHOAMI_PROBABILITY_SETTING = "whoami_probability"
+EVENT_WHEEL_PROBABILITY_SETTING = "event_wheel_probability"
 WHEEL_PROBABILITY_SETTING = "wheel_probability"
+BET_PROBABILITY_SETTING = "bet_probability"
+FIND_CHAR_POKE_CHANCE_SETTING = "find_char_poke_chance"
 EVENT_LIMIT_ENABLED_SETTING = "event_limit_enabled"
 EVENT_LIMIT_PER_WINDOW_SETTING = "event_limit_per_window"
 # 旧版本把次数存在 event_limit_per_hour 下, 升级后继续沿用这份值。
@@ -56,6 +47,21 @@ EVENT_LIMIT_MAX_PER_WINDOW = 100
 EVENT_LIMIT_HISTORY_KEEP = 128
 NEWBIE_GIFT_REPLY = " 扣分安慰：送你一张桃子表情包「{caption}」"
 AMBIENT_SCENE = "mantou.ambient"
+# 12 个单事件概率与「小动作升级随机事件」的比例在 0.59 退场
+# 群消息触发改成统一的「事件转盘」 这些键只在清理运行时覆盖时顺带删除
+LEGACY_PROBABILITY_SETTINGS: tuple[str, ...] = (
+    "ambient_probability",
+    "ambient_event_ratio",
+    "find_char_group_chance",
+    "pk_probability",
+    "group_quiz_probability",
+    "teyvat_quiz_probability",
+    "hsr_quiz_probability",
+    "zzz_quiz_probability",
+    "petit_planet_quiz_probability",
+    "fill_blank_probability",
+    "whoami_probability",
+)
 
 
 @dataclass(frozen=True)
@@ -131,58 +137,11 @@ def _clean_event_history(raw: Any, now: float) -> dict[str, list[float]]:
 
 PROBABILITY_FIELDS: tuple[ProbabilityField, ...] = (
     ProbabilityField(
-        AMBIENT_PROBABILITY_SETTING,
-        "馒头小动作",
-        "mantou_affection_ambient_probability",
+        EVENT_WHEEL_PROBABILITY_SETTING,
+        "事件转盘",
+        "mantou_affection_event_wheel_chance",
     ),
-    ProbabilityField(
-        FIND_CHAR_GROUP_CHANCE_SETTING,
-        "找字（群消息）",
-        "mantou_affection_find_char_chance",
-    ),
-    ProbabilityField(
-        FIND_CHAR_POKE_CHANCE_SETTING,
-        "找字（戳一戳）",
-        "mantou_affection_poke_find_char_chance",
-    ),
-    ProbabilityField(BET_PROBABILITY_SETTING, "馒头博弈", "mantou_affection_bet_chance"),
-    ProbabilityField(PK_PROBABILITY_SETTING, "桃子问答", "mantou_affection_pk_chance"),
-    ProbabilityField(
-        GROUP_QUIZ_PROBABILITY_SETTING,
-        "群友问答",
-        "mantou_affection_group_quiz_chance",
-    ),
-    ProbabilityField(
-        TEYVAT_QUIZ_PROBABILITY_SETTING,
-        "提瓦特问答",
-        "mantou_affection_teyvat_chance",
-    ),
-    ProbabilityField(
-        HSR_QUIZ_PROBABILITY_SETTING,
-        "星穹铁道问答",
-        "mantou_affection_hsr_chance",
-    ),
-    ProbabilityField(
-        ZZZ_QUIZ_PROBABILITY_SETTING,
-        "绝区零问答",
-        "mantou_affection_zzz_chance",
-    ),
-    ProbabilityField(
-        PETIT_PLANET_QUIZ_PROBABILITY_SETTING,
-        "星布谷地问答",
-        "mantou_affection_petit_planet_chance",
-    ),
-    ProbabilityField(
-        FILL_BLANK_PROBABILITY_SETTING,
-        "补句问答",
-        "mantou_affection_fill_blank_chance",
-    ),
-    ProbabilityField(
-        WHOAMI_PROBABILITY_SETTING,
-        "我是谁",
-        "mantou_affection_whoami_chance",
-    ),
-    ProbabilityField(WHEEL_PROBABILITY_SETTING, "命运齿轮", "mantou_affection_wheel_chance"),
+    ProbabilityField(WHEEL_PROBABILITY_SETTING, "馒头转盘", "mantou_affection_wheel_chance"),
 )
 
 
@@ -290,277 +249,51 @@ class AffectionService:
 
         return await self.store.update_profile(group_id, user_id, nickname, update)
 
-    async def ambient_probability(self) -> float:
-        return await self._stored_probability(
-            AMBIENT_PROBABILITY_SETTING,
-            self.config.mantou_affection_ambient_probability,
-        )
-
-    async def set_ambient_probability(self, value: float) -> None:
-        await self.store.set_setting(AMBIENT_PROBABILITY_SETTING, float(value))
-
-    async def find_char_group_chance(self) -> float:
-        """群消息路径的找字小游戏概率，运行时用 /馒头找字概率 覆盖过就优先用它。"""
-
-        return await self._stored_probability(
-            FIND_CHAR_GROUP_CHANCE_SETTING,
-            self.config.mantou_affection_find_char_chance,
-        )
-
     async def find_char_poke_chance(self, default: float | None = None) -> float:
-        """戳一戳路径的找字小游戏概率，default 由调用方传入当前配置里的默认值。"""
+        """戳一戳路径的找字小游戏概率；群消息路径已经并入事件转盘。"""
 
         fallback = (
             self.config.mantou_affection_poke_find_char_chance if default is None else default
         )
         return await self._stored_probability(FIND_CHAR_POKE_CHANCE_SETTING, fallback)
 
-    async def find_char_chances(self) -> tuple[float, float]:
-        """返回 (群消息概率, 戳一戳概率)。"""
-
-        return await self.find_char_group_chance(), await self.find_char_poke_chance()
-
-    async def set_find_char_chances(
-        self,
-        *,
-        group: float | None = None,
-        poke: float | None = None,
-    ) -> None:
-        """只写入传进来的那一项，另一项保持原值。"""
-
-        if group is not None:
-            await self.store.set_setting(FIND_CHAR_GROUP_CHANCE_SETTING, float(group))
-        if poke is not None:
-            await self.store.set_setting(FIND_CHAR_POKE_CHANCE_SETTING, float(poke))
-
-    async def find_char_triggered(self, group_id: str, user_id: str) -> bool:
-        """群消息路径的找字判定：好感度 > 0 且掷中概率才返回 True。"""
-
-        profile = await self.store.get_profile(group_id, user_id)
-        if profile.affection <= 0:
-            return False
-        chance = await self.find_char_group_chance()
-        return self.rng.random() < chance
-
-    async def bet_triggered(self, group_id: str, user_id: str) -> bool:
-        """群消息路径的博弈判定：好感度超过门槛且掷中概率才返回 True。"""
-
-        profile = await self.store.get_profile(group_id, user_id)
-        if profile.affection <= self.config.mantou_affection_bet_min_affection:
-            return False
-        chance = await self.bet_probability()
-        return self.rng.random() < chance
-
     async def bet_probability(self) -> float:
-        """馒头博弈的触发概率，运行时用 /馒头博弈概率 覆盖过就优先用它。"""
+        """外部插件调用 maybe_start_bet 时的开局概率；群消息触发统一走事件转盘。"""
 
         return await self._stored_probability(
             BET_PROBABILITY_SETTING, self.config.mantou_affection_bet_chance
         )
 
-    async def bet_probability_override(self) -> float | None:
-        """读取运行时覆盖的博弈概率，没覆盖过返回 None。"""
+    async def event_wheel_triggered(self) -> bool:
+        """群消息触发事件转盘的判定：只看事件转盘自己的概率。"""
 
-        stored: Any = await self.store.get_setting(BET_PROBABILITY_SETTING, None)
-        if isinstance(stored, bool) or not isinstance(stored, (int, float)):
-            return None
-        return min(1.0, max(0.0, float(stored)))
-
-    async def set_bet_probability(self, value: float) -> None:
-        await self.store.set_setting(BET_PROBABILITY_SETTING, float(value))
-
-    async def pk_triggered(self) -> bool:
-        """随机问答不看榜单或好感度，只按独立概率判定。"""
-
-        chance = await self.pk_probability()
+        chance = await self.event_wheel_probability()
+        if chance <= 0:
+            return False
         return self.rng.random() < chance
 
-    async def pk_probability(self) -> float:
-        """随机问答的触发概率，运行时用 /馒头问答概率 覆盖过就优先用它。"""
+    async def event_wheel_probability(self) -> float:
+        """事件转盘的触发概率，运行时用 /馒头事件转盘概率 覆盖过就优先用它。"""
 
         return await self._stored_probability(
-            PK_PROBABILITY_SETTING, self.config.mantou_affection_pk_chance
+            EVENT_WHEEL_PROBABILITY_SETTING,
+            self.config.mantou_affection_event_wheel_chance,
         )
 
-    async def pk_probability_override(self) -> float | None:
-        """读取运行时覆盖的问答概率，没覆盖过返回 None。"""
+    async def event_wheel_probability_override(self) -> float | None:
+        """读取运行时覆盖的事件转盘概率，没覆盖过返回 None。"""
 
-        stored: Any = await self.store.get_setting(PK_PROBABILITY_SETTING, None)
+        stored: Any = await self.store.get_setting(EVENT_WHEEL_PROBABILITY_SETTING, None)
         if isinstance(stored, bool) or not isinstance(stored, (int, float)):
             return None
         return min(1.0, max(0.0, float(stored)))
 
-    async def set_pk_probability(self, value: float) -> None:
-        await self.store.set_setting(PK_PROBABILITY_SETTING, float(value))
-
-    async def group_quiz_triggered(self) -> bool:
-        """群友问答不看榜单或好感度，只按独立概率判定。"""
-
-        chance = await self.group_quiz_probability()
-        return self.rng.random() < chance
-
-    async def group_quiz_probability(self) -> float:
-        """群友问答的触发概率，运行时用 /馒头群友问答概率 覆盖过就优先用它。"""
-
-        return await self._stored_probability(
-            GROUP_QUIZ_PROBABILITY_SETTING,
-            self.config.mantou_affection_group_quiz_chance,
-        )
-
-    async def group_quiz_probability_override(self) -> float | None:
-        """读取运行时覆盖的群友问答概率，没覆盖过返回 None。"""
-
-        stored: Any = await self.store.get_setting(GROUP_QUIZ_PROBABILITY_SETTING, None)
-        if isinstance(stored, bool) or not isinstance(stored, (int, float)):
-            return None
-        return min(1.0, max(0.0, float(stored)))
-
-    async def set_group_quiz_probability(self, value: float) -> None:
-        await self.store.set_setting(GROUP_QUIZ_PROBABILITY_SETTING, float(value))
-
-    async def teyvat_quiz_triggered(self) -> bool:
-        """提瓦特问答不看好感度，只按独立概率判定。"""
-
-        chance = await self.teyvat_quiz_probability()
-        return self.rng.random() < chance
-
-    async def teyvat_quiz_probability(self) -> float:
-        """提瓦特问答的触发概率，运行时用 /馒头提瓦特概率 覆盖过就优先用它。"""
-
-        return await self._stored_probability(
-            TEYVAT_QUIZ_PROBABILITY_SETTING,
-            self.config.mantou_affection_teyvat_chance,
-        )
-
-    async def teyvat_quiz_probability_override(self) -> float | None:
-        """读取运行时覆盖的提瓦特问答概率，没覆盖过返回 None。"""
-
-        stored: Any = await self.store.get_setting(TEYVAT_QUIZ_PROBABILITY_SETTING, None)
-        if isinstance(stored, bool) or not isinstance(stored, (int, float)):
-            return None
-        return min(1.0, max(0.0, float(stored)))
-
-    async def set_teyvat_quiz_probability(self, value: float) -> None:
-        await self.store.set_setting(TEYVAT_QUIZ_PROBABILITY_SETTING, float(value))
-
-    async def hsr_quiz_triggered(self) -> bool:
-        """星穹铁道问答不看好感度，只按独立概率判定。"""
-
-        chance = await self.hsr_quiz_probability()
-        return self.rng.random() < chance
-
-    async def hsr_quiz_probability(self) -> float:
-        return await self._stored_probability(
-            HSR_QUIZ_PROBABILITY_SETTING,
-            self.config.mantou_affection_hsr_chance,
-        )
-
-    async def hsr_quiz_probability_override(self) -> float | None:
-        stored: Any = await self.store.get_setting(HSR_QUIZ_PROBABILITY_SETTING, None)
-        if isinstance(stored, bool) or not isinstance(stored, (int, float)):
-            return None
-        return min(1.0, max(0.0, float(stored)))
-
-    async def set_hsr_quiz_probability(self, value: float) -> None:
-        await self.store.set_setting(HSR_QUIZ_PROBABILITY_SETTING, float(value))
-
-    async def zzz_quiz_triggered(self) -> bool:
-        """绝区零问答不看好感度，只按独立概率判定。"""
-
-        chance = await self.zzz_quiz_probability()
-        return self.rng.random() < chance
-
-    async def zzz_quiz_probability(self) -> float:
-        return await self._stored_probability(
-            ZZZ_QUIZ_PROBABILITY_SETTING,
-            self.config.mantou_affection_zzz_chance,
-        )
-
-    async def zzz_quiz_probability_override(self) -> float | None:
-        stored: Any = await self.store.get_setting(ZZZ_QUIZ_PROBABILITY_SETTING, None)
-        if isinstance(stored, bool) or not isinstance(stored, (int, float)):
-            return None
-        return min(1.0, max(0.0, float(stored)))
-
-    async def set_zzz_quiz_probability(self, value: float) -> None:
-        await self.store.set_setting(ZZZ_QUIZ_PROBABILITY_SETTING, float(value))
-
-    async def petit_planet_quiz_triggered(self) -> bool:
-        """星布谷地问答不看好感度，只按独立概率判定。"""
-
-        chance = await self.petit_planet_quiz_probability()
-        return self.rng.random() < chance
-
-    async def petit_planet_quiz_probability(self) -> float:
-        return await self._stored_probability(
-            PETIT_PLANET_QUIZ_PROBABILITY_SETTING,
-            self.config.mantou_affection_petit_planet_chance,
-        )
-
-    async def petit_planet_quiz_probability_override(self) -> float | None:
-        stored: Any = await self.store.get_setting(
-            PETIT_PLANET_QUIZ_PROBABILITY_SETTING, None
-        )
-        if isinstance(stored, bool) or not isinstance(stored, (int, float)):
-            return None
-        return min(1.0, max(0.0, float(stored)))
-
-    async def set_petit_planet_quiz_probability(self, value: float) -> None:
-        await self.store.set_setting(
-            PETIT_PLANET_QUIZ_PROBABILITY_SETTING, float(value)
-        )
-
-    async def fill_blank_triggered(self) -> bool:
-        """补句问答不看榜单或好感度，只按独立概率判定。"""
-
-        chance = await self.fill_blank_probability()
-        return self.rng.random() < chance
-
-    async def fill_blank_probability(self) -> float:
-        """补句问答的触发概率，运行时用 /馒头补句概率 覆盖过就优先用它。"""
-
-        return await self._stored_probability(
-            FILL_BLANK_PROBABILITY_SETTING,
-            self.config.mantou_affection_fill_blank_chance,
-        )
-
-    async def fill_blank_probability_override(self) -> float | None:
-        """读取运行时覆盖的补句问答概率，没覆盖过返回 None。"""
-
-        stored: Any = await self.store.get_setting(FILL_BLANK_PROBABILITY_SETTING, None)
-        if isinstance(stored, bool) or not isinstance(stored, (int, float)):
-            return None
-        return min(1.0, max(0.0, float(stored)))
-
-    async def set_fill_blank_probability(self, value: float) -> None:
-        await self.store.set_setting(FILL_BLANK_PROBABILITY_SETTING, float(value))
-
-    async def whoami_triggered(self) -> bool:
-        """我是谁不看榜单或好感度，只按独立概率判定。"""
-
-        chance = await self.whoami_probability()
-        return self.rng.random() < chance
-
-    async def whoami_probability(self) -> float:
-        """我是谁的触发概率，运行时用 /馒头我是谁概率 覆盖过就优先用它。"""
-
-        return await self._stored_probability(
-            WHOAMI_PROBABILITY_SETTING,
-            self.config.mantou_affection_whoami_chance,
-        )
-
-    async def whoami_probability_override(self) -> float | None:
-        """读取运行时覆盖的我是谁概率，没覆盖过返回 None。"""
-
-        stored: Any = await self.store.get_setting(WHOAMI_PROBABILITY_SETTING, None)
-        if isinstance(stored, bool) or not isinstance(stored, (int, float)):
-            return None
-        return min(1.0, max(0.0, float(stored)))
-
-    async def set_whoami_probability(self, value: float) -> None:
-        await self.store.set_setting(WHOAMI_PROBABILITY_SETTING, float(value))
+    async def set_event_wheel_probability(self, value: float) -> None:
+        await self.store.set_setting(EVENT_WHEEL_PROBABILITY_SETTING, float(value))
 
     async def wheel_triggered(self, group_id: str, user_id: str) -> bool:
+        """馒头转盘的独立触发判定：好感度 > 0 且掷中自己的概率。"""
+
         profile = await self.store.get_profile(group_id, user_id)
         if profile.affection <= 0:
             return False
@@ -570,11 +303,15 @@ class AffectionService:
         return self.rng.random() < chance
 
     async def wheel_probability(self) -> float:
+        """馒头转盘的独立触发概率，运行时用 /馒头转盘概率 覆盖过就优先用它。"""
+
         return await self._stored_probability(
             WHEEL_PROBABILITY_SETTING, self.config.mantou_affection_wheel_chance
         )
 
     async def wheel_probability_override(self) -> float | None:
+        """读取运行时覆盖的转盘概率，没覆盖过返回 None。"""
+
         stored: Any = await self.store.get_setting(WHEEL_PROBABILITY_SETTING, None)
         if isinstance(stored, bool) or not isinstance(stored, (int, float)):
             return None
@@ -722,10 +459,13 @@ class AffectionService:
         )
 
     async def reset_all_probabilities(self) -> int:
-        """清除全部运行时概率覆盖，返回实际删除的条数。"""
+        """清除全部运行时概率覆盖，返回实际删除的条数。
+
+        顺带清掉 0.59 之前留在数据文件里的单事件概率覆盖，避免它们一直躺在那里。
+        """
 
         return await self.store.delete_settings(
-            field.key for field in PROBABILITY_FIELDS
+            [*(field.key for field in PROBABILITY_FIELDS), *LEGACY_PROBABILITY_SETTINGS]
         )
 
     async def _stored_int(self, key: str, default: int) -> int:
@@ -754,18 +494,20 @@ class AffectionService:
         return default if stored is None else stored
 
     async def ambient_reaction(self, group_id: str, user_id: str) -> str | None:
+        """馒头小动作：开关打开且好感度 > 0 时按好感阶段抽一句旁白。
+
+        触发概率已经交给事件转盘，这里只负责「能不能出现」和「说哪一句」。
+        """
+
         if not self.config.mantou_affection_ambient_enabled or self.text_library is None:
             return None
         profile = await self.store.get_profile(group_id, user_id)
         if profile.affection <= 0:
             return None
-        probability = await self.ambient_probability()
-        if self.rng.random() >= probability:
-            return None
         return self.text_library.pick(AMBIENT_SCENE, snapshot_for(profile.affection))
 
     async def forced_ambient_reaction(self, group_id: str, user_id: str) -> str | None:
-        """强制小动作：绕过开关、概率和好感门槛，直接按好感阶段抽一句旁白。"""
+        """强制小动作：绕过开关和好感门槛，直接按好感阶段抽一句旁白。"""
 
         if self.text_library is None:
             return None

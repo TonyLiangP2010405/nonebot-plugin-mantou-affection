@@ -14,6 +14,10 @@ from nonebot_plugin_mantou_affection import ambient as ambient_module
 from nonebot_plugin_mantou_affection.ambient import EventCoordinator, register_ambient
 from nonebot_plugin_mantou_affection.config import Config
 from nonebot_plugin_mantou_affection.copywriting import AffectionTextLibrary
+from nonebot_plugin_mantou_affection.event_wheel import (
+    EVENT_WHEEL_AMBIENT,
+    EVENT_WHEEL_FINDCHAR,
+)
 from nonebot_plugin_mantou_affection.events import EventLibrary
 from nonebot_plugin_mantou_affection.findchar import (
     BUNDLED_PUZZLES_PATH,
@@ -94,6 +98,18 @@ def _capture_send(matcher, monkeypatch) -> list[Message]:
     return sent
 
 
+class _FixedSlotRng(random.Random):
+    """让事件转盘固定转到指定格子。"""
+
+    def __init__(self, slot: str) -> None:
+        super().__init__(0)
+        self.slot = slot
+
+    def choice(self, seq):
+        items = list(seq)
+        return self.slot if self.slot in items else items[0]
+
+
 class _FakeWheel:
     """只记录有没有被叫起来的转盘替身。"""
 
@@ -108,20 +124,10 @@ class _FakeWheel:
 
 
 def _quiet_config(**kwargs) -> Config:
-    """除了馒头小动作以外全部关掉的配置，用来观察「有没有说话」。"""
+    """默认什么都不触发的配置，用来观察「有没有说话」。"""
 
     kwargs.setdefault("mantou_affection_ambient_enabled", True)
-    kwargs.setdefault("mantou_affection_ambient_probability", 1.0)
-    kwargs.setdefault("mantou_affection_ambient_event_ratio", 0.0)
-    kwargs.setdefault("mantou_affection_find_char_chance", 0.0)
-    kwargs.setdefault("mantou_affection_bet_chance", 0.0)
-    kwargs.setdefault("mantou_affection_pk_chance", 0.0)
-    kwargs.setdefault("mantou_affection_group_quiz_chance", 0.0)
-    kwargs.setdefault("mantou_affection_teyvat_chance", 0.0)
-    kwargs.setdefault("mantou_affection_hsr_chance", 0.0)
-    kwargs.setdefault("mantou_affection_zzz_chance", 0.0)
-    kwargs.setdefault("mantou_affection_petit_planet_chance", 0.0)
-    kwargs.setdefault("mantou_affection_fill_blank_chance", 0.0)
+    kwargs.setdefault("mantou_affection_event_wheel_chance", 0.0)
     kwargs.setdefault("mantou_affection_wheel_chance", 0.0)
     kwargs.setdefault("mantou_affection_newbie_protection_below", 0)
     return Config(**kwargs)
@@ -183,11 +189,13 @@ def _ambient_setup(
     tmp_path: Path,
     monkeypatch,
     config: Config,
+    *,
+    rng: random.Random | None = None,
 ) -> tuple:
     service = _service(
         tmp_path, config, text_library=AffectionTextLibrary(bundled_texts_path)
     )
-    coordinator = EventCoordinator(service, config)
+    coordinator = EventCoordinator(service, config, rng=rng or random.Random(0))
     ambient, _answer = register_ambient(service, config, coordinator)
     sent = _capture_send(ambient, monkeypatch)
     return service, coordinator, ambient, sent
@@ -212,14 +220,19 @@ async def test_ambient_handler_speaks_within_hours(
     bundled_texts_path: Path, tmp_path: Path, monkeypatch
 ) -> None:
     service, _coordinator, ambient, sent = _ambient_setup(
-        bundled_texts_path, tmp_path, monkeypatch, _quiet_config()
+        bundled_texts_path,
+        tmp_path,
+        monkeypatch,
+        _quiet_config(mantou_affection_event_wheel_chance=1.0),
+        rng=_FixedSlotRng(EVENT_WHEEL_AMBIENT),
     )
     _pin_time(monkeypatch, service, _at(10))
     await _give_affection(service)
 
     await ambient.handlers[0].call(_event())
 
-    assert len(sent) == 1
+    assert len(sent) == 2
+    assert "事件转盘转到了「馒头小动作」" in str(sent[0])
 
 
 async def test_ambient_handler_starts_activity_within_hours(
@@ -229,7 +242,8 @@ async def test_ambient_handler_starts_activity_within_hours(
         bundled_texts_path,
         tmp_path,
         monkeypatch,
-        _quiet_config(mantou_affection_find_char_chance=1.0),
+        _quiet_config(mantou_affection_event_wheel_chance=1.0),
+        rng=_FixedSlotRng(EVENT_WHEEL_FINDCHAR),
     )
     _pin_time(monkeypatch, service, _at(10, 30))
     await _give_affection(service)
@@ -244,17 +258,19 @@ async def test_ambient_handler_starts_activity_within_hours(
 async def test_ambient_handler_skips_activity_after_hours(
     bundled_texts_path: Path, tmp_path: Path, monkeypatch
 ) -> None:
-    service, coordinator, ambient, _sent = _ambient_setup(
+    service, coordinator, ambient, sent = _ambient_setup(
         bundled_texts_path,
         tmp_path,
         monkeypatch,
-        _quiet_config(mantou_affection_find_char_chance=1.0),
+        _quiet_config(mantou_affection_event_wheel_chance=1.0),
+        rng=_FixedSlotRng(EVENT_WHEEL_FINDCHAR),
     )
     _pin_time(monkeypatch, service, _at(3))
     await _give_affection(service)
 
     await ambient.handlers[0].call(_event())
 
+    assert sent == []
     assert coordinator.findchar.pending == {}
 
 

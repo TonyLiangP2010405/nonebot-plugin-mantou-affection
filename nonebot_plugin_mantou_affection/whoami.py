@@ -29,8 +29,8 @@ WHOAMI_SCENE = "scene"
 WHOAMI_CATEGORIES = (WHOAMI_CHARACTER, WHOAMI_SCENE)
 
 WHOAMI_CORRECT_DELTA = 5
-WHOAMI_WRONG_DELTA = -2
-WHOAMI_TIMEOUT_DELTA = -1
+WHOAMI_WRONG_DELTA = -5
+WHOAMI_TIMEOUT_DELTA = -8
 WHOAMI_MAX_GUESS_LENGTH = 32
 WHOAMI_MIN_CROP_LONG_EDGE = 320
 
@@ -39,7 +39,7 @@ WHOAMI_SCENE_PREFIX = "🗺️ 这是哪里？"
 WHOAMI_START_REPLY = (
     "{prefix}\n"
     "直接发{noun}作答，每人只能猜一次。答对 {correct:+d}，猜错 {wrong:+d}，"
-    "{timeout} 秒后揭晓。\n"
+    "打错一个字也算猜错，{timeout} 秒后揭晓。\n"
 )
 WHOAMI_RESULT_REPLY = "{prefix}\n答案：{answer}（{game}）"
 WHOAMI_CORRECT_REPLY = "答对了，好感度 {delta:+d}，当前 {affection}"
@@ -142,6 +142,19 @@ def guess_candidates(text: str) -> tuple[str, ...]:
         if candidate and candidate not in unique:
             unique.append(candidate)
     return tuple(unique)
+
+
+def _is_one_edit_away(left: str, right: str) -> bool:
+    """判断两个已归一化的字符串是否只差一个字（增、删、改都算）。"""
+
+    if left == right or abs(len(left) - len(right)) > 1:
+        return False
+    if len(left) == len(right):
+        return sum(a != b for a, b in zip(left, right)) == 1
+    shorter, longer = (left, right) if len(left) < len(right) else (right, left)
+    return any(
+        longer[:index] + longer[index + 1 :] == shorter for index in range(len(longer))
+    )
 
 
 def _read_question_image(root: Path, filename: Any, crop: Any) -> bytes:
@@ -277,6 +290,19 @@ class WhoAmILibrary:
             if entry is not None:
                 return entry
         return None
+
+    def looks_like_mistyped(self, entry: WhoAmIEntry, text: str) -> bool:
+        """发言是不是在猜 entry，但打错了一个字（不再给第二次机会）。"""
+
+        keys = {normalize_guess(entry.answer)}
+        keys.update(normalize_guess(alias) for alias in entry.aliases)
+        keys.discard("")
+        for candidate in guess_candidates(text):
+            if len(candidate) < 2:
+                continue
+            if any(_is_one_edit_away(candidate, key) for key in keys):
+                return True
+        return False
 
 
 class WhoAmICoordinator:
@@ -449,7 +475,7 @@ class WhoAmICoordinator:
         segments.append(MessageSegment.text(f" {line}"))
 
     def answer(self, group_id: str, user_id: str, nickname: str, text: str) -> bool:
-        """收到群消息时调用：只认题库里出现过的答案，闲聊不会被当成猜错。"""
+        """收到群消息时调用：认题库里的答案，打错一个字也算一次猜错。"""
 
         pending = self.pending.get(str(group_id))
         if pending is None or not pending.accepting:
@@ -458,8 +484,11 @@ class WhoAmICoordinator:
             return False
         entry = self.library.resolve(text)
         if entry is None:
-            return False
-        correct = entry.answer == pending.entry.answer
+            if not self.library.looks_like_mistyped(pending.entry, text):
+                return False
+            correct = False
+        else:
+            correct = entry.answer == pending.entry.answer
         return pending.record(
             str(user_id),
             normalize_nickname(nickname, str(user_id)),

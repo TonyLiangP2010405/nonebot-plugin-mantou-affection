@@ -12,9 +12,9 @@ from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message
 from nonebot.adapters.onebot.v11.event import Sender
 
 from nonebot_plugin_mantou_affection.ambient import EventCoordinator, register_ambient
-from nonebot_plugin_mantou_affection.commands import register_commands
 from nonebot_plugin_mantou_affection.config import Config
 from nonebot_plugin_mantou_affection.copywriting import AffectionTextLibrary
+from nonebot_plugin_mantou_affection.event_wheel import EVENT_WHEEL_FINDCHAR
 from nonebot_plugin_mantou_affection.events import EventLibrary
 from nonebot_plugin_mantou_affection.findchar import (
     BUNDLED_PUZZLES_PATH,
@@ -97,6 +97,18 @@ class FixedRng(random.Random):
         return self.value
 
 
+class FixedSlotRng(random.Random):
+    """让事件转盘固定转到指定格子。"""
+
+    def __init__(self, slot: str):
+        super().__init__(0)
+        self.slot = slot
+
+    def choice(self, seq):
+        items = list(seq)
+        return self.slot if self.slot in items else items[0]
+
+
 def _event(
     text: str = "晚上好", user_id: int = 90002, group_id: int = 90001, nickname: str = "桃友"
 ) -> GroupMessageEvent:
@@ -143,8 +155,8 @@ async def _give_affection(service: AffectionService, score: int, user_id: str = 
 def _capture_send(matcher, monkeypatch) -> list[Message]:
     sent: list[Message] = []
 
-    async def fake_send(message: Message) -> None:
-        sent.append(message)
+    async def fake_send(message) -> None:
+        sent.append(message if isinstance(message, Message) else Message(message))
 
     monkeypatch.setattr(matcher, "send", fake_send)
     return sent
@@ -397,7 +409,6 @@ def test_opening_lines_are_plentiful_and_unique(mode: str) -> None:
 
 def test_find_char_defaults() -> None:
     config = Config(mantou_affection_newbie_protection_below=0)
-    assert config.mantou_affection_find_char_chance == 0.0005
     assert config.mantou_affection_poke_find_char_chance == 0.0005
     assert config.mantou_affection_find_char_timeout == 30
 
@@ -956,9 +967,17 @@ async def test_plugin_wiring_runs_find_char_end_to_end(monkeypatch) -> None:
     group_id = "90091"
     trigger_id = "90092"
     answer_id = "90093"
-    monkeypatch.setattr(plugin_config, "mantou_affection_find_char_chance", 1.0)
+    from nonebot_plugin_mantou_affection import event_wheel as event_wheel_module
+
+    monkeypatch.setattr(plugin_config, "mantou_affection_event_wheel_chance", 1.0)
+    monkeypatch.setattr(plugin_config, "mantou_affection_wheel_chance", 0.0)
     monkeypatch.setattr(plugin_config, "mantou_affection_find_char_timeout", 0.05)
     monkeypatch.setattr(plugin_config, "mantou_affection_newbie_protection_below", 0)
+    monkeypatch.setattr(
+        event_wheel_module.EventWheelCoordinator,
+        "draw_slot",
+        lambda self, slots: "findchar" if "findchar" in slots else None,
+    )
     sent: list[Message] = []
 
     async def fake_send(message) -> None:
@@ -972,8 +991,9 @@ async def test_plugin_wiring_runs_find_char_end_to_end(monkeypatch) -> None:
         _event("晚上好", user_id=int(trigger_id), group_id=int(group_id))
     )
 
-    assert len(sent) == 1
-    assert FIND_CHAR_PREFIX in sent[0].extract_plain_text()
+    assert len(sent) == 2
+    assert "事件转盘转到了「找字」" in sent[0].extract_plain_text()
+    assert FIND_CHAR_PREFIX in sent[1].extract_plain_text()
     pending = find_char_coordinator.pending[group_id]
     assert pending.task is not None
 
@@ -982,10 +1002,10 @@ async def test_plugin_wiring_runs_find_char_end_to_end(monkeypatch) -> None:
     )
     await asyncio.wait_for(pending.task, 2)
 
-    assert len(sent) == 2
-    assert _at_ids(sent[1]) == [answer_id, trigger_id]
-    assert "好感度 +2" in _lines(sent[1])[0]
-    assert "超时未答" in _lines(sent[1])[1]
+    assert len(sent) == 3
+    assert _at_ids(sent[2]) == [answer_id, trigger_id]
+    assert "好感度 +2" in _lines(sent[2])[0]
+    assert "超时未答" in _lines(sent[2])[1]
     assert await get_affection(group_id, answer_id) == 5
     assert await get_affection(group_id, trigger_id) == 1
 
@@ -1003,9 +1023,10 @@ async def _ambient_setup(
     monkeypatch,
     **config_kwargs,
 ) -> tuple:
+    coordinator_rng = config_kwargs.pop("coordinator_rng", random.Random(0))
     config_kwargs.setdefault("mantou_affection_newbie_protection_below", 0)
-    config_kwargs.setdefault("mantou_affection_ambient_probability", 1.0)
-    config_kwargs.setdefault("mantou_affection_ambient_event_ratio", 0.0)
+    config_kwargs.setdefault("mantou_affection_event_wheel_chance", 0.0)
+    config_kwargs.setdefault("mantou_affection_wheel_chance", 0.0)
     config = Config(**config_kwargs)
     service = _service(
         tmp_path,
@@ -1017,7 +1038,7 @@ async def _ambient_setup(
         service,
         config,
         EventLibrary(bundled_texts_path.with_name("affection_events.json")),
-        rng=random.Random(0),
+        rng=coordinator_rng,
     )
     find_char = FindCharCoordinator(
         service,
@@ -1031,23 +1052,24 @@ async def _ambient_setup(
     return service, coordinator, find_char, ambient, answer, sent
 
 
-async def test_ambient_handler_starts_find_char_game(
+async def test_event_wheel_lands_on_find_char_game(
     bundled_texts_path: Path, tmp_path: Path, monkeypatch
 ) -> None:
     service, coordinator, find_char, ambient, answer, sent = await _ambient_setup(
         bundled_texts_path,
         tmp_path,
         monkeypatch,
-        mantou_affection_find_char_chance=1.0,
-        mantou_affection_ambient_probability=0.0,
+        mantou_affection_event_wheel_chance=1.0,
+        coordinator_rng=FixedSlotRng(EVENT_WHEEL_FINDCHAR),
         mantou_affection_find_char_timeout=30,
     )
     await _give_affection(service, 12)
 
     await ambient.handlers[0].call(_event())
 
-    assert len(sent) == 1
-    message = sent[0]
+    assert len(sent) == 2
+    assert "事件转盘转到了「找字」" in sent[0].extract_plain_text()
+    message = sent[1]
     assert [segment.type for segment in message] == ["at", "text"]
     assert _at_ids(message) == [TRIGGER_ID]
     pending = find_char.pending[GROUP_ID]
@@ -1075,52 +1097,15 @@ async def test_ambient_handler_starts_find_char_game(
     assert (await service.profile(GROUP_ID, OTHER_ID)).affection == 2
 
 
-async def test_ambient_handler_skips_small_action_when_find_char_hits(
+async def test_event_wheel_stays_silent_when_group_is_busy(
     bundled_texts_path: Path, tmp_path: Path, monkeypatch
 ) -> None:
     service, coordinator, find_char, ambient, _answer, sent = await _ambient_setup(
         bundled_texts_path,
         tmp_path,
         monkeypatch,
-        mantou_affection_find_char_chance=1.0,
-    )
-    await _give_affection(service, 12)
-
-    await ambient.handlers[0].call(_event())
-
-    assert len(sent) == 1
-    assert FIND_CHAR_PREFIX in sent[0].extract_plain_text()
-    assert coordinator.pending == {}
-    await _cancel_task(find_char, GROUP_ID)
-
-
-async def test_ambient_handler_keeps_small_action_without_find_char(
-    bundled_texts_path: Path, tmp_path: Path, monkeypatch
-) -> None:
-    service, coordinator, find_char, ambient, _answer, sent = await _ambient_setup(
-        bundled_texts_path,
-        tmp_path,
-        monkeypatch,
-        mantou_affection_find_char_chance=0.0,
-    )
-    await _give_affection(service, 12)
-
-    await ambient.handlers[0].call(_event())
-
-    assert len(sent) == 1
-    assert FIND_CHAR_PREFIX not in sent[0].extract_plain_text()
-    assert find_char.pending == {}
-    assert coordinator.pending == {}
-
-
-async def test_ambient_handler_falls_back_when_group_is_busy(
-    bundled_texts_path: Path, tmp_path: Path, monkeypatch
-) -> None:
-    service, coordinator, find_char, ambient, _answer, sent = await _ambient_setup(
-        bundled_texts_path,
-        tmp_path,
-        monkeypatch,
-        mantou_affection_find_char_chance=1.0,
+        mantou_affection_event_wheel_chance=1.0,
+        coordinator_rng=FixedSlotRng(EVENT_WHEEL_FINDCHAR),
     )
     await _give_affection(service, 12)
     running = coordinator.start(GROUP_ID, TRIGGER_ID, "桃友")
@@ -1128,113 +1113,18 @@ async def test_ambient_handler_falls_back_when_group_is_busy(
 
     await ambient.handlers[0].call(_event())
 
-    assert len(sent) == 1
-    assert FIND_CHAR_PREFIX not in sent[0].extract_plain_text()
+    # 本群已有活动时事件转盘直接安静 不会公告也不会吞掉这条消息
+    assert sent == []
     assert find_char.pending == {}
     assert coordinator.pending[GROUP_ID] is running
 
 
-# ------------------------------------------------------------ 概率读取
-
-
-async def test_find_char_triggered_needs_positive_affection(tmp_path: Path) -> None:
-    config = Config(mantou_affection_find_char_chance=1.0)
-    service = _service(tmp_path, config, rng=FixedRng(0.0))
-
-    assert await service.find_char_triggered(GROUP_ID, TRIGGER_ID) is False
-    await _give_affection(service, 5)
-    assert await service.find_char_triggered(GROUP_ID, TRIGGER_ID) is True
-
-
-async def test_find_char_triggered_respects_chance(tmp_path: Path) -> None:
-    config = Config(mantou_affection_find_char_chance=0.01)
-    service = _service(tmp_path, config, rng=FixedRng(0.5))
-    await _give_affection(service, 5)
-
-    assert await service.find_char_triggered(GROUP_ID, TRIGGER_ID) is False
-
-
-async def test_find_char_chances_prefer_stored_override(tmp_path: Path) -> None:
-    service = _service(tmp_path)
-    assert await service.find_char_chances() == pytest.approx((0.0005, 0.0005))
-
-    await service.set_find_char_chances(group=0.5)
-    assert await service.find_char_chances() == pytest.approx((0.5, 0.0005))
-    await service.set_find_char_chances(poke=0.25)
-    assert await service.find_char_chances() == pytest.approx((0.5, 0.25))
-
-    restarted = AffectionService(
-        AffectionStore(tmp_path / "affection.json"),
-        Config(mantou_affection_newbie_protection_below=0),
-        rng=random.Random(0),
-    )
-    assert await restarted.find_char_chances() == pytest.approx((0.5, 0.25))
+# ------------------------------------------------------------ 戳一戳概率读取
 
 
 async def test_find_char_poke_chance_uses_callers_default(tmp_path: Path) -> None:
     service = _service(tmp_path)
     assert await service.find_char_poke_chance(0.4) == pytest.approx(0.4)
 
-    await service.set_find_char_chances(poke=0.05)
+    await service.store.set_setting("find_char_poke_chance", 0.05)
     assert await service.find_char_poke_chance(0.4) == pytest.approx(0.05)
-
-
-async def test_find_char_chances_ignore_broken_setting(tmp_path: Path) -> None:
-    service = _service(tmp_path)
-    await service.store.set_setting("find_char_group_chance", "not a number")
-
-    assert await service.find_char_group_chance() == pytest.approx(0.0005)
-
-
-# ------------------------------------------------------------ 概率命令
-
-
-def _find_char_command(tmp_path: Path, monkeypatch) -> tuple:
-    service = _service(tmp_path)
-    command = register_commands(service, Config(mantou_affection_newbie_protection_below=0))[7]
-    sent: list[str] = []
-
-    async def fake_finish(message: Message | str = "", **kwargs) -> None:
-        sent.append(str(message))
-
-    monkeypatch.setattr(command, "finish", fake_finish)
-    return service, command, sent
-
-
-async def test_find_char_command_reports_both_chances(tmp_path: Path, monkeypatch) -> None:
-    _service, command, sent = _find_char_command(tmp_path, monkeypatch)
-
-    await command.handlers[0].call(Message(""))
-
-    assert "群消息：0.05%" in sent[0]
-    assert "戳一戳：0.05%" in sent[0]
-    assert "/馒头找字概率 群消息 5% 戳一戳 2%" in sent[0]
-
-
-async def test_find_char_command_sets_both_chances(tmp_path: Path, monkeypatch) -> None:
-    service, command, sent = _find_char_command(tmp_path, monkeypatch)
-
-    await command.handlers[0].call(Message("5%"))
-
-    assert "群消息：5%" in sent[0]
-    assert "戳一戳：5%" in sent[0]
-    assert await service.find_char_chances() == pytest.approx((0.05, 0.05))
-
-
-async def test_find_char_command_sets_single_chance(tmp_path: Path, monkeypatch) -> None:
-    service, command, sent = _find_char_command(tmp_path, monkeypatch)
-
-    await command.handlers[0].call(Message("群消息 20%"))
-
-    assert "群消息：20%" in sent[0]
-    assert "戳一戳" not in sent[0]
-    assert await service.find_char_chances() == pytest.approx((0.2, 0.0005))
-
-
-async def test_find_char_command_rejects_bad_input(tmp_path: Path, monkeypatch) -> None:
-    service, command, sent = _find_char_command(tmp_path, monkeypatch)
-
-    await command.handlers[0].call(Message("群消息 abc"))
-
-    assert "馒头找字概率" in sent[0]
-    assert await service.find_char_chances() == pytest.approx((0.0005, 0.0005))

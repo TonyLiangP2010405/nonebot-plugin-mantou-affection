@@ -6,15 +6,14 @@ import random
 from contextlib import suppress
 from pathlib import Path
 from time import time as now_timestamp
-from types import SimpleNamespace
 
 from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message
 from nonebot.adapters.onebot.v11.event import Sender
 
 from nonebot_plugin_mantou_affection.ambient import EventCoordinator, register_ambient
 from nonebot_plugin_mantou_affection.bet import BetCoordinator
-from nonebot_plugin_mantou_affection.commands import register_commands
 from nonebot_plugin_mantou_affection.config import Config
+from nonebot_plugin_mantou_affection.event_wheel import EVENT_WHEEL_GROUP_QUIZ
 from nonebot_plugin_mantou_affection.findchar import FindCharCoordinator
 from nonebot_plugin_mantou_affection.group_quiz import (
     BUNDLED_GROUP_QUIZ_PATH,
@@ -47,6 +46,18 @@ class FixedRng(random.Random):
 
     def random(self) -> float:
         return self.value
+
+
+class FixedSlotRng(random.Random):
+    """让事件转盘固定转到指定格子。"""
+
+    def __init__(self, slot: str):
+        super().__init__(0)
+        self.slot = slot
+
+    def choice(self, seq):  # type: ignore[override]
+        items = list(seq)
+        return self.slot if self.slot in items else items[0]
 
 
 def _event(
@@ -231,7 +242,6 @@ def test_group_quiz_library_skips_invalid_questions(tmp_path: Path) -> None:
 
 def test_group_quiz_defaults() -> None:
     config = Config()
-    assert config.mantou_affection_group_quiz_chance == 0.0005
     assert config.mantou_affection_group_quiz_timeout == 60
 
 
@@ -261,31 +271,6 @@ async def test_group_quiz_concurrent_starts_only_launch_one_question(
     assert await _submit(coordinator, INITIATOR, correct=True) is True
     await asyncio.wait_for(pending.task, 1)
     assert (await coordinator.service.profile(GROUP_ID, INITIATOR)).affection == 2
-
-
-async def test_group_quiz_triggered_uses_configured_probability(tmp_path: Path) -> None:
-    service = _service(tmp_path)
-
-    service.rng = FixedRng(0.00049)
-    assert await service.group_quiz_triggered() is True
-    service.rng = FixedRng(0.0005)
-    assert await service.group_quiz_triggered() is False
-
-
-async def test_group_quiz_probability_runtime_override_and_persistence(
-    tmp_path: Path,
-) -> None:
-    service = _service(tmp_path)
-    assert await service.group_quiz_probability() == 0.0005
-    assert await service.group_quiz_probability_override() is None
-
-    await service.set_group_quiz_probability(0.25)
-    assert await service.group_quiz_probability() == 0.25
-    assert await service.group_quiz_probability_override() == 0.25
-
-    reopened = _service(tmp_path)
-    assert await reopened.group_quiz_probability() == 0.25
-    assert await reopened.group_quiz_probability_override() == 0.25
 
 
 # ------------------------------------------------------------ 开局与作答
@@ -445,43 +430,6 @@ async def test_group_quiz_can_start_immediately_again(tmp_path: Path) -> None:
 # ------------------------------------------------------------ 命令、席位与消息路由
 
 
-def _commands(tmp_path: Path, monkeypatch) -> tuple:
-    service = _service(tmp_path)
-    pk_coordinator = PkCoordinator(service, Config(), _library(tmp_path))
-    commands = register_commands(service, Config(), pk_coordinator)
-    assert len(commands) == 27
-    group_quiz_cmd = commands[12]
-    sent: list[str] = []
-
-    async def fake_finish(message: Message | str = "", **kwargs) -> None:
-        sent.append(str(message))
-
-    monkeypatch.setattr(group_quiz_cmd, "finish", fake_finish)
-    return service, group_quiz_cmd, sent
-
-
-async def test_group_quiz_probability_command_reports_and_sets(tmp_path: Path, monkeypatch) -> None:
-    service, group_quiz_cmd, sent = _commands(tmp_path, monkeypatch)
-
-    await group_quiz_cmd.handlers[0].call(Message(""))
-    assert "当前群友问答概率：0.05%（配置默认 0.05%）" in sent[0]
-
-    await group_quiz_cmd.handlers[0].call(Message("2.5%"))
-    assert "群友问答概率已调整为 2.5%" in sent[1]
-    assert await service.group_quiz_probability() == 0.025
-
-    await group_quiz_cmd.handlers[0].call(Message(""))
-    assert "运行时覆盖，配置默认 0.05%" in sent[2]
-
-    reopened = _service(tmp_path)
-    assert await reopened.group_quiz_probability() == 0.025
-
-    await group_quiz_cmd.handlers[0].call(Message("0"))
-    assert await service.group_quiz_probability() == 0
-    await group_quiz_cmd.handlers[0].call(Message("abc"))
-    assert "0~1" in sent[-1]
-
-
 async def test_group_quiz_shares_the_group_slot(tmp_path: Path) -> None:
     service = _service(tmp_path, Config())
     events = EventCoordinator(service, Config(), None, rng=random.Random(0))
@@ -502,9 +450,10 @@ def _ambient_setup(
     monkeypatch,
     *,
     group_quiz_questions: list[dict] | None = None,
+    coordinator_rng: random.Random | None = None,
 ) -> tuple:
     service = _service(tmp_path, config)
-    events = EventCoordinator(service, config, None, rng=random.Random(0))
+    events = EventCoordinator(service, config, None, rng=coordinator_rng or random.Random(0))
     find_char = FindCharCoordinator(service, config, None, events=events)
     bet = BetCoordinator(service, config, None, events=events)
     pk = PkCoordinator(service, config, _library(tmp_path), events=events)
@@ -542,93 +491,48 @@ async def test_group_quiz_answer_router_uses_ambient(tmp_path: Path, monkeypatch
     assert (await service.profile(GROUP_ID, INITIATOR)).affection == 2
 
 
-async def test_group_quiz_ambient_trigger_comes_after_pk(tmp_path: Path, monkeypatch) -> None:
+async def test_event_wheel_lands_on_group_quiz(tmp_path: Path, monkeypatch) -> None:
     config = Config(
-        mantou_affection_find_char_chance=0.0,
-        mantou_affection_bet_chance=0.0,
-        mantou_affection_pk_chance=0.0,
+        mantou_affection_event_wheel_chance=1.0,
         mantou_affection_wheel_chance=0.0,
         mantou_affection_ambient_enabled=False,
     )
-    service, _events, pk, group_quiz, _wheel, ambient, _answer, sent = _ambient_setup(
-        tmp_path, config, monkeypatch
+    _service, _events, _pk, group_quiz, _wheel, ambient, _answer, sent = _ambient_setup(
+        tmp_path,
+        config,
+        monkeypatch,
+        coordinator_rng=FixedSlotRng(EVENT_WHEEL_GROUP_QUIZ),
     )
-    pk.question_timeout = 30
 
-    async def pk_triggered() -> bool:
-        return True
-
-    async def group_quiz_triggered() -> bool:
-        return True
-
-    monkeypatch.setattr(service, "pk_triggered", pk_triggered)
-    monkeypatch.setattr(service, "group_quiz_triggered", group_quiz_triggered)
     await ambient.handlers[0].call(_event("随便聊聊", user_id=int(INITIATOR)))
 
-    assert len(sent) == 1
-    assert "桃子问答" in sent[0].extract_plain_text()
-    assert GROUP_ID in pk.pending
-    assert group_quiz.pending == {}
-    await _cancel_task(pk)
-
-
-async def test_group_quiz_ambient_trigger_when_pk_misses(tmp_path: Path, monkeypatch) -> None:
-    config = Config(
-        mantou_affection_find_char_chance=0.0,
-        mantou_affection_bet_chance=0.0,
-        mantou_affection_pk_chance=0.0,
-        mantou_affection_wheel_chance=0.0,
-        mantou_affection_ambient_enabled=False,
-    )
-    service, _events, _pk, group_quiz, _wheel, ambient, _answer, sent = _ambient_setup(
-        tmp_path, config, monkeypatch
-    )
-
-    async def pk_triggered() -> bool:
-        return False
-
-    async def group_quiz_triggered() -> bool:
-        return True
-
-    monkeypatch.setattr(service, "pk_triggered", pk_triggered)
-    monkeypatch.setattr(service, "group_quiz_triggered", group_quiz_triggered)
-    await ambient.handlers[0].call(_event("随便聊聊", user_id=int(INITIATOR)))
-
-    assert len(sent) == 1
-    assert _at_ids(sent[0]) == [INITIATOR]
-    body = sent[0].extract_plain_text()
-    assert GROUP_QUIZ_PREFIX in body
-    assert "60 秒" in body
+    assert len(sent) == 2
+    assert "事件转盘转到了「群友问答」" in sent[0].extract_plain_text()
+    assert GROUP_QUIZ_PREFIX in sent[1].extract_plain_text()
+    assert _at_ids(sent[1]) == [INITIATOR]
     assert GROUP_ID in group_quiz.pending
     await _cancel_task(group_quiz)
 
 
-async def test_group_quiz_empty_library_lets_next_activity_start(
+async def test_group_quiz_empty_library_is_not_in_the_wheel(
     tmp_path: Path, monkeypatch
 ) -> None:
     config = Config(
-        mantou_affection_find_char_chance=0.0,
-        mantou_affection_bet_chance=0.0,
-        mantou_affection_pk_chance=0.0,
-        mantou_affection_wheel_chance=1.0,
+        mantou_affection_event_wheel_chance=1.0,
+        mantou_affection_wheel_chance=0.0,
         mantou_affection_ambient_enabled=False,
     )
-    service, _events, _pk, group_quiz, wheel, ambient, _answer, sent = _ambient_setup(
-        tmp_path, config, monkeypatch, group_quiz_questions=[]
+    service, _events, _pk, group_quiz, _wheel, ambient, _answer, sent = _ambient_setup(
+        tmp_path,
+        config,
+        monkeypatch,
+        group_quiz_questions=[],
+        coordinator_rng=FixedSlotRng(EVENT_WHEEL_GROUP_QUIZ),
     )
     await _give_affection(service, 10, INITIATOR)
 
-    async def group_quiz_triggered() -> bool:
-        return True
-
-    monkeypatch.setattr(service, "group_quiz_triggered", group_quiz_triggered)
-    monkeypatch.setattr(
-        "nonebot_plugin_mantou_affection.ambient.get_bot",
-        lambda: SimpleNamespace(self_id=999),
-    )
     await ambient.handlers[0].call(_event("随便聊聊", user_id=int(INITIATOR)))
 
     assert group_quiz.pending == {}
-    assert GROUP_ID in wheel.pending
-    assert "命运齿轮转盘" in sent[-1].extract_plain_text()
-    await _cancel_task(wheel)
+    assert sent
+    assert "群友问答" not in sent[0].extract_plain_text()

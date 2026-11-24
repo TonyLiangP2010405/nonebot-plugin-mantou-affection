@@ -11,10 +11,10 @@ from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message
 from nonebot.adapters.onebot.v11.event import Sender
 
 from nonebot_plugin_mantou_affection.ambient import EventCoordinator, register_ambient
-from nonebot_plugin_mantou_affection.commands import register_commands
 from nonebot_plugin_mantou_affection.config import Config
+from nonebot_plugin_mantou_affection.event_wheel import EVENT_WHEEL_TEYVAT_QUIZ
 from nonebot_plugin_mantou_affection.models import Profile
-from nonebot_plugin_mantou_affection.pk import PkCoordinator, PkQuestionLibrary
+from nonebot_plugin_mantou_affection.pk import PkQuestionLibrary
 from nonebot_plugin_mantou_affection.service import AffectionService
 from nonebot_plugin_mantou_affection.storage import AffectionStore
 from nonebot_plugin_mantou_affection.teyvat_quiz import (
@@ -48,6 +48,18 @@ class FixedRng(random.Random):
 
     def random(self) -> float:
         return self.value
+
+
+class FixedSlotRng(random.Random):
+    """让事件转盘固定转到指定格子。"""
+
+    def __init__(self, slot: str):
+        super().__init__(0)
+        self.slot = slot
+
+    def choice(self, seq):  # type: ignore[override]
+        items = list(seq)
+        return self.slot if self.slot in items else items[0]
 
 
 def _event(
@@ -266,51 +278,15 @@ async def test_teyvat_quiz_busy_with_other_activity(tmp_path: Path) -> None:
 # ------------------------------------------------------------ 命令与触发
 
 
-def test_teyvat_probability_command(tmp_path: Path) -> None:
-    service = _service(tmp_path)
-    commands = register_commands(service, Config(), PkCoordinator(service, Config(), None))
-    assert len(commands) == 27
-    command = commands[15]
-    assert [handler.call.__name__ for handler in command.handlers] == [
-        "handle_teyvat_quiz_probability"
-    ]
-
-
-async def test_teyvat_probability_command_reports_and_sets(
-    tmp_path: Path, monkeypatch
-) -> None:
-    service = _service(tmp_path)
-    commands = register_commands(service, Config(), PkCoordinator(service, Config(), None))
-    command = commands[15]
-    sent: list[str] = []
-
-    async def fake_finish(message: Message | str = "", **kwargs) -> None:
-        sent.append(str(message))
-
-    monkeypatch.setattr(command, "finish", fake_finish)
-
-    await command.handlers[0].call(Message(""))
-    assert "当前提瓦特问答概率：0.05%（配置默认 0.05%）" in sent[0]
-
-    await command.handlers[0].call(Message("2.5%"))
-    assert "提瓦特问答概率已调整为 2.5%" in sent[1]
-    assert await service.teyvat_quiz_probability() == 0.025
-
-
-async def test_ambient_starts_teyvat_quiz(tmp_path: Path, monkeypatch) -> None:
+async def test_event_wheel_lands_on_teyvat_quiz(tmp_path: Path, monkeypatch) -> None:
     config = Config(
         mantou_affection_ambient_enabled=False,
-        mantou_affection_find_char_chance=0.0,
-        mantou_affection_bet_chance=0.0,
-        mantou_affection_pk_chance=0.0,
-        mantou_affection_group_quiz_chance=0.0,
-        mantou_affection_teyvat_chance=1.0,
-        mantou_affection_fill_blank_chance=0.0,
+        mantou_affection_event_wheel_chance=1.0,
         mantou_affection_wheel_chance=0.0,
         mantou_affection_newbie_protection_below=0,
     )
     service = _service(tmp_path, config)
-    events = EventCoordinator(service, config)
+    events = EventCoordinator(service, config, rng=FixedSlotRng(EVENT_WHEEL_TEYVAT_QUIZ))
     teyvat = TeyvatQuizCoordinator(
         service, config, _library(tmp_path), events=events, rng=FixedRng(0.99)
     )
@@ -327,5 +303,7 @@ async def test_ambient_starts_teyvat_quiz(tmp_path: Path, monkeypatch) -> None:
     await ambient.handlers[0].call(_event())
 
     assert GROUP_ID in teyvat.pending
-    assert TEYVAT_QUIZ_SPEC.prefix in sent[-1].extract_plain_text()
+    assert len(sent) == 2
+    assert "事件转盘转到了「提瓦特问答」" in sent[0].extract_plain_text()
+    assert TEYVAT_QUIZ_SPEC.prefix in sent[1].extract_plain_text()
     teyvat.pending[GROUP_ID].task.cancel()

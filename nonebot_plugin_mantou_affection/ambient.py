@@ -13,6 +13,7 @@ from nonebot.typing import T_State
 from .bet import BUNDLED_ROUNDS_PATH, BetCoordinator, BetLibrary
 from .commands import GROUP_ONLY
 from .config import Config
+from .event_wheel import EVENT_WHEEL_AMBIENT, EventWheelCoordinator
 from .events import Event, EventLibrary, EventOption
 from .fill_blank import (
     BUNDLED_FILL_BLANK_PATH,
@@ -205,11 +206,6 @@ class EventCoordinator:
                 self.wheel,
             )
         )
-
-    def triggered(self) -> bool:
-        """小动作命中后再掷一次骰子，决定是否升级为随机事件。"""
-
-        return self.rng.random() < self.config.mantou_affection_ambient_event_ratio
 
     def start(
         self,
@@ -457,12 +453,12 @@ def register_ambient(
     fill_blank: FillBlankCoordinator | None = None,
     whoami: WhoAmICoordinator | None = None,
 ) -> tuple:
-    """群友发言时按概率触发找字、博弈、随机问答、群友问答、提瓦特问答、星穹铁道问答、绝区零问答、补句问答、我是谁、转盘或馒头小动作。
+    """群友发言时先掷事件转盘的概率，命中后转到哪项就开哪项；馒头转盘另有独立判定。
 
-    找字和博弈保留各自的好感度门槛；随机问答、群友问答、提瓦特问答、星穹铁道问答、绝区零问答和
-    补句问答不看榜单或好感度，分别默认每次群消息有 1%、0.05%、0.05%、0.05%、0.05%、0.05% 概率
-    给当前发言者出一道题。命运齿轮转盘只看
-    好感大于 0 和它自己的独立概率，不参与小动作的抽签。几种活动互斥，不会在同一条消息上同时触发；
+    事件转盘把 13 项活动（馒头小动作、随机事件、找字、博弈、问答、群友问答、命运齿轮转盘、
+    补句、提瓦特、星穹铁道、绝区零、星布谷地、我是谁）放在一起等概率抽取，每项自己的好感门槛和
+    题库门槛照旧，开不起来的不会进候选池。馒头转盘除了可能被事件转盘转到，还保留自己独立的
+    触发概率（好感度大于 0 且不受开启时段限制）。几种活动互斥，不会在同一条消息上同时触发；
     所有数字答案都走这里的答案路由，「参与」也由同一个 answer matcher 转给转盘。
     事件预处理器只给博弈记录最近发言表。
     """
@@ -552,6 +548,23 @@ def register_ambient(
         rng=coordinator.rng,
     )
     coordinator.attach_whoami(whoami_coordinator)
+    event_wheel = EventWheelCoordinator(
+        service,
+        config,
+        events=coordinator,
+        findchar=find_char,
+        bet=bet_coordinator,
+        pk=pk_coordinator,
+        wheel=wheel_coordinator,
+        group_quiz=group_quiz_coordinator,
+        teyvat_quiz=teyvat_quiz_coordinator,
+        hsr_quiz=hsr_quiz_coordinator,
+        zzz_quiz=zzz_quiz_coordinator,
+        petit_planet_quiz=petit_planet_quiz_coordinator,
+        fill_blank=fill_blank_coordinator,
+        whoami=whoami_coordinator,
+        rng=coordinator.rng,
+    )
     ambient = on_message(rule=GROUP_ONLY, priority=90, block=False)
     answer = on_message(rule=GROUP_ONLY, priority=5, block=False)
 
@@ -615,7 +628,7 @@ def register_ambient(
                 logger.exception("[mantou-affection] 记录事件限制失败")
 
         async def try_wheel() -> bool:
-            """命运齿轮转盘是唯一不受开启时段限制的活动，开起来就返回 True。"""
+            """命运齿轮转盘保留原来的独立判定，开起来就返回 True。"""
 
             try:
                 wheel_ready = await service.wheel_triggered(group_id, user_id)
@@ -637,8 +650,6 @@ def register_ambient(
                 started = False
             return started
 
-        hours_open = service.activity_hours_open()
-
         try:
             limits_ok = await service.event_limit_allows(group_id)
         except Exception:
@@ -649,248 +660,36 @@ def register_ambient(
             # 只保留答题和主动命令。额度按真实开起来的活动计数。
             return
 
-        if not hours_open:
+        if not service.activity_hours_open():
             # 开启时段之外只保留转盘, 其它随机活动和小动作一律安静下来。
             if await try_wheel():
                 await note_activity()
             return
 
         try:
-            find_char_ready = await service.find_char_triggered(group_id, user_id)
+            wheel_hit = await service.event_wheel_triggered()
         except Exception:
-            logger.exception("[mantou-affection] 判定找字小游戏失败")
-            find_char_ready = False
-        if find_char_ready:
-            pending = find_char.start(group_id, user_id, nickname)
-            if pending is not None:
-                try:
-                    await ambient.send(
-                        MessageSegment.at(event.user_id)
-                        + MessageSegment.text(f" {find_char.message(pending)}")
-                    )
-                except Exception:
-                    logger.exception("[mantou-affection] 发送找字小游戏失败")
-                    find_char.discard(group_id)
-                else:
-                    find_char.schedule(
-                        pending,
-                        group_id=group_id,
-                        send=ambient.send,
-                        timeout=config.mantou_affection_find_char_timeout,
-                    )
-                    return await note_activity()
-
-        try:
-            bet_ready = await service.bet_triggered(group_id, user_id)
-        except Exception:
-            logger.exception("[mantou-affection] 判定馒头博弈失败")
-            bet_ready = False
-        if bet_ready:
+            logger.exception("[mantou-affection] 判定事件转盘失败")
+            wheel_hit = False
+        if wheel_hit:
             try:
-                started = await bet_coordinator.maybe_start(
-                    group_id=group_id,
-                    user_id=user_id,
-                    nickname=nickname,
-                    candidates=bet_coordinator.recent_candidates(
-                        group_id,
-                        minutes=config.mantou_affection_bet_recent_minutes,
-                    ),
-                    send=ambient.send,
-                )
-            except Exception:
-                logger.exception("[mantou-affection] 抽取馒头博弈失败")
-                started = False
-            if started:
-                return await note_activity()
-
-        try:
-            pk_ready = await service.pk_triggered()
-        except Exception:
-            logger.exception("[mantou-affection] 判定随机问答失败")
-            pk_ready = False
-        if pk_ready:
-            try:
-                started = await pk_coordinator.start(
+                slot = await event_wheel.start(
                     group_id=group_id,
                     user_id=user_id,
                     nickname=nickname,
                     send=ambient.send,
                 )
             except Exception:
-                logger.exception("[mantou-affection] 发起随机问答失败")
-                started = False
-            if started:
-                return await note_activity()
-
-        try:
-            group_quiz_ready = await service.group_quiz_triggered()
-        except Exception:
-            logger.exception("[mantou-affection] 判定群友问答失败")
-            group_quiz_ready = False
-        if group_quiz_ready:
-            try:
-                started = await group_quiz_coordinator.start(
-                    group_id=group_id,
-                    user_id=user_id,
-                    nickname=nickname,
-                    send=ambient.send,
-                )
-            except Exception:
-                logger.exception("[mantou-affection] 发起群友问答失败")
-                started = False
-            if started:
-                return await note_activity()
-
-        try:
-            teyvat_quiz_ready = await service.teyvat_quiz_triggered()
-        except Exception:
-            logger.exception("[mantou-affection] 判定提瓦特问答失败")
-            teyvat_quiz_ready = False
-        if teyvat_quiz_ready:
-            try:
-                started = await teyvat_quiz_coordinator.start(
-                    group_id=group_id,
-                    user_id=user_id,
-                    nickname=nickname,
-                    send=ambient.send,
-                )
-            except Exception:
-                logger.exception("[mantou-affection] 发起提瓦特问答失败")
-                started = False
-            if started:
-                return await note_activity()
-
-        try:
-            hsr_quiz_ready = await service.hsr_quiz_triggered()
-        except Exception:
-            logger.exception("[mantou-affection] 判定星穹铁道问答失败")
-            hsr_quiz_ready = False
-        if hsr_quiz_ready:
-            try:
-                started = await hsr_quiz_coordinator.start(
-                    group_id=group_id,
-                    user_id=user_id,
-                    nickname=nickname,
-                    send=ambient.send,
-                )
-            except Exception:
-                logger.exception("[mantou-affection] 发起星穹铁道问答失败")
-                started = False
-            if started:
-                return await note_activity()
-
-        try:
-            zzz_quiz_ready = await service.zzz_quiz_triggered()
-        except Exception:
-            logger.exception("[mantou-affection] 判定绝区零问答失败")
-            zzz_quiz_ready = False
-        if zzz_quiz_ready:
-            try:
-                started = await zzz_quiz_coordinator.start(
-                    group_id=group_id,
-                    user_id=user_id,
-                    nickname=nickname,
-                    send=ambient.send,
-                )
-            except Exception:
-                logger.exception("[mantou-affection] 发起绝区零问答失败")
-                started = False
-            if started:
-                return await note_activity()
-
-        try:
-            petit_planet_ready = await service.petit_planet_quiz_triggered()
-        except Exception:
-            logger.exception("[mantou-affection] 判定星布谷地问答失败")
-            petit_planet_ready = False
-        if petit_planet_ready:
-            try:
-                started = await petit_planet_quiz_coordinator.start(
-                    group_id=group_id,
-                    user_id=user_id,
-                    nickname=nickname,
-                    send=ambient.send,
-                )
-            except Exception:
-                logger.exception("[mantou-affection] 发起星布谷地问答失败")
-                started = False
-            if started:
-                return await note_activity()
-
-        try:
-            fill_blank_ready = await service.fill_blank_triggered()
-        except Exception:
-            logger.exception("[mantou-affection] 判定补句问答失败")
-            fill_blank_ready = False
-        if fill_blank_ready:
-            try:
-                started = await fill_blank_coordinator.start(
-                    group_id=group_id,
-                    user_id=user_id,
-                    nickname=nickname,
-                    send=ambient.send,
-                )
-            except Exception:
-                logger.exception("[mantou-affection] 发起补句问答失败")
-                started = False
-            if started:
-                return await note_activity()
-
-        try:
-            whoami_ready = await service.whoami_triggered()
-        except Exception:
-            logger.exception("[mantou-affection] 判定我是谁失败")
-            whoami_ready = False
-        if whoami_ready:
-            try:
-                started = await whoami_coordinator.start(
-                    group_id=group_id,
-                    user_id=user_id,
-                    nickname=nickname,
-                    send=ambient.send,
-                )
-            except Exception:
-                logger.exception("[mantou-affection] 发起我是谁失败")
-                started = False
-            if started:
-                return await note_activity()
+                logger.exception("[mantou-affection] 事件转盘开局失败")
+                slot = None
+            if slot is not None:
+                # 转到馒头小动作只算冒个泡 不占限流额度
+                if slot != EVENT_WHEEL_AMBIENT:
+                    await note_activity()
+                return
 
         if await try_wheel():
-            return await note_activity()
-
-        try:
-            text = await service.ambient_reaction(group_id, user_id)
-        except Exception:
-            logger.exception("[mantou-affection] 抽取馒头小动作失败")
-            return
-        if not text:
-            return
-
-        pending = None
-        if coordinator.triggered():
-            pending = coordinator.start(group_id, user_id, nickname)
-        if pending is not None:
-            try:
-                await ambient.send(
-                    MessageSegment.at(event.user_id)
-                    + MessageSegment.text(f" {coordinator.event_message(pending)}")
-                )
-            except Exception:
-                logger.exception("[mantou-affection] 发送随机事件失败")
-                coordinator.discard(group_id)
-            else:
-                coordinator.schedule(
-                    pending,
-                    group_id=group_id,
-                    send=ambient.send,
-                    timeout=config.mantou_affection_event_timeout,
-                )
-                return await note_activity()
-
-        try:
-            await ambient.send(MessageSegment.at(event.user_id) + MessageSegment.text(f" {text}"))
-        except Exception:
-            logger.exception("[mantou-affection] 发送馒头小动作失败")
+            await note_activity()
 
     return ambient, answer
 

@@ -11,16 +11,15 @@ from nonebot.permission import SUPERUSER
 from nonebot.rule import Rule
 
 from .config import Config
+from .event_wheel import EVENT_WHEEL_SLOTS
 from .image_processing import ImageProcessingCoordinator
 from .logic import level_for, progress_text
 from .parsing import (
-    FIND_CHAR_CHANCE_USAGE,
     PROBABILITY_BATCH_RESET,
     PROBABILITY_BATCH_SCALE,
     parse_adjustment,
     parse_event_limit_count,
     parse_event_limit_toggle,
-    parse_find_char_chances,
     parse_probability,
     parse_probability_batch,
 )
@@ -45,32 +44,12 @@ from .whoami import (
     WhoAmICoordinator,
 )
 
-BET_CHANCE_USAGE = (
-    "请输入 0~1 的小数（如 0.0005）或百分数（如 0.05%），0 即关闭馒头博弈"
+EVENT_WHEEL_CHANCE_USAGE = (
+    "请输入 0~1 的小数（如 0.015）或百分数（如 1.5%），0 即关闭事件转盘"
 )
-PK_CHANCE_USAGE = "请输入 0~1 的小数（如 0.01）或百分数（如 1%），0 即关闭馒头问答"
-GROUP_QUIZ_CHANCE_USAGE = (
-    "请输入 0~1 的小数（如 0.0005）或百分数（如 0.05%），0 即关闭群友问答"
+WHEEL_CHANCE_USAGE = (
+    "请输入 0~1 的小数或百分数（如 0.1%），0 即关闭馒头转盘的独立触发"
 )
-TEYVAT_CHANCE_USAGE = (
-    "请输入 0~1 的小数（如 0.0005）或百分数（如 0.05%），0 即关闭提瓦特问答"
-)
-HSR_CHANCE_USAGE = (
-    "请输入 0~1 的小数（如 0.0005）或百分数（如 0.05%），0 即关闭星穹铁道问答"
-)
-ZZZ_CHANCE_USAGE = (
-    "请输入 0~1 的小数（如 0.0005）或百分数（如 0.05%），0 即关闭绝区零问答"
-)
-PETIT_PLANET_CHANCE_USAGE = (
-    "请输入 0~1 的小数（如 0.0005）或百分数（如 0.05%），0 即关闭星布谷地问答"
-)
-FILL_BLANK_CHANCE_USAGE = (
-    "请输入 0~1 的小数（如 0.0005）或百分数（如 0.05%），0 即关闭补句问答"
-)
-WHOAMI_CHANCE_USAGE = (
-    "请输入 0~1 的小数（如 0.0005）或百分数（如 0.05%），0 即关闭我是谁"
-)
-WHEEL_CHANCE_USAGE = "请输入 0~1 的小数或百分数（如 0.1%），0 即关闭馒头转盘"
 WALLPAPER_USAGE = (
     "用法：/馒头壁纸 [官方/二创] [原神/星铁/绝区零]\n"
     "不带参数抽官方壁纸；加「二创」改成抽二创图，可再跟一个游戏名"
@@ -105,8 +84,8 @@ STICKER_TEST_SEND_FAILED_REPLY = (
 )
 PROBABILITY_BATCH_USAGE = (
     "用法：\n"
-    "/馒头概率总调 0.05% —— 全部统一设为该值\n"
-    "/馒头概率总调 ×2 —— 全部按当前值缩放（支持 ×50%）\n"
+    "/馒头概率总调 1.5% —— 事件转盘和馒头转盘统一设为该值\n"
+    "/馒头概率总调 ×2 —— 两项按当前值缩放（支持 ×50%）\n"
     "/馒头概率总调 重置 —— 清除覆盖，恢复配置默认"
 )
 MEMBER_HELP_LINES: tuple[str, ...] = (
@@ -122,21 +101,11 @@ MEMBER_HELP_LINES: tuple[str, ...] = (
 ADMIN_HELP_LINES: tuple[str, ...] = (
     "/馒头好感调整 @群友 +10 —— 手动增减好感",
     "/馒头好感重置 确认 —— 清空所有群的好感数据",
-    "/馒头反应概率 5% —— 查看或调整馒头小动作概率",
-    "/馒头找字概率 5% —— 查看或调整找字概率"
-    "（可写「群消息 5% 戳一戳 2%」）",
-    "/馒头博弈概率 0.05% —— 查看或调整博弈开局概率",
-    "/馒头问答概率 1% —— 查看或调整桃子问答概率",
+    "/馒头事件转盘概率 1.5% —— 查看或调整事件转盘概率"
+    "（13 项活动的统一入口）",
+    "/馒头转盘概率 0.1% —— 查看或调整命运齿轮的独立触发概率",
     "/馒头问答题库 —— 查看题库余量",
-    "/馒头群友问答概率 0.05% —— 查看或调整群友问答概率",
-    "/馒头提瓦特概率 0.05% —— 查看或调整提瓦特问答概率",
-    "/馒头星铁概率 0.05% —— 查看或调整星穹铁道问答概率",
-    "/馒头绝区零概率 0.05% —— 查看或调整绝区零问答概率",
-    "/馒头星布谷地概率 0.05% —— 查看或调整星布谷地问答概率",
-    "/馒头补句概率 0.05% —— 查看或调整补句问答概率",
-    "/馒头我是谁概率 0.05% —— 查看或调整我是谁的出现概率",
-    "/馒头转盘概率 0.1% —— 查看或调整命运齿轮概率",
-    "/馒头概率总调 —— 总览全部概率；带数值统一设置，"
+    "/馒头概率总调 —— 总览事件转盘和馒头转盘两个概率；带数值统一设置，"
     "×倍率缩放，重置恢复默认",
     "/馒头壁纸 [官方/二创] [原神/星铁/绝区零] —— 手动抽一张壁纸",
     "/馒头表情包 —— 从配置目录抽一张，自检表情包素材是否可用",
@@ -147,7 +116,8 @@ ADMIN_HELP_LINES: tuple[str, ...] = (
     "/馒头强制事件 @群友 —— 回复 1~13 强制开一场活动",
 )
 HELP_FOOTER = (
-    "提示：概率命令不带参数就查看当前值，0 即关闭对应活动；"
+    "提示：群消息的随机活动统一由「事件转盘」触发，转到哪一项就开哪一项，"
+    "命运齿轮转盘另有独立触发；概率命令不带参数就查看当前值，0 即关闭；"
     f"事件限制开启后每群每 {EVENT_LIMIT_WINDOW_HOURS} 小时最多触发限定次数的活动，"
     "达到上限后自动活动"
     "（含小动作）会暂停到额度恢复，答题、主动命令和 /馒头强制事件 不受影响；"
@@ -270,36 +240,15 @@ def register_commands(
         priority=10,
         block=True,
     )
-    probability_cmd = on_command(
-        "馒头反应概率",
-        aliases={"馒头小动作概率"},
-        permission=SUPERUSER,
-        priority=10,
-        block=True,
-    )
-    find_char_cmd = on_command(
-        "馒头找字概率",
-        aliases={"馒头找字触发概率"},
-        permission=SUPERUSER,
-        priority=10,
-        block=True,
-    )
-    bet_cmd = on_command(
-        "馒头博弈概率",
-        aliases={"馒头博弈触发概率"},
-        permission=SUPERUSER,
-        priority=10,
-        block=True,
-    )
-    pk_probability_cmd = on_command(
-        "馒头问答概率",
-        aliases={"馒头问答触发概率"},
-        permission=SUPERUSER,
-        priority=10,
-        block=True,
-    )
     pk_bank_cmd = on_command(
         "馒头问答题库",
+        permission=SUPERUSER,
+        priority=10,
+        block=True,
+    )
+    event_wheel_cmd = on_command(
+        "馒头事件转盘概率",
+        aliases={"馒头事件转盘触发概率", "馒头事件概率"},
         permission=SUPERUSER,
         priority=10,
         block=True,
@@ -311,59 +260,10 @@ def register_commands(
         priority=10,
         block=True,
     )
-    group_quiz_cmd = on_command(
-        "馒头群友问答概率",
-        aliases={"馒头群友问答触发概率"},
-        permission=SUPERUSER,
-        priority=10,
-        block=True,
-    )
-    teyvat_quiz_cmd = on_command(
-        "馒头提瓦特概率",
-        aliases={"馒头提瓦特问答概率", "馒头提瓦特触发概率"},
-        permission=SUPERUSER,
-        priority=10,
-        block=True,
-    )
-    hsr_quiz_cmd = on_command(
-        "馒头星铁概率",
-        aliases={"馒头星穹铁道概率", "馒头星铁问答概率"},
-        permission=SUPERUSER,
-        priority=10,
-        block=True,
-    )
-    zzz_quiz_cmd = on_command(
-        "馒头绝区零概率",
-        aliases={"馒头绝区零问答概率", "馒头ZZZ概率"},
-        permission=SUPERUSER,
-        priority=10,
-        block=True,
-    )
-    petit_planet_quiz_cmd = on_command(
-        "馒头星布谷地概率",
-        aliases={"馒头星布谷地问答概率", "馒头谷地概率"},
-        permission=SUPERUSER,
-        priority=10,
-        block=True,
-    )
-    fill_blank_cmd = on_command(
-        "馒头补句概率",
-        aliases={"馒头补句触发概率"},
-        permission=SUPERUSER,
-        priority=10,
-        block=True,
-    )
     whoami_cmd = on_command(
         "馒头我是谁",
         aliases={"馒头猜猜我是谁", "馒头猜角色", "馒头猜猜看"},
         rule=GROUP_ONLY,
-        priority=10,
-        block=True,
-    )
-    whoami_chance_cmd = on_command(
-        "馒头我是谁概率",
-        aliases={"馒头猜猜概率", "馒头猜角色概率"},
-        permission=SUPERUSER,
         priority=10,
         block=True,
     )
@@ -557,138 +457,6 @@ def register_commands(
             return
         await reset_cmd.finish(f"已重置全部好感度数据，共清空 {count} 条群友档案。")
 
-    @probability_cmd.handle()
-    async def handle_probability(args: Message = CommandArg()) -> None:
-        raw = args.extract_plain_text().strip()
-        if not raw:
-            try:
-                current = await service.ambient_probability()
-            except Exception:
-                logger.exception("[mantou-affection] 读取小动作概率失败")
-                await probability_cmd.finish("读取失败，请检查数据目录权限后重试。")
-                return
-            await probability_cmd.finish(
-                f"当前馒头小动作概率：{_format_probability(current)}"
-            )
-            return
-        try:
-            value = parse_probability(raw)
-        except ValueError as error:
-            await probability_cmd.finish(str(error))
-            return
-        try:
-            await service.set_ambient_probability(value)
-        except Exception:
-            logger.exception("[mantou-affection] 保存小动作概率失败")
-            await probability_cmd.finish("保存失败，请检查数据目录权限后重试。")
-            return
-        await probability_cmd.finish(
-            f"馒头小动作概率已调整为 {_format_probability(value)}"
-        )
-
-    @find_char_cmd.handle()
-    async def handle_find_char_chance(args: Message = CommandArg()) -> None:
-        raw = args.extract_plain_text().strip()
-        if not raw:
-            try:
-                group_chance, poke_chance = await service.find_char_chances()
-            except Exception:
-                logger.exception("[mantou-affection] 读取找字概率失败")
-                await find_char_cmd.finish("读取失败，请检查数据目录权限后重试。")
-                return
-            await find_char_cmd.finish(
-                "当前找字小游戏概率——\n"
-                f"群消息：{_format_probability(group_chance)}\n"
-                f"戳一戳：{_format_probability(poke_chance)}\n"
-                f"用法：{FIND_CHAR_CHANCE_USAGE}"
-            )
-            return
-        try:
-            wanted = parse_find_char_chances(raw)
-        except ValueError as error:
-            await find_char_cmd.finish(str(error))
-            return
-        try:
-            await service.set_find_char_chances(group=wanted.group, poke=wanted.poke)
-        except Exception:
-            logger.exception("[mantou-affection] 保存找字概率失败")
-            await find_char_cmd.finish("保存失败，请检查数据目录权限后重试。")
-            return
-        lines = ["馒头找字概率已调整——"]
-        if wanted.group is not None:
-            lines.append(f"群消息：{_format_probability(wanted.group)}")
-        if wanted.poke is not None:
-            lines.append(f"戳一戳：{_format_probability(wanted.poke)}")
-        await find_char_cmd.finish("\n".join(lines))
-
-    @bet_cmd.handle()
-    async def handle_bet_probability(args: Message = CommandArg()) -> None:
-        raw = args.extract_plain_text().strip()
-        if not raw:
-            try:
-                current = await service.bet_probability()
-                override = await service.bet_probability_override()
-            except Exception:
-                logger.exception("[mantou-affection] 读取博弈概率失败")
-                await bet_cmd.finish("读取失败，请检查数据目录权限后重试。")
-                return
-            default = config.mantou_affection_bet_chance
-            if override is None:
-                source = f"配置默认 {_format_probability(default)}"
-            else:
-                source = f"运行时覆盖，配置默认 {_format_probability(default)}"
-            await bet_cmd.finish(
-                f"当前馒头博弈概率：{_format_probability(current)}（{source}）\n"
-                f"用法：{BET_CHANCE_USAGE}"
-            )
-            return
-        try:
-            value = parse_probability(raw)
-        except ValueError as error:
-            await bet_cmd.finish(f"{error}。{BET_CHANCE_USAGE}")
-            return
-        try:
-            await service.set_bet_probability(value)
-        except Exception:
-            logger.exception("[mantou-affection] 保存博弈概率失败")
-            await bet_cmd.finish("保存失败，请检查数据目录权限后重试。")
-            return
-        await bet_cmd.finish(f"馒头博弈概率已调整为 {_format_probability(value)}")
-
-    @pk_probability_cmd.handle()
-    async def handle_pk_probability(args: Message = CommandArg()) -> None:
-        raw = args.extract_plain_text().strip()
-        if not raw:
-            try:
-                current = await service.pk_probability()
-                override = await service.pk_probability_override()
-            except Exception:
-                logger.exception("[mantou-affection] 读取问答概率失败")
-                await pk_probability_cmd.finish("读取失败，请检查数据目录权限后重试。")
-                return
-            default = config.mantou_affection_pk_chance
-            if override is None:
-                source = f"配置默认 {_format_probability(default)}"
-            else:
-                source = f"运行时覆盖，配置默认 {_format_probability(default)}"
-            await pk_probability_cmd.finish(
-                f"当前馒头问答概率：{_format_probability(current)}（{source}）\n"
-                f"用法：{PK_CHANCE_USAGE}"
-            )
-            return
-        try:
-            value = parse_probability(raw)
-        except ValueError as error:
-            await pk_probability_cmd.finish(f"{error}。{PK_CHANCE_USAGE}")
-            return
-        try:
-            await service.set_pk_probability(value)
-        except Exception:
-            logger.exception("[mantou-affection] 保存问答概率失败")
-            await pk_probability_cmd.finish("保存失败，请检查数据目录权限后重试。")
-            return
-        await pk_probability_cmd.finish(f"馒头问答概率已调整为 {_format_probability(value)}")
-
     @pk_bank_cmd.handle()
     async def handle_pk_bank() -> None:
         try:
@@ -699,295 +467,6 @@ def register_commands(
             return
         await pk_bank_cmd.finish(
             f"问答题库：还剩 {remaining}/{pk_coordinator.total_questions} 题"
-        )
-
-    @wheel_cmd.handle()
-    async def handle_wheel_probability(args: Message = CommandArg()) -> None:
-        raw = args.extract_plain_text().strip()
-        if not raw:
-            try:
-                current = await service.wheel_probability()
-                override = await service.wheel_probability_override()
-            except Exception:
-                logger.exception("[mantou-affection] 读取转盘概率失败")
-                await wheel_cmd.finish("读取失败，请检查数据目录权限后重试。")
-                return
-            default = config.mantou_affection_wheel_chance
-            if override is None:
-                source = f"配置默认 {_format_probability(default)}"
-            else:
-                source = f"运行时覆盖，配置默认 {_format_probability(default)}"
-            await wheel_cmd.finish(
-                f"当前馒头转盘概率：{_format_probability(current)}（{source}）\n"
-                f"用法：{WHEEL_CHANCE_USAGE}"
-            )
-            return
-        try:
-            value = parse_probability(raw)
-        except ValueError as error:
-            await wheel_cmd.finish(f"{error}。{WHEEL_CHANCE_USAGE}")
-            return
-        try:
-            await service.set_wheel_probability(value)
-        except Exception:
-            logger.exception("[mantou-affection] 保存转盘概率失败")
-            await wheel_cmd.finish("保存失败，请检查数据目录权限后重试。")
-            return
-        await wheel_cmd.finish(f"馒头转盘概率已调整为 {_format_probability(value)}")
-
-    @group_quiz_cmd.handle()
-    async def handle_group_quiz_probability(args: Message = CommandArg()) -> None:
-        raw = args.extract_plain_text().strip()
-        if not raw:
-            try:
-                current = await service.group_quiz_probability()
-                override = await service.group_quiz_probability_override()
-            except Exception:
-                logger.exception("[mantou-affection] 读取群友问答概率失败")
-                await group_quiz_cmd.finish("读取失败，请检查数据目录权限后重试。")
-                return
-            default = config.mantou_affection_group_quiz_chance
-            if override is None:
-                source = f"配置默认 {_format_probability(default)}"
-            else:
-                source = f"运行时覆盖，配置默认 {_format_probability(default)}"
-            await group_quiz_cmd.finish(
-                f"当前群友问答概率：{_format_probability(current)}（{source}）\n"
-                f"用法：{GROUP_QUIZ_CHANCE_USAGE}"
-            )
-            return
-        try:
-            value = parse_probability(raw)
-        except ValueError as error:
-            await group_quiz_cmd.finish(f"{error}。{GROUP_QUIZ_CHANCE_USAGE}")
-            return
-        try:
-            await service.set_group_quiz_probability(value)
-        except Exception:
-            logger.exception("[mantou-affection] 保存群友问答概率失败")
-            await group_quiz_cmd.finish("保存失败，请检查数据目录权限后重试。")
-            return
-        await group_quiz_cmd.finish(
-            f"群友问答概率已调整为 {_format_probability(value)}"
-        )
-
-    @teyvat_quiz_cmd.handle()
-    async def handle_teyvat_quiz_probability(args: Message = CommandArg()) -> None:
-        raw = args.extract_plain_text().strip()
-        if not raw:
-            try:
-                current = await service.teyvat_quiz_probability()
-                override = await service.teyvat_quiz_probability_override()
-            except Exception:
-                logger.exception("[mantou-affection] 读取提瓦特问答概率失败")
-                await teyvat_quiz_cmd.finish("读取失败，请检查数据目录权限后重试。")
-                return
-            default = config.mantou_affection_teyvat_chance
-            if override is None:
-                source = f"配置默认 {_format_probability(default)}"
-            else:
-                source = f"运行时覆盖，配置默认 {_format_probability(default)}"
-            await teyvat_quiz_cmd.finish(
-                f"当前提瓦特问答概率：{_format_probability(current)}（{source}）\n"
-                f"用法：{TEYVAT_CHANCE_USAGE}"
-            )
-            return
-        try:
-            value = parse_probability(raw)
-        except ValueError as error:
-            await teyvat_quiz_cmd.finish(f"{error}。{TEYVAT_CHANCE_USAGE}")
-            return
-        try:
-            await service.set_teyvat_quiz_probability(value)
-        except Exception:
-            logger.exception("[mantou-affection] 保存提瓦特问答概率失败")
-            await teyvat_quiz_cmd.finish("保存失败，请检查数据目录权限后重试。")
-            return
-        await teyvat_quiz_cmd.finish(
-            f"提瓦特问答概率已调整为 {_format_probability(value)}"
-        )
-
-    @hsr_quiz_cmd.handle()
-    async def handle_hsr_quiz_probability(args: Message = CommandArg()) -> None:
-        raw = args.extract_plain_text().strip()
-        if not raw:
-            try:
-                current = await service.hsr_quiz_probability()
-                override = await service.hsr_quiz_probability_override()
-            except Exception:
-                logger.exception("[mantou-affection] 读取星穹铁道问答概率失败")
-                await hsr_quiz_cmd.finish("读取失败，请检查数据目录权限后重试。")
-                return
-            default = config.mantou_affection_hsr_chance
-            source = (
-                f"配置默认 {_format_probability(default)}"
-                if override is None
-                else f"运行时覆盖，配置默认 {_format_probability(default)}"
-            )
-            await hsr_quiz_cmd.finish(
-                f"当前星穹铁道问答概率：{_format_probability(current)}（{source}）\n"
-                f"用法：{HSR_CHANCE_USAGE}"
-            )
-            return
-        try:
-            value = parse_probability(raw)
-        except ValueError as error:
-            await hsr_quiz_cmd.finish(f"{error}。{HSR_CHANCE_USAGE}")
-            return
-        try:
-            await service.set_hsr_quiz_probability(value)
-        except Exception:
-            logger.exception("[mantou-affection] 保存星穹铁道问答概率失败")
-            await hsr_quiz_cmd.finish("保存失败，请检查数据目录权限后重试。")
-            return
-        await hsr_quiz_cmd.finish(
-            f"星穹铁道问答概率已调整为 {_format_probability(value)}"
-        )
-
-    @zzz_quiz_cmd.handle()
-    async def handle_zzz_quiz_probability(args: Message = CommandArg()) -> None:
-        raw = args.extract_plain_text().strip()
-        if not raw:
-            try:
-                current = await service.zzz_quiz_probability()
-                override = await service.zzz_quiz_probability_override()
-            except Exception:
-                logger.exception("[mantou-affection] 读取绝区零问答概率失败")
-                await zzz_quiz_cmd.finish("读取失败，请检查数据目录权限后重试。")
-                return
-            default = config.mantou_affection_zzz_chance
-            source = (
-                f"配置默认 {_format_probability(default)}"
-                if override is None
-                else f"运行时覆盖，配置默认 {_format_probability(default)}"
-            )
-            await zzz_quiz_cmd.finish(
-                f"当前绝区零问答概率：{_format_probability(current)}（{source}）\n"
-                f"用法：{ZZZ_CHANCE_USAGE}"
-            )
-            return
-        try:
-            value = parse_probability(raw)
-        except ValueError as error:
-            await zzz_quiz_cmd.finish(f"{error}。{ZZZ_CHANCE_USAGE}")
-            return
-        try:
-            await service.set_zzz_quiz_probability(value)
-        except Exception:
-            logger.exception("[mantou-affection] 保存绝区零问答概率失败")
-            await zzz_quiz_cmd.finish("保存失败，请检查数据目录权限后重试。")
-            return
-        await zzz_quiz_cmd.finish(
-            f"绝区零问答概率已调整为 {_format_probability(value)}"
-        )
-
-    @petit_planet_quiz_cmd.handle()
-    async def handle_petit_planet_quiz_probability(args: Message = CommandArg()) -> None:
-        raw = args.extract_plain_text().strip()
-        if not raw:
-            try:
-                current = await service.petit_planet_quiz_probability()
-                override = await service.petit_planet_quiz_probability_override()
-            except Exception:
-                logger.exception("[mantou-affection] 读取星布谷地问答概率失败")
-                await petit_planet_quiz_cmd.finish("读取失败，请检查数据目录权限后重试。")
-                return
-            default = config.mantou_affection_petit_planet_chance
-            source = (
-                f"配置默认 {_format_probability(default)}"
-                if override is None
-                else f"运行时覆盖，配置默认 {_format_probability(default)}"
-            )
-            await petit_planet_quiz_cmd.finish(
-                f"当前星布谷地问答概率：{_format_probability(current)}（{source}）\n"
-                f"用法：{PETIT_PLANET_CHANCE_USAGE}"
-            )
-            return
-        try:
-            value = parse_probability(raw)
-        except ValueError as error:
-            await petit_planet_quiz_cmd.finish(f"{error}。{PETIT_PLANET_CHANCE_USAGE}")
-            return
-        try:
-            await service.set_petit_planet_quiz_probability(value)
-        except Exception:
-            logger.exception("[mantou-affection] 保存星布谷地问答概率失败")
-            await petit_planet_quiz_cmd.finish("保存失败，请检查数据目录权限后重试。")
-            return
-        await petit_planet_quiz_cmd.finish(
-            f"星布谷地问答概率已调整为 {_format_probability(value)}"
-        )
-
-    @fill_blank_cmd.handle()
-    async def handle_fill_blank_probability(args: Message = CommandArg()) -> None:
-        raw = args.extract_plain_text().strip()
-        if not raw:
-            try:
-                current = await service.fill_blank_probability()
-                override = await service.fill_blank_probability_override()
-            except Exception:
-                logger.exception("[mantou-affection] 读取补句问答概率失败")
-                await fill_blank_cmd.finish("读取失败，请检查数据目录权限后重试。")
-                return
-            default = config.mantou_affection_fill_blank_chance
-            if override is None:
-                source = f"配置默认 {_format_probability(default)}"
-            else:
-                source = f"运行时覆盖，配置默认 {_format_probability(default)}"
-            await fill_blank_cmd.finish(
-                f"当前补句问答概率：{_format_probability(current)}（{source}）\n"
-                f"用法：{FILL_BLANK_CHANCE_USAGE}"
-            )
-            return
-        try:
-            value = parse_probability(raw)
-        except ValueError as error:
-            await fill_blank_cmd.finish(f"{error}。{FILL_BLANK_CHANCE_USAGE}")
-            return
-        try:
-            await service.set_fill_blank_probability(value)
-        except Exception:
-            logger.exception("[mantou-affection] 保存补句问答概率失败")
-            await fill_blank_cmd.finish("保存失败，请检查数据目录权限后重试。")
-            return
-        await fill_blank_cmd.finish(
-            f"补句问答概率已调整为 {_format_probability(value)}"
-        )
-
-    @whoami_chance_cmd.handle()
-    async def handle_whoami_probability(args: Message = CommandArg()) -> None:
-        raw = args.extract_plain_text().strip()
-        if not raw:
-            try:
-                current = await service.whoami_probability()
-                override = await service.whoami_probability_override()
-            except Exception:
-                logger.exception("[mantou-affection] 读取我是谁概率失败")
-                await whoami_chance_cmd.finish("读取失败，请检查数据目录权限后重试。")
-                return
-            default = config.mantou_affection_whoami_chance
-            if override is None:
-                source = f"配置默认 {_format_probability(default)}"
-            else:
-                source = f"运行时覆盖，配置默认 {_format_probability(default)}"
-            await whoami_chance_cmd.finish(
-                f"当前我是谁概率：{_format_probability(current)}（{source}）\n"
-                f"用法：{WHOAMI_CHANCE_USAGE}"
-            )
-            return
-        try:
-            value = parse_probability(raw)
-        except ValueError as error:
-            await whoami_chance_cmd.finish(f"{error}。{WHOAMI_CHANCE_USAGE}")
-            return
-        try:
-            await service.set_whoami_probability(value)
-        except Exception:
-            logger.exception("[mantou-affection] 保存我是谁概率失败")
-            await whoami_chance_cmd.finish("保存失败，请检查数据目录权限后重试。")
-            return
-        await whoami_chance_cmd.finish(
-            f"我是谁概率已调整为 {_format_probability(value)}"
         )
 
     @batch_probability_cmd.handle()
@@ -1068,6 +547,86 @@ def register_commands(
             f"{_format_probability(request.value)}"
             "（发送 /馒头概率总调 重置 可恢复默认）。"
         )
+
+    @event_wheel_cmd.handle()
+    async def handle_event_wheel_chance(args: Message = CommandArg()) -> None:
+        raw = args.extract_plain_text().strip()
+        if not raw:
+            try:
+                current = await service.event_wheel_probability()
+                override = await service.event_wheel_probability_override()
+            except Exception:
+                logger.exception("[mantou-affection] 读取事件转盘概率失败")
+                await event_wheel_cmd.finish("读取失败，请检查数据目录权限后重试。")
+                return
+            default = config.mantou_affection_event_wheel_chance
+            source = (
+                f"配置默认 {_format_probability(default)}"
+                if override is None
+                else f"运行时覆盖，配置默认 {_format_probability(default)}"
+            )
+            slot_lines = "\n".join(
+                f"{index}. {slot.label}"
+                for index, slot in enumerate(EVENT_WHEEL_SLOTS, start=1)
+            )
+            await event_wheel_cmd.finish(
+                f"当前事件转盘概率：{_format_probability(current)}（{source}）\n"
+                f"转盘里 {len(EVENT_WHEEL_SLOTS)} 项，每次只转当前能开的那几项、等概率：\n"
+                f"{slot_lines}\n"
+                f"馒头转盘另有独立触发，可用 /馒头转盘概率 查看。\n"
+                f"用法：{EVENT_WHEEL_CHANCE_USAGE}"
+            )
+            return
+        try:
+            value = parse_probability(raw)
+        except ValueError as error:
+            await event_wheel_cmd.finish(f"{error}。{EVENT_WHEEL_CHANCE_USAGE}")
+            return
+        try:
+            await service.set_event_wheel_probability(value)
+        except Exception:
+            logger.exception("[mantou-affection] 保存事件转盘概率失败")
+            await event_wheel_cmd.finish("保存失败，请检查数据目录权限后重试。")
+            return
+        await event_wheel_cmd.finish(
+            f"事件转盘概率已调整为 {_format_probability(value)}"
+        )
+
+    @wheel_cmd.handle()
+    async def handle_wheel_probability(args: Message = CommandArg()) -> None:
+        raw = args.extract_plain_text().strip()
+        if not raw:
+            try:
+                current = await service.wheel_probability()
+                override = await service.wheel_probability_override()
+            except Exception:
+                logger.exception("[mantou-affection] 读取转盘概率失败")
+                await wheel_cmd.finish("读取失败，请检查数据目录权限后重试。")
+                return
+            default = config.mantou_affection_wheel_chance
+            if override is None:
+                source = f"配置默认 {_format_probability(default)}"
+            else:
+                source = f"运行时覆盖，配置默认 {_format_probability(default)}"
+            await wheel_cmd.finish(
+                f"当前馒头转盘概率：{_format_probability(current)}（{source}）\n"
+                "这个概率和事件转盘互相独立：馒头转盘既可能被事件转盘转到，"
+                "也会按这个概率单独触发。\n"
+                f"用法：{WHEEL_CHANCE_USAGE}"
+            )
+            return
+        try:
+            value = parse_probability(raw)
+        except ValueError as error:
+            await wheel_cmd.finish(f"{error}。{WHEEL_CHANCE_USAGE}")
+            return
+        try:
+            await service.set_wheel_probability(value)
+        except Exception:
+            logger.exception("[mantou-affection] 保存转盘概率失败")
+            await wheel_cmd.finish("保存失败，请检查数据目录权限后重试。")
+            return
+        await wheel_cmd.finish(f"馒头转盘概率已调整为 {_format_probability(value)}")
 
     @event_limit_toggle_cmd.handle()
     async def handle_event_limit_toggle(
@@ -1336,25 +895,15 @@ def register_commands(
         help_cmd,
         adjust_cmd,
         reset_cmd,
-        probability_cmd,
-        find_char_cmd,
-        bet_cmd,
-        pk_probability_cmd,
-        pk_bank_cmd,
+        event_wheel_cmd,
         wheel_cmd,
-        group_quiz_cmd,
+        pk_bank_cmd,
         batch_probability_cmd,
-        fill_blank_cmd,
-        teyvat_quiz_cmd,
-        hsr_quiz_cmd,
-        zzz_quiz_cmd,
-        petit_planet_quiz_cmd,
         event_limit_toggle_cmd,
         event_limit_count_cmd,
         admin_help_cmd,
         wallpaper_cmd,
         sticker_test_cmd,
         whoami_cmd,
-        whoami_chance_cmd,
         image_cmd,
     )

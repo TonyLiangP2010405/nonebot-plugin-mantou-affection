@@ -19,6 +19,10 @@ from nonebot_plugin_mantou_affection.ambient import (
 )
 from nonebot_plugin_mantou_affection.config import Config
 from nonebot_plugin_mantou_affection.copywriting import AffectionTextLibrary
+from nonebot_plugin_mantou_affection.event_wheel import (
+    EVENT_WHEEL_AMBIENT,
+    EVENT_WHEEL_EVENT,
+)
 from nonebot_plugin_mantou_affection.events import EventLibrary
 from nonebot_plugin_mantou_affection.models import Profile
 from nonebot_plugin_mantou_affection.service import AffectionService
@@ -39,6 +43,18 @@ class FixedRng(random.Random):
 
     def random(self) -> float:
         return self.value
+
+
+class FixedSlotRng(random.Random):
+    """让事件转盘固定转到指定格子，用来测「转到哪项就开哪项」。"""
+
+    def __init__(self, slot: str):
+        super().__init__(0)
+        self.slot = slot
+
+    def choice(self, seq):
+        items = list(seq)
+        return self.slot if self.slot in items else items[0]
 
 
 def _event(
@@ -108,8 +124,8 @@ async def _give_affection(service: AffectionService, score: int, user_id: str = 
 def _capture_send(matcher, monkeypatch) -> list[Message]:
     sent: list[Message] = []
 
-    async def fake_send(message: Message) -> None:
-        sent.append(message)
+    async def fake_send(message) -> None:
+        sent.append(message if isinstance(message, Message) else Message(message))
 
     monkeypatch.setattr(matcher, "send", fake_send)
     return sent
@@ -124,7 +140,8 @@ def _setup(
     rng = config_kwargs.pop("coordinator_rng", random.Random(0))
     config_kwargs.setdefault("mantou_affection_wheel_chance", 0.0)
     config_kwargs.setdefault("mantou_affection_newbie_protection_below", 0)
-    config = Config(mantou_affection_ambient_probability=1.0, **config_kwargs)
+    config_kwargs.setdefault("mantou_affection_event_wheel_chance", 0.0)
+    config = Config(**config_kwargs)
     service = _service(tmp_path, AffectionTextLibrary(bundled_texts_path), config)
     coordinator = _coordinator(service, config, bundled_texts_path, rng=rng)
     ambient, answer = register_ambient(service, config, coordinator)
@@ -190,14 +207,19 @@ async def test_ambient_handler_mentions_sender_with_band_copy(
         "neutral"
     ]
     coordinator, sent, ambient, _answer = _setup(
-        bundled_texts_path, tmp_path, monkeypatch, mantou_affection_ambient_event_ratio=0.0
+        bundled_texts_path,
+        tmp_path,
+        monkeypatch,
+        coordinator_rng=FixedSlotRng(EVENT_WHEEL_AMBIENT),
+        mantou_affection_event_wheel_chance=1.0,
     )
     await _give_affection(coordinator.service, 10)
 
     await ambient.handlers[0].call(_event())
 
-    assert len(sent) == 1
-    message = sent[0]
+    assert len(sent) == 2
+    assert "事件转盘转到了「馒头小动作」" in _body(sent[0])
+    message = sent[1]
     assert [segment.type for segment in message] == ["at", "text"]
     assert message[0].data["qq"] == TRIGGER_ID
     assert message.extract_plain_text().strip() in ambient_copy
@@ -272,37 +294,41 @@ async def test_event_coordinator_includes_wheel_in_group_busy(tmp_path: Path) ->
     assert events.busy(GROUP_ID) is True
 
 
-async def test_zero_event_ratio_keeps_plain_ambient_copy(
-    bundled_texts_path: Path, tmp_path: Path, monkeypatch
-) -> None:
-    coordinator, sent, ambient, _answer = _setup(
-        bundled_texts_path, tmp_path, monkeypatch, mantou_affection_ambient_event_ratio=0.0
-    )
-    await _give_affection(coordinator.service, 10)
-
-    await ambient.handlers[0].call(_event())
-
-    assert len(sent) == 1
-    assert [segment.type for segment in sent[0]] == ["at", "text"]
-    assert coordinator.pending == {}
-
-
-async def test_full_event_ratio_sends_event_message(
+async def test_zero_event_wheel_chance_keeps_group_silent(
     bundled_texts_path: Path, tmp_path: Path, monkeypatch
 ) -> None:
     coordinator, sent, ambient, _answer = _setup(
         bundled_texts_path,
         tmp_path,
         monkeypatch,
-        mantou_affection_ambient_event_ratio=1.0,
+        mantou_affection_event_wheel_chance=0.0,
+    )
+    await _give_affection(coordinator.service, 10)
+
+    await ambient.handlers[0].call(_event())
+
+    assert sent == []
+    assert coordinator.pending == {}
+
+
+async def test_event_wheel_can_land_on_random_event(
+    bundled_texts_path: Path, tmp_path: Path, monkeypatch
+) -> None:
+    coordinator, sent, ambient, _answer = _setup(
+        bundled_texts_path,
+        tmp_path,
+        monkeypatch,
+        coordinator_rng=FixedSlotRng(EVENT_WHEEL_EVENT),
+        mantou_affection_event_wheel_chance=1.0,
         mantou_affection_event_timeout=3,
     )
     await _give_affection(coordinator.service, 10)
 
     await ambient.handlers[0].call(_event())
 
-    assert len(sent) == 1
-    text = _body(sent[0]).strip()
+    assert len(sent) == 2
+    assert "事件转盘转到了「随机事件」" in _body(sent[0])
+    text = _body(sent[1]).strip()
     assert text.startswith("⚡ 触发随机事件！")
     assert "大家都可以回答，直接发送 1、2、3 即可（答题不用@）" in text
     assert "请在 3 秒内作答，被点名的群友超时未答好感度 -5！" in text
@@ -316,14 +342,15 @@ async def test_full_event_ratio_sends_event_message(
     await _cancel_task(coordinator)
 
 
-async def test_running_event_falls_back_to_ambient_copy(
+async def test_event_wheel_stays_silent_when_group_is_busy(
     bundled_texts_path: Path, tmp_path: Path, monkeypatch
 ) -> None:
     coordinator, sent, ambient, _answer = _setup(
         bundled_texts_path,
         tmp_path,
         monkeypatch,
-        mantou_affection_ambient_event_ratio=1.0,
+        coordinator_rng=FixedSlotRng(EVENT_WHEEL_EVENT),
+        mantou_affection_event_wheel_chance=1.0,
         mantou_affection_event_timeout=3,
     )
     await _give_affection(coordinator.service, 10)
@@ -334,8 +361,8 @@ async def test_running_event_falls_back_to_ambient_copy(
     sent.clear()
     await ambient.handlers[0].call(_event(user_id=90003))
 
-    assert len(sent) == 1
-    assert [segment.type for segment in sent[0]] == ["at", "text"]
+    # 本群还有活动没结束时事件转盘直接安静 不公告也不记账
+    assert sent == []
     assert GROUP_ID in coordinator.pending
     await _cancel_task(coordinator)
 

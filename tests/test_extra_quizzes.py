@@ -12,7 +12,6 @@ from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message
 from nonebot.adapters.onebot.v11.event import Sender
 
 from nonebot_plugin_mantou_affection.ambient import EventCoordinator, register_ambient
-from nonebot_plugin_mantou_affection.commands import register_commands
 from nonebot_plugin_mantou_affection.config import Config
 from nonebot_plugin_mantou_affection.hsr_quiz import (
     BUNDLED_HSR_QUIZ_PATH,
@@ -25,7 +24,7 @@ from nonebot_plugin_mantou_affection.petit_planet_quiz import (
     PETIT_PLANET_QUIZ_SPEC,
     PetitPlanetQuizCoordinator,
 )
-from nonebot_plugin_mantou_affection.pk import PkCoordinator, PkQuestionLibrary
+from nonebot_plugin_mantou_affection.pk import PkQuestionLibrary
 from nonebot_plugin_mantou_affection.service import AffectionService
 from nonebot_plugin_mantou_affection.storage import AffectionStore
 from nonebot_plugin_mantou_affection.zzz_quiz import (
@@ -89,6 +88,18 @@ class FixedRng(random.Random):
 
     def random(self) -> float:
         return self.value
+
+
+class FixedSlotRng(random.Random):
+    """让事件转盘固定转到指定格子。"""
+
+    def __init__(self, slot: str):
+        super().__init__(0)
+        self.slot = slot
+
+    def choice(self, seq):
+        items = list(seq)
+        return self.slot if self.slot in items else items[0]
 
 
 def _event(
@@ -247,60 +258,17 @@ async def test_quiz_start_settle_and_timeout(
 
 
 @pytest.mark.parametrize("case,cls,spec,path,command_index,prob_method,attach_name,label", CASES)
-def test_quiz_probability_command(
-    case, cls, spec, path, command_index, prob_method, attach_name, label, tmp_path: Path
-) -> None:
-    service = _service(tmp_path)
-    commands = register_commands(service, Config(), PkCoordinator(service, Config(), None))
-    assert len(commands) == 27
-    command = commands[command_index]
-    assert [handler.call.__name__ for handler in command.handlers] == [
-        f"handle_{attach_name}_probability"
-    ]
-
-
-@pytest.mark.parametrize("case,cls,spec,path,command_index,prob_method,attach_name,label", CASES)
-async def test_quiz_probability_command_reports_and_sets(
+async def test_event_wheel_lands_on_quiz(
     case, cls, spec, path, command_index, prob_method, attach_name, label, tmp_path, monkeypatch
 ) -> None:
-    service = _service(tmp_path)
-    commands = register_commands(service, Config(), PkCoordinator(service, Config(), None))
-    command = commands[command_index]
-    sent: list[str] = []
-
-    async def fake_finish(message: Message | str = "", **kwargs) -> None:
-        sent.append(str(message))
-
-    monkeypatch.setattr(command, "finish", fake_finish)
-    await command.handlers[0].call(Message(""))
-    assert f"当前{label}概率：0.05%" in sent[0]
-    await command.handlers[0].call(Message("2.5%"))
-    assert f"{label}概率已调整为 2.5%" in sent[1]
-    assert await getattr(service, prob_method)() == pytest.approx(0.025)
-
-
-@pytest.mark.parametrize("case,cls,spec,path,command_index,prob_method,attach_name,label", CASES)
-async def test_ambient_starts_quiz(
-    case, cls, spec, path, command_index, prob_method, attach_name, label, tmp_path, monkeypatch
-) -> None:
-    kwargs = {
-        "mantou_affection_find_char_chance": 0.0,
-        "mantou_affection_bet_chance": 0.0,
-        "mantou_affection_pk_chance": 0.0,
-        "mantou_affection_group_quiz_chance": 0.0,
-        "mantou_affection_teyvat_chance": 0.0,
-        "mantou_affection_hsr_chance": 0.0,
-        "mantou_affection_zzz_chance": 0.0,
-        "mantou_affection_petit_planet_chance": 0.0,
-        "mantou_affection_fill_blank_chance": 0.0,
-        "mantou_affection_wheel_chance": 0.0,
-        "mantou_affection_ambient_enabled": False,
-        "mantou_affection_newbie_protection_below": 0,
-    }
-    kwargs[f"mantou_affection_{case}_chance"] = 1.0
-    config = Config(**kwargs)
+    config = Config(
+        mantou_affection_event_wheel_chance=1.0,
+        mantou_affection_wheel_chance=0.0,
+        mantou_affection_ambient_enabled=False,
+        mantou_affection_newbie_protection_below=0,
+    )
     service = _service(tmp_path, config)
-    events = EventCoordinator(service, config)
+    events = EventCoordinator(service, config, rng=FixedSlotRng(attach_name))
     coordinator = cls(service, config, _library(tmp_path), events=events, rng=FixedRng(0.99))
     ambient, _answer = register_ambient(service, config, events, **{attach_name: coordinator})
     sent: list[Message] = []
@@ -312,7 +280,9 @@ async def test_ambient_starts_quiz(
     await ambient.handlers[0].call(_event())
 
     assert GROUP_ID in coordinator.pending
-    assert spec.prefix in sent[-1].extract_plain_text()
+    assert len(sent) == 2
+    assert f"事件转盘转到了「{label}」" in sent[0].extract_plain_text()
+    assert spec.prefix in sent[1].extract_plain_text()
     coordinator.pending[GROUP_ID].task.cancel()
     with suppress(asyncio.CancelledError):
         await coordinator.pending[GROUP_ID].task

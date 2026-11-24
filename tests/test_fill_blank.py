@@ -8,7 +8,6 @@ from pathlib import Path
 from nonebot.adapters.onebot.v11 import Message
 
 from nonebot_plugin_mantou_affection.ambient import EventCoordinator
-from nonebot_plugin_mantou_affection.commands import register_commands
 from nonebot_plugin_mantou_affection.config import Config
 from nonebot_plugin_mantou_affection.fill_blank import (
     BUNDLED_FILL_BLANK_PATH,
@@ -210,7 +209,6 @@ def test_fill_blank_library_skips_invalid_questions(tmp_path: Path) -> None:
 
 def test_fill_blank_defaults() -> None:
     config = Config()
-    assert config.mantou_affection_fill_blank_chance == 0.0005
     assert config.mantou_affection_fill_blank_timeout == 60
 
 
@@ -413,52 +411,3 @@ async def test_fill_blank_answer_after_settlement_is_ignored(tmp_path: Path) -> 
     await asyncio.wait_for(pending.task, 1)
 
     assert await _submit(coordinator, OTHER, "大出货") is False
-
-
-class FixedRng:
-    """固定 random() 返回值，用来精确控制概率判定。"""
-
-    def __init__(self, value: float):
-        self.value = value
-
-    def random(self) -> float:
-        return self.value
-
-
-async def test_fill_blank_triggered_uses_configured_probability(
-    tmp_path: Path,
-) -> None:
-    service = AffectionService(AffectionStore(tmp_path / "affection.json"), Config())
-    service.rng = FixedRng(0.00049)
-    assert await service.fill_blank_triggered() is True
-    service.rng = FixedRng(0.0005)
-    assert await service.fill_blank_triggered() is False
-
-
-async def test_fill_blank_probability_command_reports_and_sets(
-    tmp_path: Path, monkeypatch
-) -> None:
-    config = _config()
-    service = _service(tmp_path, config)
-    commands = register_commands(service, config)
-    assert len(commands) == 27
-    command = commands[14]
-    sent: list[str] = []
-
-    async def fake_finish(message: Message | str = "", **kwargs) -> None:
-        sent.append(str(message))
-
-    monkeypatch.setattr(command, "finish", fake_finish)
-
-    await command.handlers[0].call(Message(""))
-    assert "当前补句问答概率：0.05%（配置默认 0.05%）" in sent[0]
-
-    await command.handlers[0].call(Message("2.5%"))
-    assert "补句问答概率已调整为 2.5%" in sent[1]
-    assert await service.fill_blank_probability() == 0.025
-
-    await command.handlers[0].call(Message(""))
-    assert "运行时覆盖，配置默认 0.05%" in sent[2]
-
-    await command.handlers[0].call(Message("abc"))
-    assert "0~1" in sent[-1]
