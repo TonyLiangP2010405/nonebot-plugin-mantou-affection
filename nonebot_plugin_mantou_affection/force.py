@@ -24,6 +24,7 @@ from .pk import PkCoordinator
 from .service import AffectionService, normalize_nickname
 from .teyvat_quiz import TeyvatQuizCoordinator
 from .wheel import WheelCoordinator
+from .whoami import WhoAmICoordinator
 from .zzz_quiz import ZzzQuizCoordinator
 
 FORCE_COMMAND = "馒头强制事件"
@@ -43,6 +44,7 @@ FORCE_ACTIVITY_TEYVAT_QUIZ = "teyvat_quiz"
 FORCE_ACTIVITY_HSR_QUIZ = "hsr_quiz"
 FORCE_ACTIVITY_ZZZ_QUIZ = "zzz_quiz"
 FORCE_ACTIVITY_PETIT_PLANET_QUIZ = "petit_planet_quiz"
+FORCE_ACTIVITY_WHOAMI = "whoami"
 
 FORCE_CHOICES: dict[str, str] = {
     "1": FORCE_ACTIVITY_AMBIENT,
@@ -57,6 +59,7 @@ FORCE_CHOICES: dict[str, str] = {
     "10": FORCE_ACTIVITY_HSR_QUIZ,
     "11": FORCE_ACTIVITY_ZZZ_QUIZ,
     "12": FORCE_ACTIVITY_PETIT_PLANET_QUIZ,
+    "13": FORCE_ACTIVITY_WHOAMI,
 }
 FORCE_ACTIVITY_LINES: tuple[str, ...] = (
     "1. 馒头小动作",
@@ -71,6 +74,7 @@ FORCE_ACTIVITY_LINES: tuple[str, ...] = (
     "10. 星穹铁道问答",
     "11. 绝区零问答",
     "12. 星布谷地问答",
+    "13. 我是谁",
 )
 FORCE_PROMPT = (
     "🎛️ 馒头强制事件（目标：{target}）\n"
@@ -99,7 +103,7 @@ class PendingForce:
 
 
 class ForceCoordinator:
-    """管理强制事件的选择状态与十一类活动分发，选择窗口默认 20 秒。
+    """管理强制事件的选择状态与十三类活动分发，选择窗口默认 20 秒。
 
     强制触发绕过概率、好感门槛和功能开关，但保留群级互斥：本群已有待结算的活动时
     命令与选择都会被拒绝。强制事件自己的选择状态不占群席位，所以命令发出去的 20 秒
@@ -122,6 +126,7 @@ class ForceCoordinator:
         zzz_quiz: ZzzQuizCoordinator | None = None,
         petit_planet_quiz: PetitPlanetQuizCoordinator | None = None,
         fill_blank: FillBlankCoordinator | None = None,
+        whoami: WhoAmICoordinator | None = None,
         choice_timeout: float = FORCE_CHOICE_TIMEOUT,
     ):
         self.service = service
@@ -137,6 +142,7 @@ class ForceCoordinator:
         self.zzz_quiz = zzz_quiz
         self.petit_planet_quiz = petit_planet_quiz
         self.fill_blank = fill_blank
+        self.whoami = whoami
         self.choice_timeout = float(choice_timeout)
         self.pending: dict[str, PendingForce] = {}
 
@@ -257,6 +263,8 @@ class ForceCoordinator:
             return await self._start_zzz_quiz(pending, send)
         if choice == FORCE_ACTIVITY_PETIT_PLANET_QUIZ:
             return await self._start_petit_planet_quiz(pending, send)
+        if choice == FORCE_ACTIVITY_WHOAMI:
+            return await self._start_whoami(pending, send)
         return FORCE_FAIL_REPLY
 
     async def _send_ambient(self, pending: PendingForce, send: Send) -> str | None:
@@ -418,6 +426,17 @@ class ForceCoordinator:
         )
         return None if started else FORCE_FAIL_REPLY
 
+    async def _start_whoami(self, pending: PendingForce, send: Send) -> str | None:
+        if self.whoami is None:
+            return FORCE_FAIL_REPLY
+        started = await self.whoami.start(
+            group_id=pending.group_id,
+            user_id=pending.target_id,
+            nickname=pending.target_name,
+            send=send,
+        )
+        return None if started else FORCE_FAIL_REPLY
+
     @staticmethod
     async def _send(send: Send, text: str) -> None:
         try:
@@ -459,6 +478,7 @@ def register_force_commands(
     zzz_quiz: ZzzQuizCoordinator | None = None,
     petit_planet_quiz: PetitPlanetQuizCoordinator | None = None,
     fill_blank: FillBlankCoordinator | None = None,
+    whoami: WhoAmICoordinator | None = None,
     coordinator: ForceCoordinator | None = None,
 ) -> tuple:
     """/馒头强制事件：SUPERUSER 发活动列表，发起者 20 秒内回复编号强制开一场。
@@ -481,6 +501,7 @@ def register_force_commands(
         zzz_quiz=zzz_quiz,
         petit_planet_quiz=petit_planet_quiz,
         fill_blank=fill_blank,
+        whoami=whoami,
     )
     force_cmd = on_command(
         FORCE_COMMAND,

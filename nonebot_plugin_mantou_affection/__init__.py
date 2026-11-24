@@ -20,7 +20,7 @@ __plugin_meta__ = PluginMetadata(
         "/馒头绝区零概率 0.05%｜/馒头星布谷地概率 0.05%｜/馒头补句概率 0.05%｜"
         "/馒头转盘概率 0.1%｜/馒头概率总调 0.05%（或 ×2 / 重置）｜"
         "/馒头限制开关 开/关｜/馒头限制次数 5｜/馒头管理帮助｜"
-        "/馒头强制事件 @群友（回复 1~12 强制开一场活动）"
+        "/馒头强制事件 @群友（回复 1~13 强制开一场活动）"
     ),
     type="application",
     homepage="https://github.com/TonyLiangP2010405/nonebot-plugin-mantou-affection",
@@ -211,6 +211,7 @@ force_matchers = register_force_commands(
     zzz_quiz=zzz_quiz_coordinator,
     petit_planet_quiz=petit_planet_quiz_coordinator,
     fill_blank=fill_blank_coordinator,
+    whoami=whoami_coordinator,
 )
 plugin_linkage = register_plugin_linkage(service, plugin_config)
 

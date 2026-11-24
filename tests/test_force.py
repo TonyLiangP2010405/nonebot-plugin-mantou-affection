@@ -1,4 +1,4 @@
-"""SUPERUSER 强制事件：命令校验、选择状态与十类活动分发。"""
+"""SUPERUSER 强制事件：命令校验、选择状态与十三类活动分发。"""
 
 import asyncio
 import json
@@ -63,6 +63,11 @@ from nonebot_plugin_mantou_affection.teyvat_quiz import (
     TeyvatQuizCoordinator,
 )
 from nonebot_plugin_mantou_affection.wheel import WheelCoordinator
+from nonebot_plugin_mantou_affection.whoami import (
+    BUNDLED_WHOAMI_PATH,
+    WhoAmICoordinator,
+    WhoAmILibrary,
+)
 from nonebot_plugin_mantou_affection.zzz_quiz import (
     BUNDLED_ZZZ_QUIZ_PATH,
     ZzzQuizCoordinator,
@@ -88,6 +93,7 @@ EXPECTED_ACTIVITY_LINES = (
     "10. 星穹铁道问答",
     "11. 绝区零问答",
     "12. 星布谷地问答",
+    "13. 我是谁",
 )
 
 
@@ -239,8 +245,16 @@ class Harness:
         self.events.attach_teyvat_quiz(self.teyvat_quiz)
         self.events.attach_hsr_quiz(self.hsr_quiz)
         self.events.attach_zzz_quiz(self.zzz_quiz)
+        self.whoami = WhoAmICoordinator(
+            self.service,
+            self.config,
+            WhoAmILibrary(BUNDLED_WHOAMI_PATH),
+            events=self.events,
+            rng=rng,
+        )
         self.events.attach_fill_blank(self.fill_blank)
         self.events.attach_wheel(self.wheel)
+        self.events.attach_whoami(self.whoami)
         self.force = ForceCoordinator(
             self.service,
             self.config,
@@ -254,6 +268,7 @@ class Harness:
             hsr_quiz=self.hsr_quiz,
             zzz_quiz=self.zzz_quiz,
             fill_blank=self.fill_blank,
+            whoami=self.whoami,
             choice_timeout=choice_timeout,
         )
         self.force_cmd, self.force_answer = register_force_commands(
@@ -460,7 +475,7 @@ async def test_force_choice_timeout_cancels_without_affection_change(
     await harness.cleanup()
 
 
-@pytest.mark.parametrize("text", ["13", "0", "1 2", "随便"])
+@pytest.mark.parametrize("text", ["14", "0", "1 2", "随便"])
 async def test_invalid_choice_cancels_without_affection_change(
     tmp_path: Path, bundled_texts_path: Path, monkeypatch, text: str
 ) -> None:
@@ -494,6 +509,7 @@ async def test_invalid_choice_cancels_without_affection_change(
         ("9", "teyvat_quiz", "🌍 提瓦特问答！"),
         ("10", "hsr_quiz", "🚄 星穹铁道问答！"),
         ("11", "zzz_quiz", "📺 绝区零问答！"),
+        ("13", "whoami", "🕵️ 我是谁？"),
     ],
 )
 async def test_force_choice_starts_activity(
@@ -687,6 +703,7 @@ async def test_default_force_coordinator_dispatches_new_quizzes(
         hsr_quiz=harness.hsr_quiz,
         zzz_quiz=harness.zzz_quiz,
         fill_blank=harness.fill_blank,
+        whoami=harness.whoami,
     )
     sent: list[Message] = []
 
