@@ -3,13 +3,16 @@ from __future__ import annotations
 import asyncio
 import json
 import random
+from base64 import b64decode
 from contextlib import suppress
+from io import BytesIO
 from pathlib import Path
 from time import time as now_timestamp
 
 import pytest
 from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message
 from nonebot.adapters.onebot.v11.event import Sender
+from PIL import Image
 
 from nonebot_plugin_mantou_affection.ambient import EventCoordinator, register_ambient
 from nonebot_plugin_mantou_affection.commands import register_commands
@@ -20,7 +23,6 @@ from nonebot_plugin_mantou_affection.storage import AffectionStore
 from nonebot_plugin_mantou_affection.whoami import (
     BUNDLED_WHOAMI_PATH,
     WHOAMI_CHARACTER,
-    WHOAMI_SCENE,
     WhoAmICoordinator,
     WhoAmILibrary,
     guess_candidates,
@@ -38,14 +40,14 @@ ENTRIES = [
         "game": "原神",
         "category": "character",
         "aliases": ["往生堂主"],
-        "hints": ["第一层线索", "第二层线索", "第三层线索"],
+        "image": "card.png",
     },
     {
         "answer": "钟离",
         "game": "原神",
         "category": "character",
         "aliases": ["岩王帝君"],
-        "hints": ["甲的线索", "乙的线索", "丙的线索"],
+        "image": "card.png",
     },
 ]
 
@@ -95,6 +97,9 @@ def _event(
 
 
 def _library(tmp_path: Path, entries: list[dict] | None = None) -> WhoAmILibrary:
+    image = Image.new("RGBA", (32, 24), (230, 80, 60, 255))
+    image.paste((35, 135, 155, 255), (10, 5, 30, 20))
+    image.save(tmp_path / "card.png")
     path = tmp_path / "whoami_puzzles.json"
     payload = {"entries": entries if entries is not None else ENTRIES}
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
@@ -183,21 +188,19 @@ async def _stop(coordinator: WhoAmICoordinator) -> None:
 def test_bundled_bank_is_valid() -> None:
     payload = json.loads(BUNDLED_WHOAMI_PATH.read_text(encoding="utf-8"))
     entries = payload["entries"]
-    assert len(entries) >= 60
+    assert len(entries) == len(WhoAmILibrary(BUNDLED_WHOAMI_PATH)) > 0
     games = {entry["game"] for entry in entries}
-    assert {"原神", "星穹铁道", "绝区零", "崩坏3"} <= games
-    assert {entry["category"] for entry in entries} == {WHOAMI_CHARACTER, WHOAMI_SCENE}
+    assert games == {"原神", "星穹铁道", "绝区零"}
+    assert {entry["category"] for entry in entries} == {WHOAMI_CHARACTER}
 
     answers = [normalize_guess(entry["answer"]) for entry in entries]
-    assert len(answers) == len(set(answers))
+    assert all(answers)
     aliases: dict[str, str] = {}
     for entry in entries:
         assert entry["answer"].strip()
-        assert entry["hints"] and len(entry["hints"]) == 3
-        assert all(hint.strip() and "\n" not in hint for hint in entry["hints"])
-        answer = normalize_guess(entry["answer"])
-        assert answer not in normalize_guess(entry["hints"][0])
-        assert answer not in normalize_guess(entry["hints"][1])
+        assert entry["image"]
+        assert len(entry["crop"]) == 4
+        assert "hints" not in entry
         for alias in [entry["answer"], *entry["aliases"]]:
             key = normalize_guess(alias)
             assert aliases.get(key, entry["answer"]) == entry["answer"]
@@ -221,51 +224,51 @@ def test_library_resolves_aliases_and_ignores_chatter(tmp_path: Path) -> None:
 
 
 def test_library_skips_bad_entries(tmp_path: Path) -> None:
+    (tmp_path / "broken.png").write_bytes(b"not an image")
+    valid = ENTRIES[0]
     entries = [
-        {"answer": "坏题", "game": "原神", "category": "character", "hints": ["只有一条"]},
-        {
-            "answer": "胡桃",
-            "game": "原神",
-            "category": "character",
-            "aliases": [],
-            "hints": ["一", "二", "三"],
-        },
-        {
-            "answer": "胡桃",
-            "game": "原神",
-            "category": "character",
-            "aliases": [],
-            "hints": ["四", "五", "六"],
-        },
-        {
-            "answer": "不存在的类别",
-            "game": "原神",
-            "category": "npc",
-            "aliases": [],
-            "hints": ["一", "二", "三"],
-        },
+        {**valid, "answer": "旧文字题", "image": None, "hints": ["一", "二", "三"]},
+        {**valid, "answer": "图找不到", "image": "missing.png"},
+        {**valid, "answer": "图损坏", "image": "broken.png"},
+        {**valid, "answer": "裁错了", "crop": [0, 0, 100, 100]},
+        {**valid, "answer": "不存在的类别", "category": "npc"},
+        valid,
+        valid,
     ]
     library = _library(tmp_path, entries)
-    assert [entry.answer for entry in library.entries] == ["胡桃"]
+    assert [entry.answer for entry in library.entries] == ["胡桃", "胡桃"]
 
 
-async def test_start_sends_first_hint_and_reveals_the_rest(tmp_path: Path) -> None:
-    coordinator = _coordinator(tmp_path, timeout=0.06)
+def test_library_allows_several_pictures_per_character(tmp_path: Path) -> None:
+    entries = [ENTRIES[0], {**ENTRIES[0]}, {**ENTRIES[0], "aliases": []}]
+    library = _library(tmp_path, entries)
+    assert len(library.entries) == 3
+    assert library.resolve("胡桃").answer == "胡桃"
+
+
+async def test_start_sends_one_cropped_picture_before_settlement(tmp_path: Path) -> None:
+    entries = [{**ENTRIES[0], "crop": [10, 5, 30, 20]}]
+    coordinator = _coordinator(tmp_path, timeout=0.06, entries=entries)
     sent: list[Message] = []
     assert await _start(coordinator, sent) is True
     pending = coordinator.pending[GROUP_ID]
 
     body = sent[0].extract_plain_text()
     assert "🕵️ 我是谁？" in body
-    assert "线索 1/3：第一层线索" in body
-    assert "第二层线索" not in body
+    assert "胡桃" not in body
+    assert "线索" not in body
     assert "每人只能猜一次" in body
-    assert "第 1 条线索答对 +5" in body
+    assert "答对 +5" in body
+    assert [segment.type for segment in sent[0]] == ["at", "text", "image"]
+    encoded = sent[0][-1].data["file"]
+    assert encoded.startswith("base64://")
+    with Image.open(BytesIO(b64decode(encoded.removeprefix("base64://")))) as image:
+        assert image.size == (320, 240)
+        assert image.mode == "L"
+        assert image.getextrema() == (107, 107)
 
     await asyncio.wait_for(pending.task, 1)
-    hints = [message.extract_plain_text() for message in sent[1:3]]
-    assert "线索 2/3：第二层线索" in hints[0]
-    assert "线索 3/3：第三层线索" in hints[1]
+    assert len(sent) == 2
     assert "答案：胡桃（原神）" in sent[-1].extract_plain_text()
 
 
@@ -276,7 +279,7 @@ async def test_scene_round_uses_place_wording(tmp_path: Path) -> None:
             "game": "原神",
             "category": "scene",
             "aliases": ["蒙德"],
-            "hints": ["一", "二", "三"],
+            "image": "card.png",
         }
     ]
     coordinator = _coordinator(tmp_path, timeout=60, entries=entries)
@@ -297,7 +300,6 @@ async def test_answer_rules(tmp_path: Path) -> None:
     assert coordinator.answer(GROUP_ID, OTHER, "路人", "晚上好") is False
     assert coordinator.answer(GROUP_ID, OTHER, "路人", "我猜是胡桃吧") is True
     assert pending.answers[OTHER].correct is True
-    assert pending.answers[OTHER].level == 1
     assert coordinator.answer(GROUP_ID, OTHER, "路人", "钟离") is False
 
     assert coordinator.answer(GROUP_ID, OTHER_B, "路人乙", "钟离") is True
@@ -308,7 +310,7 @@ async def test_answer_rules(tmp_path: Path) -> None:
     await _stop(coordinator)
 
 
-async def test_settle_scores_by_hint_level(tmp_path: Path) -> None:
+async def test_settle_picture_round_scores(tmp_path: Path) -> None:
     coordinator = _coordinator(tmp_path, timeout=0.06)
     for user_id in (INITIATOR, OTHER, OTHER_B):
         await _give_affection(coordinator.service, 100, user_id)
@@ -321,7 +323,7 @@ async def test_settle_scores_by_hint_level(tmp_path: Path) -> None:
     await asyncio.wait_for(pending.task, 1)
 
     lines = _result_lines(sent[-1])
-    assert "在第 1 条线索时答对，好感度 +5，当前 105" in lines[OTHER]
+    assert "答对了，好感度 +5，当前 105" in lines[OTHER]
     assert "猜错了，好感度 -2，当前 98" in lines[OTHER_B]
     assert "整局没答，好感度 -1，当前 99" in lines[INITIATOR]
 
@@ -351,7 +353,7 @@ async def test_whoami_command_starts_round(tmp_path: Path, monkeypatch) -> None:
     await command.handlers[0].call(_event())
 
     assert GROUP_ID in coordinator.pending
-    assert "线索 1/3" in sent[-1].extract_plain_text()
+    assert len(sent[-1]["image"]) == 1
     await _stop(coordinator)
 
 
@@ -435,6 +437,7 @@ async def test_ambient_starts_whoami(tmp_path: Path, monkeypatch) -> None:
 
     assert GROUP_ID in coordinator.pending
     assert "我是谁" in sent[-1].extract_plain_text()
+    assert len(sent[-1]["image"]) == 1
     await _stop(coordinator)
 
 
@@ -442,4 +445,4 @@ def test_whoami_is_wired() -> None:
     import nonebot_plugin_mantou_affection as plugin
 
     assert plugin.event_coordinator.whoami is plugin.whoami_coordinator
-    assert plugin.whoami_coordinator.total_entries >= 60
+    assert plugin.whoami_coordinator.total_entries == len(WhoAmILibrary(BUNDLED_WHOAMI_PATH))

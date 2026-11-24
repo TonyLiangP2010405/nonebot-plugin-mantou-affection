@@ -7,11 +7,13 @@ import re
 import unicodedata
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from io import BytesIO
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from nonebot import logger
 from nonebot.adapters.onebot.v11 import Message, MessageSegment
+from PIL import Image, ImageOps
 
 from .config import Config
 from .logic import NEWBIE_PROTECTION_NOTE
@@ -26,43 +28,26 @@ WHOAMI_CHARACTER = "character"
 WHOAMI_SCENE = "scene"
 WHOAMI_CATEGORIES = (WHOAMI_CHARACTER, WHOAMI_SCENE)
 
-# 越早的线索答对奖励越高: 第 1 条 +5、第 2 条 +4、第 3 条 +3。
-WHOAMI_REWARDS: dict[int, int] = {1: 5, 2: 4, 3: 3}
+WHOAMI_CORRECT_DELTA = 5
 WHOAMI_WRONG_DELTA = -2
 WHOAMI_TIMEOUT_DELTA = -1
 WHOAMI_MAX_GUESS_LENGTH = 32
+WHOAMI_MIN_CROP_LONG_EDGE = 320
 
 WHOAMI_CHARACTER_PREFIX = "🕵️ 我是谁？"
 WHOAMI_SCENE_PREFIX = "🗺️ 这是哪里？"
 WHOAMI_START_REPLY = (
     "{prefix}\n"
-    "{intro}\n"
-    "线索 1/{total}：{hint}\n"
-    "直接发{noun}作答（不用 @），每人只能猜一次，猜错 {wrong:+d}。\n"
-    "第 1 条线索答对 {first:+d}，第 2 条 {second:+d}，第 3 条 {third:+d}；"
-    "{timeout} 秒后揭晓答案。"
+    "直接发{noun}作答，每人只能猜一次。答对 {correct:+d}，猜错 {wrong:+d}，"
+    "{timeout} 秒后揭晓。\n"
 )
-WHOAMI_HINT_REPLY = "{prefix}\n线索 {level}/{total}：{hint}\n（还剩 {remaining} 秒）"
 WHOAMI_RESULT_REPLY = "{prefix}\n答案：{answer}（{game}）"
-WHOAMI_CORRECT_REPLY = "在第 {level} 条线索时答对，好感度 {delta:+d}，当前 {affection}"
+WHOAMI_CORRECT_REPLY = "答对了，好感度 {delta:+d}，当前 {affection}"
 WHOAMI_WRONG_REPLY = "猜错了，好感度 {delta:+d}，当前 {affection}"
 WHOAMI_TIMEOUT_REPLY = "整局没答，好感度 {delta:+d}，当前 {affection}"
 WHOAMI_BUSY_REPLY = "群里还有一场活动没结束，等它结算完再来。"
 WHOAMI_UNAVAILABLE_REPLY = "题库还没准备好，暂时玩不了。"
 WHOAMI_LIMIT_REPLY = "这个时段的活动额度用完了，等额度恢复再来。"
-
-CHARACTER_INTROS: tuple[str, ...] = (
-    "{bot}把眼睛蒙上，清了清嗓子。",
-    "{bot}披上一件看不见的斗篷，开始扮演一个人。",
-    "{bot}从蒸笼里探出头，说要让你们猜一个人。",
-    "{bot}翻了翻自己的小本子，挑中了一个名字。",
-)
-SCENE_INTROS: tuple[str, ...] = (
-    "{bot}摊开一张地图，用爪子在某个地方按了一下。",
-    "{bot}闭上眼睛，说它现在正站在一个地方。",
-    "{bot}从抽屉里翻出一张风景照，只肯一点点给你们看。",
-    "{bot}把地图铺在蒸笼边上，先盖住了一大半。",
-)
 
 _GUESS_PREFIXES = ("我猜是", "我猜", "应该是", "就是", "是")
 _GUESS_SUFFIXES = ("吧", "吗", "呢", "啊", "呀", "哦", "噢", "啦")
@@ -73,13 +58,13 @@ _GUESS_NOISE = re.compile(
 
 @dataclass(frozen=True)
 class WhoAmIEntry:
-    """一条线索题：答案、出处游戏、类别和三段逐渐明确的提示。"""
+    """一道图片题的答案、出处、类别和题图。"""
 
     answer: str
     game: str
     category: str
     aliases: tuple[str, ...]
-    hints: tuple[str, ...]
+    image: bytes = field(repr=False)
 
     @property
     def prefix(self) -> str:
@@ -94,12 +79,11 @@ class WhoAmIEntry:
 
 @dataclass
 class WhoAmIGuess:
-    """一次作答：某人第几条线索时猜了什么，猜对没有。"""
+    """一次作答及其结果。"""
 
     user_id: str
     nickname: str
     correct: bool
-    level: int
 
 
 @dataclass
@@ -110,17 +94,16 @@ class PendingWhoAmI:
     entry: WhoAmIEntry
     trigger_id: str
     trigger_name: str
-    level: int = 1
-    accepting: bool = True
+    accepting: bool = False
     answers: dict[str, WhoAmIGuess] = field(default_factory=dict)
     task: asyncio.Task | None = None
 
-    def record(self, user_id: str, nickname: str, correct: bool, level: int) -> bool:
+    def record(self, user_id: str, nickname: str, correct: bool) -> bool:
         """记录作答，每人只算第一次；已作答或窗口关闭时返回 False。"""
 
         if not self.accepting or user_id in self.answers:
             return False
-        self.answers[user_id] = WhoAmIGuess(user_id, nickname, correct, level)
+        self.answers[user_id] = WhoAmIGuess(user_id, nickname, correct)
         return True
 
 
@@ -161,23 +144,53 @@ def guess_candidates(text: str) -> tuple[str, ...]:
     return tuple(unique)
 
 
-def _parse_entry(raw: Any) -> WhoAmIEntry | None:
+def _read_question_image(root: Path, filename: Any, crop: Any) -> bytes:
+    if not isinstance(filename, str) or not filename.strip():
+        raise ValueError("缺少题图文件名")
+    image_path = (root / filename).resolve()
+    image_path.relative_to(root)
+    data = image_path.read_bytes()
+    with Image.open(BytesIO(data), formats=("PNG", "JPEG", "WEBP")) as image:
+        if crop is None:
+            image.verify()
+            return data
+        if not isinstance(crop, list) or len(crop) != 4 or any(
+            type(value) is not int for value in crop
+        ):
+            raise ValueError("裁剪坐标须为四个整数")
+        left, top, right, bottom = crop
+        if not (0 <= left < right <= image.width and 0 <= top < bottom <= image.height):
+            raise ValueError("裁剪范围超出题图")
+        detail = image.crop((left, top, right, bottom)).convert("RGBA")
+        background = Image.new("RGBA", detail.size, "#202738")
+        background.alpha_composite(detail)
+        long_edge = max(background.size)
+        if long_edge < WHOAMI_MIN_CROP_LONG_EDGE:
+            scale = WHOAMI_MIN_CROP_LONG_EDGE / long_edge
+            size = (
+                max(1, round(background.width * scale)),
+                max(1, round(background.height * scale)),
+            )
+            background = background.resize(size, Image.Resampling.LANCZOS)
+        output = BytesIO()
+        ImageOps.grayscale(background).save(output, format="PNG")
+        return output.getvalue()
+
+
+def _parse_entry(raw: Any, root: Path) -> WhoAmIEntry | None:
     if not isinstance(raw, dict):
         return None
     answer = str(raw.get("answer") or "").strip()
     game = str(raw.get("game") or "").strip()
     category = str(raw.get("category") or "").strip()
-    hints = raw.get("hints")
     aliases = raw.get("aliases") or []
     if not answer or not game or category not in WHOAMI_CATEGORIES:
         logger.warning(f"[mantou-affection] 我是谁题目缺少答案/出处/类别，已跳过：{raw!r}")
         return None
-    if not isinstance(hints, list) or len(hints) < 3:
-        logger.warning(f"[mantou-affection] 我是谁题目线索不足 3 条，已跳过：{answer}")
-        return None
-    cleaned_hints = tuple(str(hint).strip() for hint in hints[:3])
-    if any(not hint or "\n" in hint for hint in cleaned_hints):
-        logger.warning(f"[mantou-affection] 我是谁题目线索为空或含换行，已跳过：{answer}")
+    try:
+        image = _read_question_image(root, raw.get("image"), raw.get("crop"))
+    except (OSError, ValueError, SyntaxError, Image.DecompressionBombError) as exc:
+        logger.warning(f"[mantou-affection] 我是谁题图不可用，已跳过 {answer}：{exc}")
         return None
     if not isinstance(aliases, list):
         aliases = []
@@ -191,7 +204,7 @@ def _parse_entry(raw: Any) -> WhoAmIEntry | None:
         game=game,
         category=category,
         aliases=tuple(cleaned_aliases),
-        hints=cleaned_hints,
+        image=image,
     )
 
 
@@ -225,16 +238,11 @@ class WhoAmILibrary:
 
         entries: list[WhoAmIEntry] = []
         index: dict[str, WhoAmIEntry] = {}
-        seen_answers: set[str] = set()
+        root = path.parent.resolve()
         for raw in raw_entries:
-            entry = _parse_entry(raw)
+            entry = _parse_entry(raw, root)
             if entry is None:
                 continue
-            key = normalize_guess(entry.answer)
-            if key in seen_answers:
-                logger.warning(f"[mantou-affection] 我是谁题目答案重复，已跳过：{entry.answer}")
-                continue
-            seen_answers.add(key)
             entries.append(entry)
             for alias in (entry.answer, *entry.aliases):
                 alias_key = normalize_guess(alias)
@@ -272,7 +280,7 @@ class WhoAmILibrary:
 
 
 class WhoAmICoordinator:
-    """管理「我是谁」的开局、逐条线索、作答与结算，同群同时只有一个活动。"""
+    """管理「我是谁」的发图、作答与结算，同群同时只有一个活动。"""
 
     def __init__(
         self,
@@ -284,7 +292,6 @@ class WhoAmICoordinator:
         rng: random.Random | None = None,
     ):
         self.service = service
-        self.config = config
         self.library = library
         self.events = events
         self.rng = rng or random.Random()
@@ -318,7 +325,7 @@ class WhoAmICoordinator:
         nickname: str,
         send: Callable[[Message | str], Awaitable[object]],
     ) -> bool:
-        """开一局「我是谁」；成功发出第一条线索返回 True，群忙或题库为空返回 False。"""
+        """发出题图后开放作答，群忙或题库为空时返回 False。"""
 
         group = str(group_id)
         user = str(user_id)
@@ -332,48 +339,25 @@ class WhoAmICoordinator:
             pending = PendingWhoAmI(group, entry, user, name)
             self.pending[group] = pending
 
+        caption = WHOAMI_START_REPLY.format(
+            prefix=entry.prefix,
+            noun=entry.noun,
+            correct=WHOAMI_CORRECT_DELTA,
+            wrong=WHOAMI_WRONG_DELTA,
+            timeout=int(self.timeout),
+        )
         try:
             await send(
                 MessageSegment.at(user)
-                + MessageSegment.text(" " + self.message(pending))
+                + MessageSegment.text(" " + caption)
+                + MessageSegment.image(entry.image)
             )
-        except Exception:
+        except (Exception, asyncio.CancelledError):
             self.discard(group, pending)
             raise
+        pending.accepting = True
         self.schedule(pending, send=send)
         return True
-
-    def message(self, pending: PendingWhoAmI) -> str:
-        """开局消息：只放第一条线索，后两条留给定时揭晓。"""
-
-        entry = pending.entry
-        intros = CHARACTER_INTROS if entry.category == WHOAMI_CHARACTER else SCENE_INTROS
-        return WHOAMI_START_REPLY.format(
-            prefix=entry.prefix,
-            intro=self.rng.choice(intros).format(
-                bot=self.config.mantou_affection_bot_name
-            ),
-            hint=entry.hints[0],
-            total=len(entry.hints),
-            noun=entry.noun,
-            wrong=WHOAMI_WRONG_DELTA,
-            first=WHOAMI_REWARDS[1],
-            second=WHOAMI_REWARDS[2],
-            third=WHOAMI_REWARDS[3],
-            timeout=int(self.timeout),
-        )
-
-    def hint_message(self, pending: PendingWhoAmI, remaining: int) -> str:
-        """追加线索时发出的消息，不点名、不打断作答。"""
-
-        entry = pending.entry
-        return WHOAMI_HINT_REPLY.format(
-            prefix=entry.prefix,
-            level=pending.level,
-            total=len(entry.hints),
-            hint=entry.hints[pending.level - 1],
-            remaining=max(0, remaining),
-        )
 
     def schedule(
         self,
@@ -381,11 +365,13 @@ class WhoAmICoordinator:
         *,
         send: Callable[[Message | str], Awaitable[object]],
     ) -> asyncio.Task:
-        """后台逐条放出线索，等满窗口后统一结算；异常只记日志。"""
+        """答题窗口结束后统一结算。"""
 
         async def run() -> None:
             try:
-                await self._reveal_and_settle(pending, send=send)
+                await asyncio.sleep(self.timeout)
+                if pending.accepting:
+                    await self.settle(pending, send=send)
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -395,32 +381,6 @@ class WhoAmICoordinator:
 
         pending.task = asyncio.create_task(run())
         return pending.task
-
-    async def _reveal_and_settle(
-        self,
-        pending: PendingWhoAmI,
-        *,
-        send: Callable[[Message | str], Awaitable[object]],
-    ) -> None:
-        total = len(pending.entry.hints)
-        interval = max(0.01, self.timeout / total)
-        elapsed = interval
-        for level in range(2, total + 1):
-            await asyncio.sleep(interval)
-            if not pending.accepting:
-                return
-            pending.level = level
-            remaining = int(max(0.0, self.timeout - elapsed))
-            try:
-                await send(self.hint_message(pending, remaining))
-            except Exception:
-                logger.exception("[mantou-affection] 发送我是谁线索失败")
-            elapsed += interval
-        await asyncio.sleep(max(0.0, self.timeout - elapsed))
-        if not pending.accepting:
-            return
-        pending.accepting = False
-        await self.settle(pending, send=send)
 
     async def settle(
         self,
@@ -441,11 +401,7 @@ class WhoAmICoordinator:
         ]
 
         for guess in pending.answers.values():
-            delta = (
-                WHOAMI_REWARDS.get(guess.level, WHOAMI_REWARDS[3])
-                if guess.correct
-                else WHOAMI_WRONG_DELTA
-            )
+            delta = WHOAMI_CORRECT_DELTA if guess.correct else WHOAMI_WRONG_DELTA
             applied, profile, protected = await self.service.adjust(
                 pending.group_id, guess.user_id, guess.nickname, delta
             )
@@ -457,9 +413,7 @@ class WhoAmICoordinator:
             self._add_line(
                 segments,
                 guess.user_id,
-                template.format(
-                    level=guess.level, delta=applied, affection=profile.affection
-                )
+                template.format(delta=applied, affection=profile.affection)
                 + (NEWBIE_PROTECTION_NOTE if protected else ""),
             )
 
@@ -510,5 +464,4 @@ class WhoAmICoordinator:
             str(user_id),
             normalize_nickname(nickname, str(user_id)),
             correct,
-            pending.level,
         )
