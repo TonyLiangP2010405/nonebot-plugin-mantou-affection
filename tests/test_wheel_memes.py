@@ -17,6 +17,7 @@ from nonebot_plugin_mantou_affection.wheel_memes import (
     MemeAssetMissing,
     MemeGenerationError,
     MemeGeneratorAdapter,
+    MemeGroupDisabled,
     MemeRepoManager,
     MemeResourceManager,
     parse_blocked_terms,
@@ -272,6 +273,34 @@ async def test_generate_with_uses_only_given_template() -> None:
     assert images == [b"avatar:123"]
     assert texts == []
     assert args == {}
+
+
+async def test_generate_with_blocks_groups_without_meme_switch() -> None:
+    meme = FakeMeme("single", 1, 1)
+    allowed = {"123"}
+
+    async def group_allows(group_id: str) -> bool:
+        return group_id in allowed
+
+    adapter = adapter_for(meme, group_allows=group_allows)
+
+    with pytest.raises(MemeGroupDisabled):
+        await adapter.generate(
+            bot=SimpleNamespace(self_id=999),
+            user_id="123",
+            nickname="群昵称",
+            group_id="456",
+        )
+    assert meme.calls == []
+
+    result = await adapter.generate(
+        bot=SimpleNamespace(self_id=999),
+        user_id="123",
+        nickname="群昵称",
+        group_id="123",
+    )
+    assert result == b"generated"
+    assert len(meme.calls) == 1
 
 
 async def test_generate_composes_draw_and_generate_with(monkeypatch) -> None:

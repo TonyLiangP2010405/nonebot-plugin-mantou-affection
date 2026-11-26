@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import random
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable
@@ -29,6 +30,7 @@ from .models import (
     Profile,
     RankingEntry,
 )
+from .parsing import parse_group_ids
 from .storage import AffectionStore
 
 EVENT_WHEEL_PROBABILITY_SETTING = "event_wheel_probability"
@@ -45,6 +47,7 @@ EVENT_LIMIT_WINDOW_SECONDS = EVENT_LIMIT_WINDOW_HOURS * 3600
 EVENT_LIMIT_MIN_PER_WINDOW = 1
 EVENT_LIMIT_MAX_PER_WINDOW = 100
 EVENT_LIMIT_HISTORY_KEEP = 128
+MEME_GROUPS_SETTING = "meme_enabled_groups"
 NEWBIE_GIFT_REPLY = " 扣分安慰：送你一张桃子表情包「{caption}」"
 AMBIENT_SCENE = "mantou.ambient"
 # 12 个单事件概率与「小动作升级随机事件」的比例在 0.59 退场
@@ -407,6 +410,45 @@ class AffectionService:
             return len(stamps), history
 
         return await self.store.update_setting(EVENT_LIMIT_HISTORY_SETTING, {}, mutate)
+
+    async def meme_enabled_groups(self) -> tuple[str, ...]:
+        """开启了表情包功能的群：运行时写过的列表优先，否则用配置里的初始白名单。"""
+
+        stored: Any = await self.store.get_setting(MEME_GROUPS_SETTING, None)
+        if isinstance(stored, list):
+            return parse_group_ids(stored)
+        return parse_group_ids(self.config.mantou_affection_memes_enabled_groups)
+
+    async def meme_group_enabled(self, group_id: str) -> bool:
+        return str(group_id) in await self.meme_enabled_groups()
+
+    async def set_meme_groups_enabled(
+        self, group_ids: Iterable[str], enabled: bool
+    ) -> tuple[str, ...]:
+        """一次切换多个群的开关，返回最新的开启列表。"""
+
+        targets = {str(group) for group in group_ids}
+        seed = parse_group_ids(self.config.mantou_affection_memes_enabled_groups)
+
+        def mutate(raw: Any) -> tuple[bool, list[str]]:
+            # 还没写过运行时开关时用配置白名单打底 写过就只认数据文件
+            groups = set(parse_group_ids(raw)) if isinstance(raw, list) else set(seed)
+            if enabled:
+                groups |= targets
+            else:
+                groups -= targets
+            return bool(groups), sorted(groups, key=int)
+
+        await self.store.update_setting(MEME_GROUPS_SETTING, None, mutate)
+        return await self.meme_enabled_groups()
+
+    async def set_meme_group_enabled(
+        self, group_id: str, enabled: bool
+    ) -> tuple[bool, tuple[str, ...]]:
+        """切换某个群的表情包开关，返回 (本群是否开启, 最新开启列表)。"""
+
+        groups = await self.set_meme_groups_enabled((group_id,), enabled)
+        return str(group_id) in groups, groups
 
     def _config_probability(self, attr: str) -> float:
         return clamp_probability(getattr(self.config, attr))

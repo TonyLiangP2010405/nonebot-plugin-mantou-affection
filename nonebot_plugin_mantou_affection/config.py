@@ -40,6 +40,7 @@ class Config(BaseModel):
     mantou_affection_wheel_taozi_timeout: int = Field(default=30, ge=5, le=300)
     mantou_affection_memes_extra_repos: bool = True
     mantou_affection_memes_blocked_terms: str = ""
+    mantou_affection_memes_enabled_groups: str = ""
     mantou_affection_pk_low_stock_warning: int = Field(default=100, ge=0, le=100000)
     mantou_affection_group_quiz_timeout: int = Field(default=60, ge=5, le=600)
     mantou_affection_teyvat_timeout: int = Field(default=60, ge=5, le=600)

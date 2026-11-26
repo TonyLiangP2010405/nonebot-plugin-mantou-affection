@@ -341,3 +341,34 @@ async def test_reset_all_probabilities_keeps_other_settings(tmp_path: Path) -> N
     assert all(state.overridden is False for state in states)
     assert await service.store.get_setting("meme_confirm_whitelist", []) == ["10001"]
     assert await service.reset_all_probabilities() == 0
+
+
+async def test_meme_group_switch_defaults_to_config_seed(tmp_path: Path) -> None:
+    service = _service(
+        tmp_path, mantou_affection_memes_enabled_groups="10001, 10002 10002，不是群号"
+    )
+
+    assert await service.meme_enabled_groups() == ("10001", "10002")
+    assert await service.meme_group_enabled("10001") is True
+    assert await service.meme_group_enabled("10003") is False
+
+
+async def test_meme_group_switch_toggles_and_persists(tmp_path: Path) -> None:
+    service = _service(tmp_path, mantou_affection_memes_enabled_groups="10001")
+
+    assert await service.set_meme_group_enabled("10002", True) == (
+        True,
+        ("10001", "10002"),
+    )
+    assert await service.set_meme_group_enabled("10001", False) == (False, ("10002",))
+
+    reopened = _service(tmp_path, mantou_affection_memes_enabled_groups="10001")
+    assert await reopened.meme_enabled_groups() == ("10002",)
+    assert await reopened.meme_group_enabled("10002") is True
+
+
+async def test_meme_group_switch_is_off_by_default(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+
+    assert await service.meme_enabled_groups() == ()
+    assert await service.meme_group_enabled("10001") is False

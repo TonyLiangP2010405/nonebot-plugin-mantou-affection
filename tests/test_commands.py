@@ -4,7 +4,7 @@ from pathlib import Path
 from time import time
 
 import pytest
-from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message
+from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message, PrivateMessageEvent
 from nonebot.adapters.onebot.v11.event import Sender
 from nonebot.exception import FinishedException
 
@@ -105,7 +105,7 @@ def test_format_probability(value: float, expected: str) -> None:
 def test_registered_matchers_include_event_wheel_command() -> None:
     from nonebot_plugin_mantou_affection import matchers
 
-    assert len(matchers) == 17
+    assert len(matchers) == 18
     (
         _profile_cmd,
         _interact_cmd,
@@ -122,6 +122,7 @@ def test_registered_matchers_include_event_wheel_command() -> None:
         admin_help_cmd,
         wallpaper_cmd,
         sticker_test_cmd,
+        meme_switch_cmd,
         whoami_cmd,
         _image_cmd,
     ) = matchers
@@ -135,6 +136,7 @@ def test_registered_matchers_include_event_wheel_command() -> None:
         admin_help_cmd: "handle_admin_help",
         wallpaper_cmd: "handle_wallpaper",
         sticker_test_cmd: "handle_sticker_test",
+        meme_switch_cmd: "handle_meme_switch",
     }
     for matcher, handler_name in expected_handlers.items():
         assert matcher.priority == 10
@@ -166,6 +168,25 @@ def _event(group_id: int = 90001, user_id: int = 90002) -> GroupMessageEvent:
         sender=Sender(user_id=user_id, nickname="桃友", role="member"),
         to_me=False,
         group_id=group_id,
+    )
+
+
+def _private_event(user_id: int = 90002) -> PrivateMessageEvent:
+    message = Message("馒头表情开关")
+    return PrivateMessageEvent(
+        time=int(time()),
+        self_id=10000,
+        post_type="message",
+        sub_type="friend",
+        user_id=user_id,
+        message_type="private",
+        message_id=1,
+        message=message,
+        original_message=message,
+        raw_message="馒头表情开关",
+        font=0,
+        sender=Sender(user_id=user_id, nickname="桃友"),
+        to_me=True,
     )
 
 
@@ -234,21 +255,49 @@ async def test_event_wheel_probability_command_query_and_set(
     monkeypatch.setattr(command, "finish", fake_finish)
     handler = command.handlers[0]
 
-    await handler.call(Message(""))
+    await handler.call(_event(), Message(""))
     assert "当前事件转盘概率：1.5%" in sent[-1]
     assert "馒头小动作" in sent[-1]
     assert "我是谁" in sent[-1]
+    assert "活动开启时段" in sent[-1]
+    assert "现在在时段内" in sent[-1]
+    assert "事件限制：已关闭" in sent[-1]
 
-    await handler.call(Message("0.5%"))
+    await handler.call(_event(), Message("0.5%"))
     assert "事件转盘概率已调整为 0.5%" in sent[-1]
     assert await service.event_wheel_probability() == pytest.approx(0.005)
 
-    await handler.call(Message(""))
+    await handler.call(_event(), Message(""))
     assert "运行时覆盖，配置默认 1.5%" in sent[-1]
 
-    await handler.call(Message("not-a-probability"))
+    await handler.call(_event(), Message("not-a-probability"))
     assert "请输入 0~1" in sent[-1]
     assert await service.event_wheel_probability() == pytest.approx(0.005)
+
+
+async def test_event_wheel_probability_warns_when_outside_active_hours(
+    tmp_path: Path, monkeypatch
+) -> None:
+    service = AffectionService(AffectionStore(tmp_path / "affection.json"), Config())
+    command = register_commands(service, Config())[6]
+    sent: list[str] = []
+
+    async def fake_finish(message: Message | str = "", **kwargs) -> None:
+        sent.append(str(message))
+
+    monkeypatch.setattr(command, "finish", fake_finish)
+    monkeypatch.setattr(
+        AffectionService, "activity_hours_open", lambda self, *, now=None: False
+    )
+    handler = command.handlers[0]
+
+    await handler.call(_event(), Message("100%"))
+    assert "事件转盘概率已调整为 100%" in sent[-1]
+    assert "现在不在活动开启时段内" in sent[-1]
+    assert await service.event_wheel_probability() == pytest.approx(1.0)
+
+    await handler.call(_event(), Message(""))
+    assert "现在不在时段内，事件转盘不会触发" in sent[-1]
 
 
 async def test_wheel_probability_command_query_and_set(tmp_path: Path, monkeypatch) -> None:
@@ -367,6 +416,7 @@ async def test_help_lists_every_command(tmp_path: Path, monkeypatch) -> None:
         "/馒头概率总调",
         "/馒头壁纸",
         "/馒头表情包",
+        "/馒头表情开关",
         "/馒头限制开关",
         "/馒头限制次数",
         "/馒头管理帮助",
@@ -397,3 +447,74 @@ async def test_batch_probability_finish_is_not_caught(
 
     assert len(sent) == 1
     assert "保存失败" not in sent[0]
+
+
+async def test_meme_switch_command_toggles_current_group(
+    tmp_path: Path, monkeypatch
+) -> None:
+    service = AffectionService(AffectionStore(tmp_path / "affection.json"), Config())
+    command = register_commands(service, Config())[15]
+    sent: list[str] = []
+
+    async def fake_finish(message: Message | str = "", **kwargs) -> None:
+        sent.append(str(message))
+
+    monkeypatch.setattr(command, "finish", fake_finish)
+    handler = command.handlers[0]
+
+    await handler.call(_event(), Message(""))
+    assert "本群未开启" in sent[-1]
+    assert "已开启的群：0 个" in sent[-1]
+
+    await handler.call(_event(), Message("开"))
+    assert "已开启本群的随机表情" in sent[-1]
+    assert await service.meme_group_enabled("90001") is True
+
+    await handler.call(_event(), Message(""))
+    assert "本群已开启" in sent[-1]
+
+    await handler.call(_event(), Message("列表"))
+    assert "已开启的群：1 个" in sent[-1]
+    assert "· 90001" in sent[-1]
+
+    await handler.call(_event(), Message("关"))
+    assert "已关闭本群的随机表情" in sent[-1]
+    assert await service.meme_group_enabled("90001") is False
+
+    await handler.call(_event(), Message("可能"))
+    assert "请回复「开」或「关」" in sent[-1]
+
+
+async def test_meme_switch_command_configures_groups_from_private(
+    tmp_path: Path, monkeypatch
+) -> None:
+    service = AffectionService(AffectionStore(tmp_path / "affection.json"), Config())
+    command = register_commands(service, Config())[15]
+    sent: list[str] = []
+
+    async def fake_finish(message: Message | str = "", **kwargs) -> None:
+        sent.append(str(message))
+
+    monkeypatch.setattr(command, "finish", fake_finish)
+    handler = command.handlers[0]
+
+    await handler.call(_private_event(), Message("开 10001 10002"))
+    assert "已开启 2 个群的随机表情" in sent[-1]
+    assert "10001、10002" in sent[-1]
+    assert await service.meme_group_enabled("10001") is True
+    assert await service.meme_group_enabled("10002") is True
+
+    await handler.call(_private_event(), Message("10002 关"))
+    assert "已关闭群 10002 的随机表情" in sent[-1]
+    assert await service.meme_group_enabled("10002") is False
+    assert await service.meme_group_enabled("10001") is True
+
+    await handler.call(_private_event(), Message("开"))
+    assert "请带上群号" in sent[-1]
+
+    await handler.call(_private_event(), Message("开 abc"))
+    assert "群号只能是数字" in sent[-1]
+
+    await handler.call(_private_event(), Message("列表"))
+    assert "已开启的群：1 个" in sent[-1]
+    assert "· 10001" in sent[-1]

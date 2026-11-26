@@ -10,7 +10,7 @@ from nonebot.adapters.onebot.v11 import MessageSegment
 
 from .logic import NEWBIE_PROTECTION_NOTE, protect_deduction
 from .service import normalize_nickname
-from .wheel_memes import MemeAssetMissing, MemeGenerationError
+from .wheel_memes import MemeAssetMissing, MemeGenerationError, MemeGroupDisabled
 from .wheel_spins import REROLL_COMMAND, SOLO_JOIN_REPLY, SPIN_OUTCOME_NAMES
 from .wheel_stickers import StickerAssetMissing, StickerError, pick_local_sticker
 from .wheel_wallpapers import Wallpaper, WallpaperUnavailable
@@ -65,10 +65,23 @@ WHEEL_OUTCOMES: tuple[tuple[WheelOutcome, int], ...] = (
 )
 
 
-def draw_wheel_outcome(rng: random.Random) -> WheelOutcome:
+def draw_wheel_outcome(rng: random.Random, *, skip_meme: bool = False) -> WheelOutcome:
+    """抽一个结果；skip_meme 用于没开表情包开关的群，权重按剩余项重新分配。"""
+
+    table = WHEEL_OUTCOMES
+    total = 100
+    if skip_meme:
+        table = tuple(
+            (outcome, weight)
+            for outcome, weight in WHEEL_OUTCOMES
+            if outcome.kind != "meme"
+        )
+        total = sum(weight for _, weight in table)
     roll = rng.randrange(100)
+    if total != 100:
+        roll = roll * total // 100
     cursor = 0
-    for outcome, weight in WHEEL_OUTCOMES:
+    for outcome, weight in table:
         cursor += weight
         if roll < cursor:
             return outcome
@@ -99,8 +112,19 @@ WHEEL_JOIN_COST = 2
 WHEEL_TAOZI_COST = 10
 
 
-def _join_weights(items: list[tuple[int, int]], prefix: str) -> str:
-    return "、".join(f"{prefix}{value} {weight}%" for value, weight in items)
+def _weight_percent(weight: float, factor: float = 1.0) -> str:
+    """把权重渲染成百分数：整数权重保持整数，按比例放大时保留一位小数。"""
+
+    percent = f"{weight * factor:.1f}".rstrip("0").rstrip(".")
+    return f"{percent or '0'}%"
+
+
+def _join_weights(
+    items: list[tuple[int, int]], prefix: str, factor: float = 1.0
+) -> str:
+    return "、".join(
+        f"{prefix}{value} {_weight_percent(weight, factor)}" for value, weight in items
+    )
 
 
 def _format_percent(value: float) -> str:
@@ -114,7 +138,10 @@ def format_wheel_rules(
     *,
     multiplier_chance: float = 0.0,
     multiplier_timeout: int = 30,
+    meme_enabled: bool = True,
 ) -> str:
+    # 关掉表情包后 7% 按比例分给其它结果 表里的数字也跟着放大
+    factor = 1.0 if meme_enabled else 100 / 93
     meme_weight = sum(weight for outcome, weight in WHEEL_OUTCOMES if outcome.kind == "meme")
     mantou_sticker_weight = sum(
         weight for outcome, weight in WHEEL_OUTCOMES if outcome.kind == "mantou_sticker"
@@ -137,8 +164,16 @@ def format_wheel_rules(
             f"{multiplier_timeout} 秒后开转，×1~×{MULTIPLIER_OUTCOMES[-1][0]} 倍做最终结算。\n"
         )
     spin_line = "、".join(
-        f"{SPIN_OUTCOME_NAMES[value]} {weight}%" for value, weight in sorted(spins.items())
+        f"{SPIN_OUTCOME_NAMES[value]} {_weight_percent(weight, factor)}"
+        for value, weight in sorted(spins.items())
     )
+    if meme_enabled:
+        meme_line = f"· 馒头制作随机表情 {_weight_percent(meme_weight)}\n"
+    else:
+        meme_line = (
+            "· 本群未开启表情包功能，不会抽到「馒头制作随机表情」"
+            "（发送 /馒头表情开关 开 可开启）\n"
+        )
 
     return (
         " 馒头命运齿轮转盘出现了！"
@@ -148,22 +183,29 @@ def format_wheel_rules(
         f"好感度低于 {newbie_below} 的群友有新手保护：所有扣分只扣 1/3。\n"
         f"{multiplier_hint}"
         "转盘各项概率：\n"
-        f"· 馒头制作随机表情 {meme_weight}%\n"
-        f"· 馒头表情包 {mantou_sticker_weight}%（随机发一张）\n"
-        f"· 桃子表情包 {taozi_weight}%（换一张需 {WHEEL_TAOZI_COST} 点好感）\n"
-        f"· 随机壁纸 {wallpaper_weight}%（米游社二创图，原神 / 星铁 / 绝区零随机）\n"
-        f"· 馒头主动戳一戳：{_join_weights(pokes, '×')}\n"
-        f"· 角色面板次数 {panels}%（在喵喵插件里免费查看一次角色面板）\n"
-        f"· 群面板排名次数 {panel_ranks}%（在喵喵插件里免费查看一次群面板排名）\n"
-        f"· 图像处理次数：{_join_weights(images, '×')}（每张图消耗 1 次）\n"
+        f"{meme_line}"
+        f"· 馒头表情包 {_weight_percent(mantou_sticker_weight, factor)}（随机发一张）\n"
+        f"· 桃子表情包 {_weight_percent(taozi_weight, factor)}"
+        f"（换一张需 {WHEEL_TAOZI_COST} 点好感）\n"
+        f"· 随机壁纸 {_weight_percent(wallpaper_weight, factor)}"
+        "（米游社二创图，原神 / 星铁 / 绝区零随机）\n"
+        f"· 馒头主动戳一戳：{_join_weights(pokes, '×', factor)}\n"
+        f"· 角色面板次数 {_weight_percent(panels, factor)}"
+        "（在喵喵插件里免费查看一次角色面板）\n"
+        f"· 群面板排名次数 {_weight_percent(panel_ranks, factor)}"
+        "（在喵喵插件里免费查看一次群面板排名）\n"
+        f"· 图像处理次数：{_join_weights(images, '×', factor)}（每张图消耗 1 次）\n"
         f"· {spin_line}（中奖者自己单独再转一轮，其他人不能参与）\n"
-        f"· 好感增加：{_join_weights(gains, '+')}\n"
-        f"· 好感减少：{_join_weights(losses, '-')}"
+        f"· 好感增加：{_join_weights(gains, '+', factor)}\n"
+        f"· 好感减少：{_join_weights(losses, '-', factor)}"
     )
 
 
 WHEEL_MEME_ASSET_MISSING_REPLY = " 表情素材尚未下载完成，本次不重抽"
 WHEEL_MEME_FAILED_REPLY = " 本次表情生成失败，不重抽"
+WHEEL_MEME_DISABLED_REPLY = (
+    " 本群还没有开启表情包功能，发送 /馒头表情开关 开 后才会抽到随机表情"
+)
 
 WHEEL_JOIN_COST_REPLY = (
     " 参与成功，已扣除 {cost} 点好感度{note}，当前 {affection}，"
@@ -305,11 +347,17 @@ class WheelCoordinator:
             )
             self.pending[group] = pending
         try:
+            meme_enabled = await self.service.meme_group_enabled(group)
+        except Exception:
+            logger.exception("[mantou-affection] 读取表情包群开关失败")
+            meme_enabled = False
+        try:
             rules = format_wheel_rules(
                 int(self.choice_timeout),
                 self.config.mantou_affection_newbie_protection_below,
                 multiplier_chance=self.multiplier_chance,
                 multiplier_timeout=int(self.multiplier_timeout),
+                meme_enabled=meme_enabled,
             )
             await send(MessageSegment.at(user) + MessageSegment.text(rules))
         except Exception:
@@ -449,9 +497,14 @@ class WheelCoordinator:
 
     async def _run_operation(self, pending: PendingWheel) -> None:
         try:
+            meme_enabled = await self.service.meme_group_enabled(pending.group_id)
+        except Exception:
+            logger.exception("[mantou-affection] 读取表情包群开关失败")
+            meme_enabled = False
+        try:
             for participant in [pending.trigger, *pending.participants]:
                 try:
-                    outcome = draw_wheel_outcome(self.rng)
+                    outcome = draw_wheel_outcome(self.rng, skip_meme=not meme_enabled)
                     if outcome.kind == "affection":
                         await self._run_affection(pending, participant, outcome.value)
                     elif outcome.kind == "image":
@@ -795,6 +848,12 @@ class WheelCoordinator:
                 nickname=participant.nickname,
                 group_id=pending.group_id,
             )
+        except MemeGroupDisabled:
+            await pending.send(
+                MessageSegment.at(participant.user_id)
+                + MessageSegment.text(WHEEL_MEME_DISABLED_REPLY)
+            )
+            return
         except MemeGenerationError as error:
             await self._report_meme_error(participant.user_id, pending.send, error)
             return

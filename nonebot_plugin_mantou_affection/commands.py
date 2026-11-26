@@ -15,11 +15,13 @@ from .event_wheel import EVENT_WHEEL_SLOTS
 from .image_processing import ImageProcessingCoordinator
 from .logic import level_for, progress_text
 from .parsing import (
+    MEME_GROUP_LIST_WORDS,
     PROBABILITY_BATCH_RESET,
     PROBABILITY_BATCH_SCALE,
     parse_adjustment,
     parse_event_limit_count,
     parse_event_limit_toggle,
+    parse_meme_switch_args,
     parse_probability,
     parse_probability_batch,
 )
@@ -82,6 +84,20 @@ STICKER_TEST_OK_REPLY = (
 STICKER_TEST_SEND_FAILED_REPLY = (
     "读到了 {name}（{size} 字节），但发送图片失败，详情见日志。"
 )
+MEME_SWITCH_USAGE = (
+    "用法：\n"
+    "/馒头表情开关 —— 查看本群状态和已开启的群\n"
+    "/馒头表情开关 开 —— 开启本群随机表情（群聊）\n"
+    "/馒头表情开关 关 —— 关闭本群随机表情（群聊）\n"
+    "/馒头表情开关 开 123456789 234567890 —— 按群号开启，可写多个（私聊/群聊）\n"
+    "/馒头表情开关 123456789 关 —— 群号写在前面也认\n"
+    "/馒头表情开关 列表 —— 列出所有已开启的群"
+)
+MEME_SWITCH_PRIVATE_HINT = (
+    "私聊里请带上群号，例如：/馒头表情开关 开 123456789"
+)
+MEME_SWITCH_READ_FAILED = "读取失败，请检查数据目录权限后重试。"
+MEME_SWITCH_SAVE_FAILED = "保存失败，请检查数据目录权限后重试。"
 PROBABILITY_BATCH_USAGE = (
     "用法：\n"
     "/馒头概率总调 1.5% —— 事件转盘和馒头转盘统一设为该值\n"
@@ -109,6 +125,8 @@ ADMIN_HELP_LINES: tuple[str, ...] = (
     "×倍率缩放，重置恢复默认",
     "/馒头壁纸 [官方/二创] [原神/星铁/绝区零] —— 手动抽一张壁纸",
     "/馒头表情包 —— 从配置目录抽一张，自检表情包素材是否可用",
+    "/馒头表情开关 [开/关] [群号] —— 按群开关随机表情；私聊带群号"
+    "（如 开 123456789），默认关闭",
     "/馒头限制开关 [开/关] —— 查看或切换事件限制（默认关闭）",
     f"/馒头限制次数 5 —— 查看或调整每群每 {EVENT_LIMIT_WINDOW_HOURS} 小时"
     "最多触发几次活动（1~100）",
@@ -183,7 +201,41 @@ def _activity_hours_text(config: Config) -> str:
     end = config.mantou_affection_active_hours_end
     if start == end:
         return "全天"
-    return f"每天 {start:02d}:00~{end:02d}:00（转盘不受时段限制）"
+    return f"每天 {start:02d}:00~{end:02d}:00（命运齿轮转盘的独立触发不受时段限制）"
+
+
+def _event_wheel_status_line(service: AffectionService, config: Config) -> str:
+    """事件转盘的状态行：开启时段 + 现在到底会不会触发。"""
+
+    hours = _activity_hours_text(config)
+    try:
+        open_now = service.activity_hours_open()
+    except Exception:
+        logger.exception("[mantou-affection] 判定活动开启时段失败")
+        open_now = True
+    if open_now:
+        return f"活动开启时段：{hours}（现在在时段内）"
+    return f"活动开启时段：{hours}｜现在不在时段内，事件转盘不会触发"
+
+
+async def _event_limit_status_line(service: AffectionService, event: Event | None) -> str:
+    """事件限流状态行；私聊里没有群号就只报开关和上限。"""
+
+    group_id = str(event.group_id) if isinstance(event, GroupMessageEvent) else ""
+    try:
+        state = await service.event_limit_state(group_id)
+    except Exception:
+        logger.exception("[mantou-affection] 读取事件限制失败")
+        return ""
+    if not state.enabled:
+        return "事件限制：已关闭（自动活动不受次数限制）"
+    window = EVENT_LIMIT_WINDOW_HOURS
+    if group_id:
+        return (
+            f"事件限制：已开启，每群每 {window} 小时最多 {state.per_window} 次，"
+            f"本群已用 {state.used} 次、剩余 {state.remaining} 次"
+        )
+    return f"事件限制：已开启，每群每 {window} 小时最多 {state.per_window} 次"
 
 
 def _format_factor(value: float) -> str:
@@ -298,6 +350,13 @@ def register_commands(
     sticker_test_cmd = on_command(
         "馒头表情包",
         aliases={"馒头表情包自检"},
+        permission=SUPERUSER,
+        priority=10,
+        block=True,
+    )
+    meme_switch_cmd = on_command(
+        "馒头表情开关",
+        aliases={"馒头随机表情开关", "馒头表情包开关"},
         permission=SUPERUSER,
         priority=10,
         block=True,
@@ -490,6 +549,7 @@ def register_commands(
                 lines.append(
                     f"{state.label}：{_format_probability(state.value)}（{source}）"
                 )
+            lines.append(_event_wheel_status_line(service, config))
             lines.append(PROBABILITY_BATCH_USAGE)
             await batch_probability_cmd.finish("\n".join(lines))
             return
@@ -549,7 +609,9 @@ def register_commands(
         )
 
     @event_wheel_cmd.handle()
-    async def handle_event_wheel_chance(args: Message = CommandArg()) -> None:
+    async def handle_event_wheel_chance(
+        event: Event, args: Message = CommandArg()
+    ) -> None:
         raw = args.extract_plain_text().strip()
         if not raw:
             try:
@@ -569,13 +631,18 @@ def register_commands(
                 f"{index}. {slot.label}"
                 for index, slot in enumerate(EVENT_WHEEL_SLOTS, start=1)
             )
-            await event_wheel_cmd.finish(
-                f"当前事件转盘概率：{_format_probability(current)}（{source}）\n"
-                f"转盘里 {len(EVENT_WHEEL_SLOTS)} 项，每次只转当前能开的那几项、等概率：\n"
-                f"{slot_lines}\n"
-                f"馒头转盘另有独立触发，可用 /馒头转盘概率 查看。\n"
-                f"用法：{EVENT_WHEEL_CHANCE_USAGE}"
-            )
+            lines = [
+                f"当前事件转盘概率：{_format_probability(current)}（{source}）",
+                f"转盘里 {len(EVENT_WHEEL_SLOTS)} 项，每次只转当前能开的那几项、等概率：",
+                slot_lines,
+                _event_wheel_status_line(service, config),
+            ]
+            limit_line = await _event_limit_status_line(service, event)
+            if limit_line:
+                lines.append(limit_line)
+            lines.append("馒头转盘另有独立触发，可用 /馒头转盘概率 查看。")
+            lines.append(f"用法：{EVENT_WHEEL_CHANCE_USAGE}")
+            await event_wheel_cmd.finish("\n".join(lines))
             return
         try:
             value = parse_probability(raw)
@@ -588,8 +655,14 @@ def register_commands(
             logger.exception("[mantou-affection] 保存事件转盘概率失败")
             await event_wheel_cmd.finish("保存失败，请检查数据目录权限后重试。")
             return
+        note = ""
+        if value > 0 and not service.activity_hours_open():
+            note = (
+                "\n注意：现在不在活动开启时段内，事件转盘要等时段开启才会触发"
+                "（可用 MANTOU_AFFECTION_ACTIVE_HOURS_* 调整，或先把时段限制关掉）。"
+            )
         await event_wheel_cmd.finish(
-            f"事件转盘概率已调整为 {_format_probability(value)}"
+            f"事件转盘概率已调整为 {_format_probability(value)}{note}"
         )
 
     @wheel_cmd.handle()
@@ -822,6 +895,74 @@ def register_commands(
                 )
             )
 
+    @meme_switch_cmd.handle()
+    async def handle_meme_switch(event: Event, args: Message = CommandArg()) -> None:
+        raw = args.extract_plain_text().strip()
+        group_id = str(event.group_id) if isinstance(event, GroupMessageEvent) else ""
+        if not raw or raw.lower() in MEME_GROUP_LIST_WORDS:
+            try:
+                groups = await service.meme_enabled_groups()
+            except Exception:
+                logger.exception("[mantou-affection] 读取表情包群开关失败")
+                await meme_switch_cmd.finish(MEME_SWITCH_READ_FAILED)
+                return
+            if group_id:
+                state = "本群已开启" if group_id in groups else "本群未开启"
+                lines = [f"🎭 表情包开关：{state}"]
+            else:
+                lines = ["🎭 表情包开关（私聊可带群号配置）"]
+            lines.append(f"已开启的群：{len(groups)} 个")
+            shown = groups[:20]
+            lines.extend(f"  · {item}" for item in shown)
+            if len(groups) > len(shown):
+                lines.append(f"  · …等 {len(groups)} 个")
+            lines.append("只有开启的群，命运齿轮才会抽到「馒头制作随机表情」。")
+            if group_id:
+                hint = (
+                    "/馒头表情开关 关 可关闭本群"
+                    if group_id in groups
+                    else "/馒头表情开关 开 可开启本群"
+                )
+                lines.append(f"发送 {hint}。")
+            lines.append(MEME_SWITCH_USAGE)
+            await meme_switch_cmd.finish("\n".join(lines))
+            return
+
+        try:
+            enabled, targets = parse_meme_switch_args(raw)
+        except ValueError as error:
+            await meme_switch_cmd.finish(f"{error}\n{MEME_SWITCH_USAGE}")
+            return
+        if enabled is None:
+            await meme_switch_cmd.finish(MEME_SWITCH_USAGE)
+            return
+        if not targets:
+            if not group_id:
+                await meme_switch_cmd.finish(MEME_SWITCH_PRIVATE_HINT)
+                return
+            targets = (group_id,)
+        try:
+            groups = await service.set_meme_groups_enabled(targets, enabled)
+        except Exception:
+            logger.exception("[mantou-affection] 保存表情包群开关失败")
+            await meme_switch_cmd.finish(MEME_SWITCH_SAVE_FAILED)
+            return
+        verb = "开启" if enabled else "关闭"
+        if len(targets) == 1 and targets[0] == group_id:
+            headline = f"已{verb}本群的随机表情"
+        elif len(targets) == 1:
+            headline = f"已{verb}群 {targets[0]} 的随机表情"
+        else:
+            headline = f"已{verb} {len(targets)} 个群的随机表情：" + "、".join(targets)
+        detail = (
+            "命运齿轮会重新抽到「馒头制作随机表情」。"
+            if enabled
+            else "这些群的转盘不再抽到「馒头制作随机表情」。"
+        )
+        await meme_switch_cmd.finish(
+            f"{headline}\n{detail}\n当前共 {len(groups)} 个群开启。"
+        )
+
     @whoami_cmd.handle()
     async def handle_whoami(event: GroupMessageEvent) -> None:
         if whoami is None:
@@ -904,6 +1045,7 @@ def register_commands(
         admin_help_cmd,
         wallpaper_cmd,
         sticker_test_cmd,
+        meme_switch_cmd,
         whoami_cmd,
         image_cmd,
     )

@@ -417,7 +417,7 @@ async def test_limit_toggle_command_reports_and_switches(
     await command.handlers[0].call(_event(), Message(""))
     assert "事件限制：已关闭" in sent[0]
     assert "每群每 2 小时上限：5 次" in sent[0]
-    assert "活动开启时段：每天 09:00~16:00（转盘不受时段限制）" in sent[0]
+    assert "活动开启时段：每天 09:00~16:00" in sent[0]
 
     await command.handlers[0].call(_event(), Message("开"))
     assert sent[1] == (

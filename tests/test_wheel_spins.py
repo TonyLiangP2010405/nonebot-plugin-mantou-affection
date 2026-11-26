@@ -52,6 +52,7 @@ def _coordinator(tmp_path: Path, rng: list[int] | None = None) -> WheelCoordinat
     config = Config(
         mantou_affection_newbie_protection_below=0,
         mantou_affection_multiplier_chance=0.0,
+        mantou_affection_memes_enabled_groups=GROUP,
     )
     service = AffectionService(AffectionStore(tmp_path / "affection.json"), config)
     coordinator = WheelCoordinator(

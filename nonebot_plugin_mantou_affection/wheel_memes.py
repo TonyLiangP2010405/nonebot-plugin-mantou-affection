@@ -29,6 +29,10 @@ class MemeAssetMissing(MemeGenerationError):
     pass
 
 
+class MemeGroupDisabled(MemeGenerationError):
+    """本群没有开启表情包功能。"""
+
+
 DEFAULT_BLOCKED_MEME_TERMS: tuple[str, ...] = (
     # 库洛游戏: 公司、旗下游戏与模板统一前缀
     "库洛", "kuro", "kurogames", "战双", "帕弥什", "松伦",
@@ -100,6 +104,7 @@ class MemeGeneratorAdapter:
         repos: MemeRepoManager | None = None,
         blocked_terms: Iterable[str] | None = None,
         ranking_fetcher: Callable[[str], Awaitable[Iterable[RankingEntry]]] | None = None,
+        group_allows: Callable[[str], Awaitable[bool]] | None = None,
     ):
         self.backend = backend if backend is not None else _load_backend()
         self.rng = rng or random.Random()
@@ -111,6 +116,19 @@ class MemeGeneratorAdapter:
         )
         self._blocked_logged = False
         self.ranking_fetcher = ranking_fetcher
+        self.group_allows = group_allows
+
+    async def _ensure_group_allowed(self, group_id: str | None) -> None:
+        """群开关是最后一道闸：没开启的群即使被别处调用也不生成。"""
+
+        if group_id is None or self.group_allows is None:
+            return
+        try:
+            allowed = await self.group_allows(str(group_id))
+        except Exception as error:
+            raise MemeGenerationError("读取表情包群开关失败") from error
+        if not allowed:
+            raise MemeGroupDisabled(str(group_id))
 
     def _is_blocked(self, meme: Any) -> bool:
         key = str(getattr(meme, "key", "") or "").lower()
@@ -210,6 +228,7 @@ class MemeGeneratorAdapter:
     ) -> bytes:
         """用指定模板生成表情。"""
 
+        await self._ensure_group_allowed(group_id)
         texts = [nickname] if kind == "text" else []
         images = []
         if kind != "text":

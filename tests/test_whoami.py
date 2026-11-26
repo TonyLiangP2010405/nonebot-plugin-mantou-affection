@@ -423,8 +423,8 @@ async def test_whoami_command_starts_round(tmp_path: Path, monkeypatch) -> None:
     commands = register_commands(
         coordinator.service, Config(), whoami=coordinator
     )
-    assert len(commands) == 17
-    command = commands[15]
+    assert len(commands) == 18
+    command = commands[16]
     assert [handler.call.__name__ for handler in command.handlers] == ["handle_whoami"]
     sent: list[Message] = []
 
@@ -446,7 +446,7 @@ async def test_whoami_command_reports_busy(tmp_path: Path, monkeypatch) -> None:
     commands = register_commands(
         coordinator.service, Config(), whoami=coordinator
     )
-    command = commands[15]
+    command = commands[16]
     finished: list[str] = []
 
     async def fake_finish(message: Message | str = "", **kwargs) -> None:

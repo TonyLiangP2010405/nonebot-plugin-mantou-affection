@@ -166,11 +166,13 @@ def make_coordinator(
     panel_rank_quota=None,
     wallpapers=None,
     sticker_dir: str = "",
+    meme_groups: str = GROUP,
 ):
     config = Config(
         mantou_affection_newbie_protection_below=0,
         mantou_affection_wheel_sticker_dir=sticker_dir,
         mantou_affection_multiplier_chance=0.0,
+        mantou_affection_memes_enabled_groups=meme_groups,
     )
     service = AffectionService(AffectionStore(tmp_path / "affection.json"), config)
     coordinator = WheelCoordinator(
@@ -784,6 +786,37 @@ async def test_wheel_sends_memes_to_all_winners_without_confirmation(tmp_path: P
     assert await coordinator.answer(GROUP, OTHER, "路人", "不确认") is False
     assert (await coordinator.service.profile(GROUP, TRIGGER)).affection == 10
     assert (await coordinator.service.profile(GROUP, OTHER)).affection == 8
+
+
+async def test_wheel_hides_meme_reward_when_group_switch_off(tmp_path: Path) -> None:
+    memes = FakeMemes()
+    coordinator = make_coordinator(
+        tmp_path, rng=SequenceRng([0]), memes=memes, meme_groups=""
+    )
+    pending, sent, _ = await start(coordinator)
+
+    body = sent[0].extract_plain_text()
+    assert "馒头制作随机表情 7%" not in body
+    assert "本群未开启表情包功能" in body
+    assert "馒头表情包 3.2%" in body
+
+    await operate(coordinator, pending)
+    assert memes.calls == []
+    assert "随机表情" not in sent_text(sent[1:])
+
+
+async def test_wheel_meme_reward_returns_after_group_switch_on(tmp_path: Path) -> None:
+    memes = FakeMemes()
+    coordinator = make_coordinator(
+        tmp_path, rng=SequenceRng([0]), memes=memes, meme_groups=""
+    )
+    await coordinator.service.set_meme_group_enabled(GROUP, True)
+
+    pending, sent, _ = await start(coordinator)
+    assert "馒头制作随机表情 7%" in sent[0].extract_plain_text()
+
+    await operate(coordinator, pending)
+    assert memes.calls == [(GROUP, TRIGGER)]
 
 
 async def test_wheel_meme_asset_missing_reports_without_redraw(tmp_path: Path) -> None:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import math
+import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from nonebot.adapters.onebot.v11 import Message
@@ -189,3 +191,51 @@ def parse_event_limit_count(text: str, *, minimum: int, maximum: int) -> int:
     if not minimum <= value <= maximum:
         raise ValueError(hint)
     return value
+
+
+MEME_TOGGLE_HINT = (
+    "请回复「开」或「关」，私聊里再带上群号，"
+    "例如：/馒头表情开关 开 123456789 或 /馒头表情开关 123456789 关"
+)
+MEME_GROUP_LIST_WORDS = frozenset({"列表", "状态", "已开启", "list"})
+_MEME_ARG_SPLIT = re.compile(r"[\s,，、;；]+")
+
+
+def parse_meme_switch_args(text: str) -> tuple[bool | None, tuple[str, ...]]:
+    """解析表情包开关参数：开/关可以在最前或最后，后面跟 0~N 个群号。"""
+
+    tokens = [token for token in _MEME_ARG_SPLIT.split(text.strip()) if token]
+    if not tokens:
+        return None, ()
+    first = tokens[0].lower()
+    last = tokens[-1].lower()
+    if first in EVENT_LIMIT_ON_WORDS or first in EVENT_LIMIT_OFF_WORDS:
+        enabled = first in EVENT_LIMIT_ON_WORDS
+        rest = tokens[1:]
+    elif last in EVENT_LIMIT_ON_WORDS or last in EVENT_LIMIT_OFF_WORDS:
+        enabled = last in EVENT_LIMIT_ON_WORDS
+        rest = tokens[:-1]
+    else:
+        raise ValueError(MEME_TOGGLE_HINT)
+    groups: list[str] = []
+    for token in rest:
+        if not token.isdigit():
+            raise ValueError(f"群号只能是数字，收到的是「{token}」")
+        if token not in groups:
+            groups.append(token)
+    return enabled, tuple(groups)
+
+
+_GROUP_SPLIT = re.compile(r"[,，、;；\s]+")
+
+
+def parse_group_ids(raw: str | Iterable[object]) -> tuple[str, ...]:
+    """把配置里的群号串或已存的列表清洗成去重、保序的群号元组。"""
+
+    parts = _GROUP_SPLIT.split(raw) if isinstance(raw, str) else list(raw)
+    groups: list[str] = []
+    for part in parts:
+        group = str(part).strip()
+        if group.isdigit() and group not in groups:
+            groups.append(group)
+    return tuple(groups)

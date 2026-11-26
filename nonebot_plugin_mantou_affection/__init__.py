@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Iterable
 from pathlib import Path
 
-from nonebot import get_driver, get_plugin, get_plugin_config, require
+from nonebot import get_driver, get_plugin, get_plugin_config, logger, require
 from nonebot.plugin import PluginMetadata
 
 from .config import Config
@@ -17,7 +17,8 @@ __plugin_meta__ = PluginMetadata(
         "SUPERUSER：/馒头好感调整 @群友 +10｜/馒头好感重置 确认｜"
         "/馒头事件转盘概率 1.5%｜/馒头转盘概率 0.1%｜/馒头问答题库｜"
         "/馒头概率总调 1.5%（或 ×2 / 重置）｜"
-        "/馒头限制开关 开/关｜/馒头限制次数 5｜/馒头管理帮助｜"
+        "/馒头限制开关 开/关｜/馒头限制次数 5｜"
+        "/馒头表情开关 开/关 [群号]（按群开关随机表情，私聊带群号）｜/馒头管理帮助｜"
         "/馒头强制事件 @群友（回复 1~13 强制开一场活动）"
     ),
     type="application",
@@ -141,6 +142,7 @@ meme_generator_adapter = MemeGeneratorAdapter(
     bot_name=plugin_config.mantou_affection_bot_name,
     blocked_terms=parse_blocked_terms(plugin_config.mantou_affection_memes_blocked_terms),
     ranking_fetcher=service.ranking,
+    group_allows=service.meme_group_enabled,
 )
 meme_repo_manager = MemeRepoManager(
     backend=meme_generator_adapter.backend,
@@ -237,6 +239,16 @@ async def _check_meme_resources_on_startup() -> None:
     meme_resources.check_on_startup(handled_by_memes_plugin=handled)
     meme_repo_manager.kickoff()
     taozi_stickers.kickoff()
+    try:
+        meme_groups = await service.meme_enabled_groups()
+    except Exception:
+        logger.exception("[mantou-affection] 读取表情包群开关失败")
+    else:
+        if not meme_groups:
+            logger.warning(
+                "[mantou-affection] 表情包功能默认按群关闭："
+                "在需要的群发送 /馒头表情开关 开 才会抽到随机表情"
+            )
 
 
 async def add_affection(
